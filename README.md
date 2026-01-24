@@ -5,6 +5,14 @@ A comprehensive configuration management library for Zig 0.15.1, inspired by [Vi
 [![GitLab](https://img.shields.io/badge/GitLab-devnw%2Fzig%2Fconfig-orange)](https://gitlab.com/devnw/zig/config)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
+## Status
+
+| Aspect | Info |
+|--------|------|
+| API Stability | Beta |
+| Zig Version | 0.15.1+ |
+| Platforms | Linux, macOS, Windows |
+
 ## Features
 
 - **Multi-format support** - YAML, JSON, TOML, INI, Properties, Dotenv with unified API
