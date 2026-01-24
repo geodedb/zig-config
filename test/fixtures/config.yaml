@@ -1,0 +1,15 @@
+server:
+  host: yaml-host.example.com
+  port: 8001
+
+database:
+  url: postgres://yaml:pass@localhost/db
+  pool_size: 5
+
+logging:
+  level: debug
+  format: json
+
+features:
+  cache: true
+  metrics: false

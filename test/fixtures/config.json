@@ -1,0 +1,18 @@
+{
+  "server": {
+    "host": "json-host.example.com",
+    "port": 8002
+  },
+  "database": {
+    "url": "postgres://json:pass@localhost/db",
+    "pool_size": 10
+  },
+  "logging": {
+    "level": "info",
+    "format": "text"
+  },
+  "features": {
+    "cache": false,
+    "metrics": true
+  }
+}

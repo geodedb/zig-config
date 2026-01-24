@@ -1,0 +1,32 @@
+# Gitleaks Configuration
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2024-2025 CodePros
+
+title = "Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Global allowlist"
+paths = [
+  '''testdata''',
+  '''tests/.*''',
+  '''\.zig-cache''',
+  '''zig-out''',
+  '''vendor''',
+  '''.*_test\.zig$''',
+  '''.*test_.*\.zig$''',
+  '''src/secret\.zig$''',
+  '''src/encrypted_secrets\.zig$''',
+  '''src/dotenv\.zig$''',
+]
+stopwords = [
+  "super-secret-password",
+  "encrypted_secrets",
+  "SecretProvider",
+  "SecretRef",
+  "readFromFile",
+  "readFromStdin",
+  "abc123def456",
+]

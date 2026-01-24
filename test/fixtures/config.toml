@@ -1,0 +1,15 @@
+[server]
+host = "toml-host.example.com"
+port = 8003
+
+[database]
+url = "postgres://toml:pass@localhost/db"
+pool_size = 15
+
+[logging]
+level = "warn"
+format = "json"
+
+[features]
+cache = true
+metrics = true

@@ -1,0 +1,197 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- Integration tests now run as part of `zig build test`
+- `zig build test-integration` build step for integration fixtures
+
+## [0.2.0] - 2024-12-31
+
+### Added
+- **INI format support** ([#24])
+  - ini.zig module with section and key-value parsing
+  - Comment support (# and ;)
+  - Section headers ([section])
+- **Java Properties format support** ([#25])
+  - properties.zig module for .properties files
+  - Key=value and key:value syntax
+  - Continuation lines with backslash
+- **File watching and hot-reload** ([#15])
+  - watch.zig module with polling-based file watcher
+  - Watcher struct with addPath/removePath/start/stop
+  - ChangeEvent enum (modified, deleted, created)
+  - ConfigReloader for automatic config refresh
+- **Remote configuration support** ([#27])
+  - remote.zig with etcd v3 API client
+  - remote.zig with Consul KV client
+  - RemoteProvider unified interface
+  - get/put/delete/getPrefix operations
+- **Async/parallel configuration loading** ([#16])
+  - async.zig with AsyncLoader for background loading
+  - loadParallel() for concurrent file loading
+  - AsyncLoaderWithCallback for completion callbacks
+- **Configuration diffing and comparison** ([#20])
+  - diff.zig with compare/compareWithOptions
+  - ChangeType enum (added, removed, modified, unchanged)
+  - DiffResult with change counts
+  - formatDiff() for human-readable reports
+  - merge() with configurable strategies
+- **Advanced validation patterns** ([#10], [#11])
+  - validation.zig with regex-like pattern matching
+  - isEmail, isUrl, isIPv4, isPort, isHostname validators
+  - matchPattern for custom patterns
+- **Safe file writing utilities**
+  - safeWriteToFile() - atomic write with temp file + rename
+  - writeToFileIfNotExists() - create only if missing
+  - writeToFileWithBackup() - backup before overwrite
+- Dotenv EnvMap with get/getOrEnv/has/count/iterator ([#6])
+- Dotenv loadAndApply() and applyContent() functions
+- Loader memory management improvements ([#9])
+  - Arena allocator for all string allocations
+  - Strings properly copied to outlive source buffers
+  - reset() method to clear and reload configuration
+  - Support for float types (f32, f64)
+  - Support for optional types (?T)
+- Windows and macOS platform-specific paths ([#12])
+  - Platform enum for cross-platform path detection
+  - macOS: ~/Library/Preferences, ~/Library/Application Support, ~/Library/Caches
+  - Windows: %APPDATA%, %LOCALAPPDATA%, %PROGRAMDATA%
+  - Platform-specific getConfigDirForPlatform, getDataDirForPlatform, getCacheDirForPlatform
+- Configuration merging utilities ([#17])
+  - merge.zig module with mergeStructs, mergeMany, mergePreferOverlay
+  - MergeStrategy and MergeOptions for conflict resolution
+  - Smart default detection (overlay defaults don't override base values)
+- Encrypted secrets support with multiple providers ([#18])
+  - SecretManager with provider abstraction
+  - AWS KMS provider configuration
+  - HashiCorp Vault provider with kv get support
+  - 1Password CLI (op) provider support
+  - Encrypted file provider with AES-256-GCM
+  - Secret reference parsing (provider://path#field@version)
+- Configuration serialization/write support ([#19])
+  - serialize.zig module with JSON, YAML, TOML, ENV output
+  - Pretty-printed and compact JSON options
+  - writeToFile() for direct file output
+- Environment variable expansion ([#22])
+  - expand.zig module with ${VAR} and $VAR syntax
+- Multiple config search paths ([#28])
+  - addConfigPath() to add search directories
+  - setConfigName() to set filename without extension
+  - Automatic extension detection (.toml, .yaml, .yml, .json)
+  - getSearchPaths() to retrieve configured paths
+- Array indexing support ([#35])
+  - getPath() for dot-notation with numeric indices (servers.0.host)
+- Sub-configuration extraction ([#36])
+  - sub() to extract config subset by prefix (Viper's Sub)
+  - hasSub() to check if sub-configuration exists
+- Configuration export utilities ([#37])
+  - allSettings() returns all key-value pairs as HashMap
+- All keys enumeration ([#43])
+  - allKeys() returns list of all configuration keys
+- Command-line flag parsing integration ([#8])
+  - `FlagParser` for parsing command-line arguments
+  - Support for long flags (`--config`), short flags (`-c`), boolean flags
+  - Flag binding to configuration keys
+  - Integration with Loader via `applyFlags()`
+- Integration tests with file fixtures ([#13])
+  - Test fixtures for YAML, JSON, TOML, and dotenv formats
+  - Cross-format consistency tests
+  - Loader integration tests with flag parsing
+- API documentation generation ([#21])
+  - `zig build docs` generates HTML autodocs
+  - Quick reference in docs/API.md
+- Examples directory with usage examples ([#3])
+  - basic_parsing.zig - Multi-format parsing
+  - typed_loader.zig - Type-safe loader with Viper features
+  - flag_parsing.zig - Command-line integration
+  - secret_handling.zig - Secure secrets
+  - validation.zig - Configuration validation
+  - xdg_paths.zig - XDG directories
+  - dotenv_loading.zig - Dotenv parsing
+- Build system improvements
+  - `zig build examples` to build all examples
+  - `zig build run-<example>` to run specific examples
+- CHANGELOG.md following Keep a Changelog format ([#2])
+
+### Fixed
+- `buildEnvVarName()` now properly adds underscore separator between prefix and field ([#7])
+  - `MYAPP` + `host` now correctly produces `MYAPP_HOST`
+- Memory leak in loader when loading XDG config paths
+
+[#2]: https://gitlab.com/devnw/zig/config/-/issues/2
+[#3]: https://gitlab.com/devnw/zig/config/-/issues/3
+[#6]: https://gitlab.com/devnw/zig/config/-/issues/6
+[#7]: https://gitlab.com/devnw/zig/config/-/issues/7
+[#8]: https://gitlab.com/devnw/zig/config/-/issues/8
+[#9]: https://gitlab.com/devnw/zig/config/-/issues/9
+[#10]: https://gitlab.com/devnw/zig/config/-/issues/10
+[#11]: https://gitlab.com/devnw/zig/config/-/issues/11
+[#12]: https://gitlab.com/devnw/zig/config/-/issues/12
+[#13]: https://gitlab.com/devnw/zig/config/-/issues/13
+[#15]: https://gitlab.com/devnw/zig/config/-/issues/15
+[#16]: https://gitlab.com/devnw/zig/config/-/issues/16
+[#17]: https://gitlab.com/devnw/zig/config/-/issues/17
+[#18]: https://gitlab.com/devnw/zig/config/-/issues/18
+[#19]: https://gitlab.com/devnw/zig/config/-/issues/19
+[#20]: https://gitlab.com/devnw/zig/config/-/issues/20
+[#21]: https://gitlab.com/devnw/zig/config/-/issues/21
+[#22]: https://gitlab.com/devnw/zig/config/-/issues/22
+[#24]: https://gitlab.com/devnw/zig/config/-/issues/24
+[#25]: https://gitlab.com/devnw/zig/config/-/issues/25
+[#27]: https://gitlab.com/devnw/zig/config/-/issues/27
+[#28]: https://gitlab.com/devnw/zig/config/-/issues/28
+[#35]: https://gitlab.com/devnw/zig/config/-/issues/35
+[#36]: https://gitlab.com/devnw/zig/config/-/issues/36
+[#37]: https://gitlab.com/devnw/zig/config/-/issues/37
+[#43]: https://gitlab.com/devnw/zig/config/-/issues/43
+
+## [0.1.0] - 2024-12-31
+
+### Added
+- Multi-format configuration parsing (YAML, JSON, TOML)
+- Unified Value API with dot notation path access
+- Type-safe generic Loader with compile-time struct validation
+- XDG Base Directory Specification compliance
+- Configuration precedence system (override > flag > env > project > user > system > runtime_default > default)
+- Provenance tracking to identify value sources
+- Secure secret handling (file/stdin only, never from flags/env)
+- Built-in validation utilities (required, minLength, maxLength, port, hostname, url, email, intRange, oneOf)
+- Dotenv file parsing
+- Runtime Set() for explicit value overrides ([#26])
+- SetDefault() for runtime default values ([#41])
+- BindEnv() for explicit environment variable binding ([#30])
+- AutomaticEnv() for prefix-based env discovery ([#31])
+- SetEnvKeyReplacer() for environment key transformation ([#32])
+- Key aliases support via registerAlias() ([#33])
+- Case-insensitive key access option ([#34])
+- IsSet() to check if key was explicitly set ([#42])
+- has() and get() methods for value checking
+
+### Infrastructure
+- GitLab CI/CD pipeline with SAST and Secret Detection
+- External YAML, TOML, and JSON parsing libraries
+
+## [0.0.1] - 2024-12-30
+
+### Added
+- Initial project structure
+- Basic configuration parsing framework
+
+[Unreleased]: https://gitlab.com/devnw/zig/config/-/compare/v0.1.0...main
+[0.1.0]: https://gitlab.com/devnw/zig/config/-/compare/v0.0.1...v0.1.0
+[0.0.1]: https://gitlab.com/devnw/zig/config/-/releases/v0.0.1
+
+[#26]: https://gitlab.com/devnw/zig/config/-/issues/26
+[#30]: https://gitlab.com/devnw/zig/config/-/issues/30
+[#31]: https://gitlab.com/devnw/zig/config/-/issues/31
+[#32]: https://gitlab.com/devnw/zig/config/-/issues/32
+[#33]: https://gitlab.com/devnw/zig/config/-/issues/33
+[#34]: https://gitlab.com/devnw/zig/config/-/issues/34
+[#41]: https://gitlab.com/devnw/zig/config/-/issues/41
+[#42]: https://gitlab.com/devnw/zig/config/-/issues/42

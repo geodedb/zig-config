@@ -1,0 +1,22 @@
+.{
+    .name = .config,
+    .version = "0.1.0",
+    .fingerprint = 0x98daf4fb305b7b27,
+    .minimum_zig_version = "0.15.1",
+    .dependencies = .{
+        .yaml = .{
+            .path = "../yaml",
+        },
+        .toml = .{
+            .path = "../toml",
+        },
+        .json = .{
+            .path = "../json",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
