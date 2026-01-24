@@ -7,11 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-01-24
+
+Initial open source release under Apache-2.0 license. This release consolidates all previous development work.
+
 ### Added
 - Integration tests now run as part of `zig build test`
 - `zig build test-integration` build step for integration fixtures
 
-## [0.2.0] - 2024-12-31
+### Changed
+- Updated yaml, toml, and json dependencies to use GitLab archive URLs
+
+### Development History (pre-release)
 
 ### Added
 - **INI format support** ([#24])
@@ -183,9 +190,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial project structure
 - Basic configuration parsing framework
 
-[Unreleased]: https://gitlab.com/devnw/zig/config/-/compare/v0.1.0...main
-[0.1.0]: https://gitlab.com/devnw/zig/config/-/compare/v0.0.1...v0.1.0
-[0.0.1]: https://gitlab.com/devnw/zig/config/-/releases/v0.0.1
+[Unreleased]: https://gitlab.com/devnw/zig/config/-/compare/v0.1.0...HEAD
+[0.1.0]: https://gitlab.com/devnw/zig/config/-/releases/v0.1.0
 
 [#26]: https://gitlab.com/devnw/zig/config/-/issues/26
 [#30]: https://gitlab.com/devnw/zig/config/-/issues/30
