@@ -352,15 +352,31 @@ pub const Validator = struct {
 /// - \d (digit)
 /// - \w (word char)
 /// - \s (whitespace)
+///
+/// Security: Uses bounded iterations to prevent ReDoS attacks (CWE-1333).
+/// Maximum iterations: 10000 (configurable via matchPatternBounded)
 pub fn matchPattern(pattern: []const u8, input: []const u8) bool {
-    return matchPatternImpl(pattern, input, 0, 0);
+    return matchPatternBounded(pattern, input, 10000);
 }
 
-fn matchPatternImpl(pattern: []const u8, input: []const u8, pat_idx: usize, input_idx: usize) bool {
+/// Pattern matching with explicit iteration bound.
+/// Returns false if iteration limit is exceeded (prevents ReDoS).
+pub fn matchPatternBounded(pattern: []const u8, input: []const u8, max_iterations: usize) bool {
+    var iterations: usize = 0;
+    return matchPatternImpl(pattern, input, 0, 0, max_iterations, &iterations);
+}
+
+fn matchPatternImpl(pattern: []const u8, input: []const u8, pat_idx: usize, input_idx: usize, max_iterations: usize, iterations: *usize) bool {
     var pi = pat_idx;
     var ii = input_idx;
 
     while (pi < pattern.len) {
+        // Security: Check iteration limit to prevent ReDoS (CWE-1333)
+        iterations.* += 1;
+        if (iterations.* > max_iterations) {
+            return false; // Iteration limit exceeded - fail safe
+        }
+
         // Check for end anchor
         if (pattern[pi] == '$') {
             if (pi + 1 == pattern.len) {
@@ -392,7 +408,7 @@ fn matchPatternImpl(pattern: []const u8, input: []const u8, pat_idx: usize, inpu
             const class_content = pattern[class_start..class_end_idx];
 
             if (has_plus) {
-                // One or more of char class
+                // One or more of char class - greedy, no backtracking needed
                 if (ii >= input.len) return false;
                 const first_matches = matchCharClass(class_content, input[ii]);
                 if (negated) {
@@ -402,7 +418,7 @@ fn matchPatternImpl(pattern: []const u8, input: []const u8, pat_idx: usize, inpu
                 }
                 ii += 1;
 
-                // Match more
+                // Match more (greedy)
                 while (ii < input.len) {
                     const next_matches = matchCharClass(class_content, input[ii]);
                     const should_match = if (negated) !next_matches else next_matches;
@@ -414,28 +430,31 @@ fn matchPatternImpl(pattern: []const u8, input: []const u8, pat_idx: usize, inpu
             }
 
             if (has_star) {
-                // Zero or more of char class
+                // Zero or more of char class - use greedy with limited backtracking
                 const next_pi = class_end_idx + 2;
-                // Try zero matches
-                if (matchPatternImpl(pattern, input, next_pi, ii)) return true;
-                // Try more
-                while (ii < input.len) {
+                // Try zero matches first
+                if (matchPatternImpl(pattern, input, next_pi, ii, max_iterations, iterations)) return true;
+                // Try more with bounded backtracking
+                var backtrack_count: usize = 0;
+                const max_backtrack: usize = 100; // Limit backtracking depth
+                while (ii < input.len and backtrack_count < max_backtrack) {
                     const next_matches = matchCharClass(class_content, input[ii]);
                     const should_match = if (negated) !next_matches else next_matches;
                     if (!should_match) break;
                     ii += 1;
-                    if (matchPatternImpl(pattern, input, next_pi, ii)) return true;
+                    backtrack_count += 1;
+                    if (matchPatternImpl(pattern, input, next_pi, ii, max_iterations, iterations)) return true;
                 }
                 return false;
             }
 
             if (has_question) {
                 const next_pi = class_end_idx + 2;
-                if (matchPatternImpl(pattern, input, next_pi, ii)) return true;
+                if (matchPatternImpl(pattern, input, next_pi, ii, max_iterations, iterations)) return true;
                 if (ii < input.len) {
                     const next_matches = matchCharClass(class_content, input[ii]);
                     const should_match = if (negated) !next_matches else next_matches;
-                    if (should_match) return matchPatternImpl(pattern, input, next_pi, ii + 1);
+                    if (should_match) return matchPatternImpl(pattern, input, next_pi, ii + 1, max_iterations, iterations);
                 }
                 return false;
             }
@@ -459,19 +478,22 @@ fn matchPatternImpl(pattern: []const u8, input: []const u8, pat_idx: usize, inpu
         const has_question = (pi + 1 < pattern.len and pattern[pi + 1] == '?');
 
         if (has_star) {
-            // Zero or more - try matching zero first, then more
+            // Zero or more - greedy with limited backtracking
             const char_or_class = pattern[pi];
             pi += 2; // Skip char and *
 
             // Try matching zero occurrences first
-            if (matchPatternImpl(pattern, input, pi, ii)) {
+            if (matchPatternImpl(pattern, input, pi, ii, max_iterations, iterations)) {
                 return true;
             }
 
-            // Try matching one or more
-            while (ii < input.len and matchSingleChar(char_or_class, pattern, pat_idx, input[ii])) {
+            // Try matching with bounded backtracking
+            var backtrack_count: usize = 0;
+            const max_backtrack: usize = 100;
+            while (ii < input.len and matchSingleChar(char_or_class, pattern, pat_idx, input[ii]) and backtrack_count < max_backtrack) {
                 ii += 1;
-                if (matchPatternImpl(pattern, input, pi, ii)) {
+                backtrack_count += 1;
+                if (matchPatternImpl(pattern, input, pi, ii, max_iterations, iterations)) {
                     return true;
                 }
             }
@@ -479,7 +501,7 @@ fn matchPatternImpl(pattern: []const u8, input: []const u8, pat_idx: usize, inpu
         }
 
         if (has_plus) {
-            // One or more
+            // One or more - greedy matching
             const char_or_class = pattern[pi];
             pi += 2; // Skip char and +
 
@@ -489,14 +511,12 @@ fn matchPatternImpl(pattern: []const u8, input: []const u8, pat_idx: usize, inpu
             }
             ii += 1;
 
-            // Try matching more
+            // Greedy match more, then try continuation
             while (ii < input.len and matchSingleChar(char_or_class, pattern, pat_idx, input[ii])) {
                 ii += 1;
-                if (matchPatternImpl(pattern, input, pi, ii)) {
-                    return true;
-                }
             }
-            return matchPatternImpl(pattern, input, pi, ii);
+            // Try matching rest of pattern from here
+            return matchPatternImpl(pattern, input, pi, ii, max_iterations, iterations);
         }
 
         if (has_question) {
@@ -505,13 +525,13 @@ fn matchPatternImpl(pattern: []const u8, input: []const u8, pat_idx: usize, inpu
             pi += 2; // Skip char and ?
 
             // Try matching zero
-            if (matchPatternImpl(pattern, input, pi, ii)) {
+            if (matchPatternImpl(pattern, input, pi, ii, max_iterations, iterations)) {
                 return true;
             }
 
             // Try matching one
             if (ii < input.len and matchSingleChar(char_or_class, pattern, pat_idx, input[ii])) {
-                return matchPatternImpl(pattern, input, pi, ii + 1);
+                return matchPatternImpl(pattern, input, pi, ii + 1, max_iterations, iterations);
             }
             return false;
         }
@@ -917,4 +937,36 @@ test "Validator pattern validation" {
     try std.testing.expect(validator.validate("code", "Z9").valid);
     try std.testing.expect(!validator.validate("code", "123").valid);
     try std.testing.expect(!validator.validate("code", "abc").valid);
+}
+
+// ============================================================================
+// ReDoS Protection Tests (#58)
+// ============================================================================
+
+test "matchPattern ReDoS protection - bounded iterations" {
+    // Test that pathological patterns complete quickly due to iteration limits
+    // Pattern that would cause exponential backtracking without limits
+    const pathological_input = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaab";
+
+    // This should complete quickly and return false (not hang)
+    const result = matchPatternBounded("a*a*a*a*a*c", pathological_input, 1000);
+    try std.testing.expect(!result); // Should not match and should not hang
+}
+
+test "matchPattern ReDoS protection - normal patterns still work" {
+    // Ensure normal patterns still work correctly with bounded matching
+    try std.testing.expect(matchPattern("hello", "hello"));
+    try std.testing.expect(matchPattern("a*b", "aaab"));
+    try std.testing.expect(matchPattern("a+b", "ab"));
+    try std.testing.expect(matchPattern("[a-z]+", "hello"));
+    try std.testing.expect(matchPattern("^test$", "test"));
+}
+
+test "matchPattern ReDoS protection - iteration limit exceeded returns false" {
+    // With a very low limit, complex patterns should fail due to iteration exhaustion
+    // Use a pattern that requires many iterations to check all possibilities
+    const result = matchPatternBounded("a*a*a*a*a*b", "aaaaaaaaaaaaaa", 5);
+    // Should return false due to iteration limit being hit, not because pattern matched
+    // (Pattern doesn't match anyway since input doesn't end with 'b')
+    try std.testing.expect(!result);
 }

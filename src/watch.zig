@@ -6,6 +6,20 @@
 //! Provides file watching and hot-reload capabilities for configuration files.
 //! Supports polling-based watching for cross-platform compatibility.
 //!
+//! ## Security Considerations
+//!
+//! **TOCTOU Warning (CWE-367):** This module uses a polling-based approach that
+//! has an inherent time-of-check-time-of-use race condition. Between when the
+//! watcher detects a file change and when your application reads the file,
+//! the file contents may have changed again. For security-critical configuration:
+//!
+//! - Validate configuration after loading, not based on change detection
+//! - Consider file locking for critical configuration updates
+//! - Use atomic file replacement (write to temp, rename) for updates
+//! - Implement configuration validation in your reload callback
+//!
+//! This limitation is documented per security review (#52).
+//!
 //! Example usage:
 //! ```zig
 //! const watch = @import("watch");
@@ -23,10 +37,14 @@
 //! ```
 
 const std = @import("std");
+const secret = @import("secret.zig");
 const mem = std.mem;
 const fs = std.fs;
 const Allocator = mem.Allocator;
 const Thread = std.Thread;
+
+// Security: Import isSymlink helper for symlink attack prevention (CWE-59, #69)
+const isSymlink = secret.isSymlink;
 
 /// Watch errors
 pub const WatchError = error{
@@ -222,6 +240,11 @@ const FileStat = struct {
 };
 
 fn getFileStat(path: []const u8) ?FileStat {
+    // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #69)
+    if (isSymlink(path)) {
+        return null; // Treat symlinks as not found for security
+    }
+
     const file = fs.cwd().openFile(path, .{}) catch return null;
     defer file.close();
 

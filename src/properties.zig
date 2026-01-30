@@ -27,6 +27,11 @@
 const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
+const secret = @import("secret.zig");
+
+// Security: Import helpers for symlink and path traversal protection (CWE-59, CWE-22, #72, #74)
+const isSymlink = secret.isSymlink;
+const isPathSafe = secret.isPathSafe;
 
 /// Properties parsing errors
 pub const PropertiesError = error{
@@ -250,7 +255,18 @@ fn appendUnescaped(allocator: Allocator, buf: *std.ArrayListUnmanaged(u8), input
 }
 
 /// Parse properties from a file
+/// Security: Validates path and rejects symlinks (CWE-22, CWE-59, #72, #74)
 pub fn parseFile(allocator: Allocator, path: []const u8) !Properties {
+    // Security: Validate path does not contain traversal sequences (CWE-22, #74)
+    if (!isPathSafe(path)) {
+        return error.PathTraversalDetected;
+    }
+
+    // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #72)
+    if (isSymlink(path)) {
+        return error.SymlinkNotAllowed;
+    }
+
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 

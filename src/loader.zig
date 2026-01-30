@@ -10,6 +10,25 @@
 //! - Case-insensitive key access
 //! - Environment variable binding (BindEnv, AutomaticEnv)
 //! - IsSet() to check explicit values
+//!
+//! ## Security Considerations
+//!
+//! **Parser Limits (CWE-400):** This module imposes the following limits to
+//! prevent resource exhaustion from malicious configuration files:
+//!
+//! - **File size limit:** 10 MB maximum per configuration file
+//! - **Nesting depth:** Limited by underlying parser (JSON/TOML/YAML)
+//! - **String length:** No explicit limit; bounded by file size limit
+//! - **Array elements:** No explicit limit; bounded by memory allocation
+//!
+//! The underlying Zig standard library parsers (std.json) have their own
+//! recursion limits. For untrusted configuration sources, consider:
+//!
+//! - Validating file sizes before loading
+//! - Using schema validation after parsing
+//! - Running config loading in a separate process with resource limits
+//!
+//! This limitation is documented per security review (#54).
 
 const std = @import("std");
 const mem = std.mem;
@@ -21,6 +40,10 @@ const provenance = @import("provenance.zig");
 const flags_mod = @import("flags.zig");
 const ini_mod = @import("ini.zig");
 const properties_mod = @import("properties.zig");
+const secret = @import("secret.zig");
+
+// Security: Import isSymlink helper for symlink attack prevention (CWE-59, #69)
+const isSymlink = secret.isSymlink;
 const Source = provenance.Source;
 const ProvenanceTracker = provenance.ProvenanceTracker;
 
@@ -653,6 +676,12 @@ pub fn Loader(comptime T: type) type {
         }
 
         fn loadFromPath(self: *Self, path: []const u8, source: Source) LoadError!void {
+            // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #69)
+            // Note: This introduces a small TOCTOU window, but it's better than following symlinks
+            if (isSymlink(path)) {
+                return LoadError.FileNotFound; // Treat symlinks as not found for security
+            }
+
             const file = fs.cwd().openFile(path, .{}) catch {
                 return LoadError.FileNotFound;
             };

@@ -26,6 +26,11 @@
 const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
+const secret = @import("secret.zig");
+
+// Security: Import helpers for symlink and path traversal protection (CWE-59, CWE-22, #72, #74)
+const isSymlink = secret.isSymlink;
+const isPathSafe = secret.isPathSafe;
 
 /// INI parsing errors
 pub const IniError = error{
@@ -185,7 +190,18 @@ pub fn parse(allocator: Allocator, content: []const u8) IniError!IniDocument {
 }
 
 /// Parse INI from a file
+/// Security: Validates path and rejects symlinks (CWE-22, CWE-59, #72, #74)
 pub fn parseFile(allocator: Allocator, path: []const u8) !IniDocument {
+    // Security: Validate path does not contain traversal sequences (CWE-22, #74)
+    if (!isPathSafe(path)) {
+        return error.PathTraversalDetected;
+    }
+
+    // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #72)
+    if (isSymlink(path)) {
+        return error.SymlinkNotAllowed;
+    }
+
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 

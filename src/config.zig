@@ -57,6 +57,34 @@ pub const validation = @import("validation.zig");
 pub const async_load = @import("async.zig");
 pub const diff = @import("diff.zig");
 
+// ============================================================================
+// File Size Limits (CWE-400 - Resource Exhaustion Prevention, #64)
+// ============================================================================
+//
+// These limits prevent resource exhaustion from malicious or corrupted files.
+// Different limits apply to different use cases based on security requirements.
+//
+// Rationale:
+// - Config files: 10 MB - Large configs are legitimate (complex apps, data)
+// - Remote responses: 1 MB - Network responses should be bounded tightly
+// - Secret files: 64 KB - Secrets should be small; larger files are suspicious
+// - CLI output: 1 MB - Reasonable bound for tool output
+//
+// To override these limits, use the explicit readToEndAlloc parameter.
+
+/// Maximum size for configuration files (10 MB)
+pub const MAX_CONFIG_FILE_SIZE: usize = 10 * 1024 * 1024;
+
+/// Maximum size for remote API responses (1 MB)
+pub const MAX_REMOTE_RESPONSE_SIZE: usize = 1024 * 1024;
+
+/// Maximum size for secret files (64 KB)
+/// Security: Secrets should be small; larger files may indicate misuse
+pub const MAX_SECRET_FILE_SIZE: usize = 64 * 1024;
+
+/// Maximum size for CLI command output (1 MB)
+pub const MAX_CLI_OUTPUT_SIZE: usize = 1024 * 1024;
+
 // Re-export commonly used types from loader
 pub const Loader = loader.Loader;
 pub const LoadError = loader.LoadError;
@@ -322,7 +350,18 @@ pub fn parseContent(allocator: Allocator, content: []const u8, format: Format) !
 }
 
 /// Parse configuration file with format auto-detected from extension
+/// Security: Validates path and rejects symlinks (CWE-22, CWE-59, #72, #74)
 pub fn parseFile(allocator: Allocator, path: []const u8) !Value {
+    // Security: Validate path does not contain traversal sequences (CWE-22, #74)
+    if (!secret.isPathSafe(path)) {
+        return error.PathTraversalDetected;
+    }
+
+    // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #72)
+    if (secret.isSymlink(path)) {
+        return error.SymlinkNotAllowed;
+    }
+
     const file = std.fs.cwd().openFile(path, .{}) catch {
         return error.FileNotFound;
     };
@@ -618,6 +657,8 @@ pub const SafeWriteError = error{
     FileExists,
     IoError,
     OutOfMemory,
+    /// Security: Path contains traversal sequences (CWE-22, #62)
+    PathTraversalDetected,
 };
 
 /// Options for safe write operations
@@ -632,12 +673,18 @@ pub const SafeWriteOptions = struct {
 
 /// Safely write configuration to a file without overwriting existing files
 /// Use this to prevent accidental data loss
+/// Security: Validates path to prevent path traversal attacks (CWE-22, #62)
 pub fn safeWriteConfig(
     allocator: Allocator,
     path: []const u8,
     content: []const u8,
     options: SafeWriteOptions,
 ) SafeWriteError!void {
+    // Security: Validate path does not contain traversal sequences
+    if (!secret.isPathSafe(path)) {
+        return SafeWriteError.PathTraversalDetected;
+    }
+
     const fs = std.fs;
     const cwd = fs.cwd();
 
@@ -651,7 +698,8 @@ pub fn safeWriteConfig(
         const temp_path = std.fmt.allocPrint(allocator, "{s}.tmp", .{path}) catch return SafeWriteError.OutOfMemory;
         defer allocator.free(temp_path);
 
-        const temp_file = cwd.createFile(temp_path, .{}) catch return SafeWriteError.IoError;
+        // Security: Use restrictive file permissions (CWE-732, #75)
+        const temp_file = cwd.createFile(temp_path, .{ .mode = 0o600 }) catch return SafeWriteError.IoError;
         temp_file.writeAll(content) catch {
             temp_file.close();
             cwd.deleteFile(temp_path) catch {};
@@ -665,19 +713,26 @@ pub fn safeWriteConfig(
             return SafeWriteError.IoError;
         };
     } else {
-        const file = cwd.createFile(path, .{}) catch return SafeWriteError.IoError;
+        // Security: Use restrictive file permissions (CWE-732, #75)
+        const file = cwd.createFile(path, .{ .mode = 0o600 }) catch return SafeWriteError.IoError;
         defer file.close();
         file.writeAll(content) catch return SafeWriteError.IoError;
     }
 }
 
 /// Write config with backup if file exists
+/// Security: Validates path to prevent path traversal attacks (CWE-22, #62)
 pub fn safeWriteConfigWithBackup(
     allocator: Allocator,
     path: []const u8,
     content: []const u8,
     options: SafeWriteOptions,
 ) SafeWriteError!void {
+    // Security: Validate path does not contain traversal sequences
+    if (!secret.isPathSafe(path)) {
+        return SafeWriteError.PathTraversalDetected;
+    }
+
     const fs = std.fs;
     const cwd = fs.cwd();
 
@@ -695,7 +750,8 @@ pub fn safeWriteConfigWithBackup(
         const temp_path = std.fmt.allocPrint(allocator, "{s}.tmp", .{path}) catch return SafeWriteError.OutOfMemory;
         defer allocator.free(temp_path);
 
-        const temp_file = cwd.createFile(temp_path, .{}) catch return SafeWriteError.IoError;
+        // Security: Use restrictive file permissions (CWE-732, #75)
+        const temp_file = cwd.createFile(temp_path, .{ .mode = 0o600 }) catch return SafeWriteError.IoError;
         temp_file.writeAll(content) catch {
             temp_file.close();
             cwd.deleteFile(temp_path) catch {};
@@ -708,7 +764,8 @@ pub fn safeWriteConfigWithBackup(
             return SafeWriteError.IoError;
         };
     } else {
-        const file = cwd.createFile(path, .{}) catch return SafeWriteError.IoError;
+        // Security: Use restrictive file permissions (CWE-732, #75)
+        const file = cwd.createFile(path, .{ .mode = 0o600 }) catch return SafeWriteError.IoError;
         defer file.close();
         file.writeAll(content) catch return SafeWriteError.IoError;
     }
@@ -813,10 +870,20 @@ fn getExtension(path: []const u8) ?[]const u8 {
 const config_parseFile = parseFile;
 
 /// Global format registry (for convenience)
+/// WARNING: Thread Safety (#51)
+/// This global registry uses a mutex for thread-safe initialization,
+/// but the underlying FormatRegistry operations are not fully thread-safe.
+/// For multi-threaded applications, prefer creating and managing your own
+/// FormatRegistry instance per-thread or use external synchronization.
 var global_registry: ?FormatRegistry = null;
+var global_registry_mutex: std.Thread.Mutex = .{};
 
 /// Get or create global format registry
+/// Thread-safe initialization using mutex (#51 fix)
 pub fn getGlobalRegistry(allocator: Allocator) *FormatRegistry {
+    global_registry_mutex.lock();
+    defer global_registry_mutex.unlock();
+
     if (global_registry == null) {
         global_registry = FormatRegistry.init(allocator);
     }
@@ -824,9 +891,24 @@ pub fn getGlobalRegistry(allocator: Allocator) *FormatRegistry {
 }
 
 /// Register a custom format in the global registry
+/// Note: Uses mutex for thread-safe access to global registry
 pub fn registerFormat(allocator: Allocator, extension: []const u8, decoder: FormatDecoder) !void {
     const registry = getGlobalRegistry(allocator);
+    // Note: register() itself is not thread-safe; callers should ensure
+    // all registrations happen before concurrent reads, or use external sync
     try registry.register(extension, decoder);
+}
+
+/// Reset the global registry (mainly for testing)
+/// Thread-safe: Uses mutex
+pub fn resetGlobalRegistry() void {
+    global_registry_mutex.lock();
+    defer global_registry_mutex.unlock();
+
+    if (global_registry) |*reg| {
+        reg.deinit();
+    }
+    global_registry = null;
 }
 
 // ============================================================================

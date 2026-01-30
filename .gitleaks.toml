@@ -9,6 +9,8 @@ useDefault = true
 
 [allowlist]
 description = "Global allowlist"
+# Security: Do NOT exclude security-sensitive source files from scanning (#63)
+# Only exclude test fixtures and build artifacts
 paths = [
   '''testdata''',
   '''tests/.*''',
@@ -17,9 +19,6 @@ paths = [
   '''vendor''',
   '''.*_test\.zig$''',
   '''.*test_.*\.zig$''',
-  '''src/secret\.zig$''',
-  '''src/encrypted_secrets\.zig$''',
-  '''src/dotenv\.zig$''',
 ]
 stopwords = [
   "super-secret-password",

@@ -37,6 +37,11 @@ const Allocator = mem.Allocator;
 
 const loader_mod = @import("loader.zig");
 const Format = loader_mod.Format;
+const secret = @import("secret.zig");
+
+// Security: Import helpers for symlink and path traversal protection (CWE-59, CWE-22, #72, #74)
+const isSymlink = secret.isSymlink;
+const isPathSafe = secret.isPathSafe;
 
 /// Async loading errors
 pub const AsyncError = error{
@@ -219,6 +224,16 @@ pub fn AsyncLoader(comptime T: type) type {
             _ = format;
             _ = self;
 
+            // Security: Validate path does not contain traversal sequences (CWE-22, #74)
+            if (!isPathSafe(path)) {
+                return; // Silently skip for security violations
+            }
+
+            // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #72)
+            if (isSymlink(path)) {
+                return; // Silently skip for security violations
+            }
+
             const file = fs.cwd().openFile(path, .{}) catch {
                 return; // File not found is ok for optional configs
             };
@@ -327,6 +342,18 @@ pub fn loadParallel(comptime T: type, allocator: Allocator, paths: []const []con
     for (contexts, 0..) |*ctx, i| {
         threads[i] = Thread.spawn(.{}, struct {
             fn load(c: *ThreadContext) void {
+                // Security: Validate path does not contain traversal sequences (CWE-22, #74)
+                if (!isPathSafe(c.path)) {
+                    c.err = error.PathTraversalDetected;
+                    return;
+                }
+
+                // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #72)
+                if (isSymlink(c.path)) {
+                    c.err = error.SymlinkNotAllowed;
+                    return;
+                }
+
                 const file = fs.cwd().openFile(c.path, .{}) catch |e| {
                     c.err = e;
                     return;

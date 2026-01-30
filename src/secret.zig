@@ -22,10 +22,71 @@ pub const SecretError = error{
     InvalidFormat,
     /// Stdin not available
     StdinNotAvailable,
+    /// Path traversal attempt detected (security violation)
+    PathTraversalDetected,
+    /// Symlink detected when follow_symlinks is false (security violation, CWE-59, #69)
+    SymlinkNotAllowed,
 };
 
+/// Check if a path is a symbolic link.
+/// Security: Used to prevent symlink following attacks (CWE-59, #69)
+/// Note: Uses fstatat with SYMLINK_NOFOLLOW to detect symlinks without following them.
+pub fn isSymlink(path: []const u8) bool {
+    const stat = std.posix.fstatat(std.posix.AT.FDCWD, path, std.posix.AT.SYMLINK_NOFOLLOW) catch {
+        return false; // If we can't stat, assume not a symlink (file may not exist)
+    };
+    return stat.mode & std.posix.S.IFMT == std.posix.S.IFLNK;
+}
+
+/// Validate a path does not contain path traversal sequences.
+/// Returns true if path is safe, false if traversal detected.
+/// Security: Prevents CWE-22 path traversal attacks.
+pub fn isPathSafe(path: []const u8) bool {
+    // Check for ".." anywhere in the path
+    if (mem.indexOf(u8, path, "..") != null) {
+        return false;
+    }
+
+    // Check for null bytes (path truncation attack)
+    if (mem.indexOf(u8, path, "\x00") != null) {
+        return false;
+    }
+
+    return true;
+}
+
 /// Read a secret from a file
+/// Security: Validates path to prevent directory traversal (CWE-22)
 pub fn readFromFile(path: []const u8, allocator: Allocator) SecretError![]const u8 {
+    return readFromFileWithOptions(path, allocator, .{});
+}
+
+/// Options for secure file reading
+pub const ReadOptions = struct {
+    /// Skip path traversal validation (use with extreme caution)
+    skip_traversal_check: bool = false,
+    /// Allow following symlinks (SECURITY: disabled by default to prevent symlink attacks, CWE-59, #69)
+    follow_symlinks: bool = false,
+};
+
+/// Read a secret from a file with options
+/// Security: Validates path to prevent directory traversal (CWE-22)
+pub fn readFromFileWithOptions(path: []const u8, allocator: Allocator, options: ReadOptions) SecretError![]const u8 {
+    // Security: Validate path does not contain traversal sequences
+    if (!options.skip_traversal_check) {
+        if (!isPathSafe(path)) {
+            return SecretError.PathTraversalDetected;
+        }
+    }
+
+    // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #69)
+    // Note: This introduces a small TOCTOU window, but it's better than following symlinks
+    if (!options.follow_symlinks) {
+        if (isSymlink(path)) {
+            return SecretError.SymlinkNotAllowed;
+        }
+    }
+
     const file = fs.cwd().openFile(path, .{}) catch {
         return SecretError.FileNotFound;
     };
@@ -105,4 +166,43 @@ test "secureZero clears buffer" {
     for (buffer) |byte| {
         try std.testing.expectEqual(@as(u8, 0), byte);
     }
+}
+
+test "isPathSafe rejects path traversal" {
+    // Should reject paths with ".."
+    try std.testing.expect(!isPathSafe("../etc/passwd"));
+    try std.testing.expect(!isPathSafe("foo/../bar"));
+    try std.testing.expect(!isPathSafe("foo/bar/.."));
+    try std.testing.expect(!isPathSafe(".."));
+    try std.testing.expect(!isPathSafe("/etc/../passwd"));
+
+    // Should reject null bytes
+    try std.testing.expect(!isPathSafe("foo\x00bar"));
+
+    // Should allow safe paths
+    try std.testing.expect(isPathSafe("/etc/secrets/db_password"));
+    try std.testing.expect(isPathSafe("secrets/password.txt"));
+    try std.testing.expect(isPathSafe("/run/secrets/token"));
+    try std.testing.expect(isPathSafe("./config.toml"));
+}
+
+test "readFromFile rejects path traversal" {
+    const result = readFromFile("../../../etc/passwd", std.testing.allocator);
+    try std.testing.expectError(SecretError.PathTraversalDetected, result);
+}
+
+test "readFromFile rejects null byte injection" {
+    const result = readFromFile("/etc/passwd\x00.txt", std.testing.allocator);
+    try std.testing.expectError(SecretError.PathTraversalDetected, result);
+}
+
+test "isSymlink detects regular files as non-symlinks" {
+    // Test with a regular file that exists
+    const result = isSymlink("/etc/passwd");
+    try std.testing.expect(!result); // /etc/passwd is typically a regular file
+}
+
+test "isSymlink returns false for non-existent files" {
+    const result = isSymlink("/nonexistent/path/that/does/not/exist");
+    try std.testing.expect(!result);
 }

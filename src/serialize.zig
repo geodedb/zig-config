@@ -9,6 +9,8 @@
 const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
+const crypto = std.crypto;
+const secret = @import("secret.zig");
 
 /// Output format for serialization
 pub const OutputFormat = enum {
@@ -447,7 +449,13 @@ fn writeEnvScalar(comptime T: type, value: T, writer: anytype) !void {
 }
 
 /// Write a config struct to a file
+/// Security: Validates path to prevent path traversal attacks (CWE-22, #62)
 pub fn writeToFile(comptime T: type, value: T, path: []const u8, allocator: Allocator, options: SerializeOptions) !void {
+    // Security: Validate path does not contain traversal sequences
+    if (!secret.isPathSafe(path)) {
+        return secret.SecretError.PathTraversalDetected;
+    }
+
     const content = try serialize(T, value, allocator, options);
     defer allocator.free(content);
 
@@ -460,12 +468,22 @@ pub fn writeToFile(comptime T: type, value: T, path: []const u8, allocator: Allo
 /// Atomically write a config struct to a file (safe write)
 /// This writes to a temporary file first, then atomically renames to the target path.
 /// This prevents corruption if the write is interrupted (power failure, crash, etc.)
+/// Security: Validates path to prevent path traversal attacks (CWE-22, #62)
 pub fn safeWriteToFile(comptime T: type, value: T, path: []const u8, allocator: Allocator, options: SerializeOptions) !void {
+    // Security: Validate path does not contain traversal sequences
+    if (!secret.isPathSafe(path)) {
+        return secret.SecretError.PathTraversalDetected;
+    }
+
     const content = try serialize(T, value, allocator, options);
     defer allocator.free(content);
 
-    // Create temp file path
-    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{d}", .{ path, std.time.milliTimestamp() });
+    // Create temp file path with cryptographically secure random suffix
+    // Security: Uses crypto random instead of predictable timestamp (CWE-377, #61)
+    var random_bytes: [8]u8 = undefined;
+    crypto.random.bytes(&random_bytes);
+    const random_suffix = std.fmt.fmtSliceHexLower(&random_bytes);
+    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, random_suffix });
     defer allocator.free(temp_path);
 
     // Write to temp file
@@ -485,7 +503,13 @@ pub fn safeWriteToFile(comptime T: type, value: T, path: []const u8, allocator: 
 }
 
 /// Write config only if the file doesn't exist (safe write, no overwrite)
+/// Security: Validates path to prevent path traversal attacks (CWE-22, #62)
 pub fn writeToFileIfNotExists(comptime T: type, value: T, path: []const u8, allocator: Allocator, options: SerializeOptions) !bool {
+    // Security: Validate path does not contain traversal sequences
+    if (!secret.isPathSafe(path)) {
+        return secret.SecretError.PathTraversalDetected;
+    }
+
     // Check if file exists
     std.fs.cwd().access(path, .{}) catch {
         // File doesn't exist, write it
@@ -497,7 +521,13 @@ pub fn writeToFileIfNotExists(comptime T: type, value: T, path: []const u8, allo
 }
 
 /// Write config with backup of existing file
+/// Security: Validates path to prevent path traversal attacks (CWE-22, #62)
 pub fn writeToFileWithBackup(comptime T: type, value: T, path: []const u8, allocator: Allocator, options: SerializeOptions) !void {
+    // Security: Validate path does not contain traversal sequences
+    if (!secret.isPathSafe(path)) {
+        return secret.SecretError.PathTraversalDetected;
+    }
+
     // Check if file exists and create backup
     std.fs.cwd().access(path, .{}) catch {
         // File doesn't exist, just write it
@@ -657,4 +687,44 @@ test "writeToFileIfNotExists" {
 
     // Clean up
     std.fs.cwd().deleteFile(test_path) catch {};
+}
+
+// ============================================================================
+// Path Traversal Protection Tests (#62)
+// ============================================================================
+
+test "writeToFile rejects path traversal" {
+    const Config = struct { value: []const u8 = "test" };
+
+    // Should reject path traversal attempts
+    const result1 = writeToFile(Config, .{}, "../etc/passwd", std.testing.allocator, .{});
+    try std.testing.expectError(secret.SecretError.PathTraversalDetected, result1);
+
+    const result2 = writeToFile(Config, .{}, "foo/../bar/config.json", std.testing.allocator, .{});
+    try std.testing.expectError(secret.SecretError.PathTraversalDetected, result2);
+
+    // Should reject null bytes
+    const result3 = writeToFile(Config, .{}, "config\x00.json", std.testing.allocator, .{});
+    try std.testing.expectError(secret.SecretError.PathTraversalDetected, result3);
+}
+
+test "safeWriteToFile rejects path traversal" {
+    const Config = struct { value: []const u8 = "test" };
+
+    const result = safeWriteToFile(Config, .{}, "../tmp/malicious.json", std.testing.allocator, .{});
+    try std.testing.expectError(secret.SecretError.PathTraversalDetected, result);
+}
+
+test "writeToFileIfNotExists rejects path traversal" {
+    const Config = struct { value: []const u8 = "test" };
+
+    const result = writeToFileIfNotExists(Config, .{}, "../../escape.json", std.testing.allocator, .{});
+    try std.testing.expectError(secret.SecretError.PathTraversalDetected, result);
+}
+
+test "writeToFileWithBackup rejects path traversal" {
+    const Config = struct { value: []const u8 = "test" };
+
+    const result = writeToFileWithBackup(Config, .{}, "../backup_escape.json", std.testing.allocator, .{});
+    try std.testing.expectError(secret.SecretError.PathTraversalDetected, result);
 }
