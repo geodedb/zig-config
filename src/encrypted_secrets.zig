@@ -16,6 +16,9 @@ const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
 const secret = @import("secret.zig");
+const process = std.process;
+
+const DEFAULT_COMMAND_TIMEOUT_MS: u32 = 30_000;
 
 // ============================================================================
 // Sensitive String Type (#50 - Credential Wrapper)
@@ -133,6 +136,18 @@ const op_path_allowlist = [_][]const u8{
     "/snap/bin/op",
 };
 
+/// Allowlist of valid Vault CLI binary paths (CWE-426)
+const vault_path_allowlist = [_][]const u8{
+    "/usr/bin/vault",
+    "/usr/local/bin/vault",
+    "/usr/local/sbin/vault",
+    "/opt/hashicorp/vault",
+    "/opt/homebrew/bin/vault",
+    "/home/linuxbrew/.linuxbrew/bin/vault",
+    "/snap/bin/vault",
+    "C:\\Program Files\\HashiCorp\\Vault\\vault.exe",
+};
+
 /// Validate the 1Password CLI binary path against an allowlist (CWE-78, #66).
 /// Security: Prevents arbitrary binary execution by restricting op_path to known safe locations.
 /// Returns true if the path is in the allowlist or matches a safe pattern.
@@ -160,6 +175,57 @@ pub fn isValidOpPath(path: []const u8) bool {
     }
 
     return false;
+}
+
+/// Validate the Vault CLI binary path against an allowlist (CWE-426).
+pub fn isValidVaultPath(path: []const u8) bool {
+    if (path.len == 0) return false;
+
+    for (vault_path_allowlist) |allowed| {
+        if (mem.eql(u8, path, allowed)) return true;
+    }
+
+    // Allow paths in home directories: ~/.local/bin/vault or ~/bin/vault
+    if (mem.endsWith(u8, path, "/vault") or mem.endsWith(u8, path, "\\vault.exe")) {
+        if (mem.indexOf(u8, path, "..") != null) return false;
+        if (mem.startsWith(u8, path, "/home/") or mem.startsWith(u8, path, "/Users/")) {
+            if (mem.indexOf(u8, path, "/bin/vault") != null) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+fn findExecutableInPath(allocator: Allocator, name: []const u8) ?[]u8 {
+    const path_env = std.posix.getenv("PATH") orelse return null;
+    var it = mem.splitScalar(u8, path_env, std.fs.path.delimiter);
+    while (it.next()) |dir| {
+        if (dir.len == 0) continue;
+        const full = std.fs.path.join(allocator, &.{ dir, name }) catch continue;
+        if (std.fs.accessAbsolute(full, .{})) {
+            return full;
+        } else |_| {
+            allocator.free(full);
+        }
+    }
+    return null;
+}
+
+fn resolveVaultPath(allocator: Allocator, path: []const u8) SecretError![]u8 {
+    const has_separator = mem.indexOfAny(u8, path, "/\\") != null;
+    if (!has_separator) {
+        const resolved = findExecutableInPath(allocator, path) orelse return SecretError.ProviderNotAvailable;
+        if (!isValidVaultPath(resolved)) {
+            allocator.free(resolved);
+            return SecretError.InvalidInputCharacters;
+        }
+        return resolved;
+    }
+
+    if (!isValidVaultPath(path)) return SecretError.InvalidInputCharacters;
+    return allocator.dupe(u8, path) catch return SecretError.OutOfMemory;
 }
 
 /// Secret provider types
@@ -243,6 +309,8 @@ pub const VaultConfig = struct {
     /// Vault server address (e.g., "https://vault.example.com:8200")
     /// SECURITY: Defaults to HTTPS. Use HTTP only for local development.
     address: []const u8 = "https://127.0.0.1:8200",
+    /// Path to vault CLI binary
+    vault_path: []const u8 = "vault",
     /// Authentication token (consider using VAULT_TOKEN env var instead)
     /// Security: Uses SensitiveString to prevent accidental logging (#59)
     token: ?SensitiveString = null,
@@ -309,12 +377,19 @@ pub const SecretManager = struct {
     vault_config: ?VaultConfig = null,
     onepassword_config: ?OnePasswordConfig = null,
     encrypted_file_config: ?EncryptedFileConfig = null,
+    /// Allow loading secrets from environment variables (insecure; default false)
+    allow_env_provider: bool = false,
 
     const Self = @This();
 
     /// Initialize a new secret manager
     pub fn init(allocator: Allocator) Self {
         return .{ .allocator = allocator };
+    }
+
+    /// Explicitly allow or disallow environment variable secrets (insecure)
+    pub fn allowEnvProvider(self: *Self, allow: bool) void {
+        self.allow_env_provider = allow;
     }
 
     /// Configure AWS KMS provider
@@ -345,7 +420,7 @@ pub const SecretManager = struct {
             .aws_kms => self.loadFromKms(ref.path),
             .vault => self.loadFromVault(ref.path, ref.field),
             .onepassword => self.loadFromOnePassword(ref.path, ref.field),
-            .env => self.loadFromEnv(ref.path),
+            .env => if (self.allow_env_provider) self.loadFromEnv(ref.path) else SecretError.InvalidConfiguration,
         };
     }
 
@@ -389,6 +464,9 @@ pub const SecretManager = struct {
     fn loadFromVault(self: *Self, path: []const u8, field: ?[]const u8) SecretError![]u8 {
         const config = self.vault_config orelse return SecretError.ProviderNotConfigured;
 
+        const vault_path = try resolveVaultPath(self.allocator, config.vault_path);
+        defer self.allocator.free(vault_path);
+
         // Security: Validate path_prefix to prevent injection attacks (#67)
         if (!isValidSecretIdentifier(config.path_prefix)) {
             return SecretError.InvalidInputCharacters;
@@ -408,7 +486,7 @@ pub const SecretManager = struct {
         var args = std.ArrayList([]const u8).init(self.allocator);
         defer args.deinit();
 
-        args.append("vault") catch return SecretError.OutOfMemory;
+        args.append(vault_path) catch return SecretError.OutOfMemory;
         args.append("kv") catch return SecretError.OutOfMemory;
         args.append("get") catch return SecretError.OutOfMemory;
         args.append("-format=json") catch return SecretError.OutOfMemory;
@@ -420,7 +498,10 @@ pub const SecretManager = struct {
         defer self.allocator.free(full_path);
         args.append(full_path) catch return SecretError.OutOfMemory;
 
-        return self.execCommand(args.items, field);
+        var env_map = try buildVaultEnvMap(self.allocator, config);
+        defer env_map.deinit();
+
+        return self.execCommand(args.items, field, &env_map, config.timeout_ms);
     }
 
     /// Load from 1Password
@@ -464,7 +545,10 @@ pub const SecretManager = struct {
 
         args.append(ref) catch return SecretError.OutOfMemory;
 
-        return self.execCommand(args.items, null);
+        var env_map = try buildOnePasswordEnvMap(self.allocator, config);
+        defer env_map.deinit();
+
+        return self.execCommand(args.items, null, &env_map, DEFAULT_COMMAND_TIMEOUT_MS);
     }
 
     /// Load from environment variable (not recommended)
@@ -473,36 +557,159 @@ pub const SecretManager = struct {
         return self.allocator.dupe(u8, value) catch return SecretError.OutOfMemory;
     }
 
-    /// Execute a command and return its output
-    fn execCommand(self: *Self, args: []const []const u8, json_field: ?[]const u8) SecretError![]u8 {
-        _ = json_field;
+    fn buildVaultEnvMap(allocator: Allocator, config: VaultConfig) SecretError!process.EnvMap {
+        var env_map = process.getEnvMap(allocator) catch return SecretError.OutOfMemory;
+        errdefer env_map.deinit();
 
-        var child = std.process.Child.init(args, self.allocator);
+        try env_map.put("VAULT_ADDR", config.address);
+        if (config.token) |token| try env_map.put("VAULT_TOKEN", token.expose());
+        if (config.namespace) |ns| try env_map.put("VAULT_NAMESPACE", ns);
+        if (config.tls_skip_verify) try env_map.put("VAULT_SKIP_VERIFY", "true");
+        if (config.timeout_ms > 0) {
+            const timeout_val = try std.fmt.allocPrint(allocator, "{d}ms", .{config.timeout_ms});
+            defer allocator.free(timeout_val);
+            try env_map.put("VAULT_CLIENT_TIMEOUT", timeout_val);
+        }
+
+        return env_map;
+    }
+
+    fn buildOnePasswordEnvMap(allocator: Allocator, config: OnePasswordConfig) SecretError!process.EnvMap {
+        var env_map = process.getEnvMap(allocator) catch return SecretError.OutOfMemory;
+        errdefer env_map.deinit();
+
+        if (config.account) |acct| try env_map.put("OP_ACCOUNT", acct);
+        if (config.service_account_token) |token| try env_map.put("OP_SERVICE_ACCOUNT_TOKEN", token.expose());
+
+        return env_map;
+    }
+
+    /// Execute a command and return its output
+    fn execCommand(
+        self: *Self,
+        args: []const []const u8,
+        json_field: ?[]const u8,
+        env_map: ?*process.EnvMap,
+        timeout_ms: u32,
+    ) SecretError![]u8 {
+        var child = process.Child.init(args, self.allocator);
         child.stdout_behavior = .Pipe;
         child.stderr_behavior = .Pipe;
+        child.env_map = env_map;
 
         child.spawn() catch return SecretError.CommandFailed;
 
-        const stdout = child.stdout orelse return SecretError.CommandFailed;
-        const result = stdout.reader().readAllAlloc(self.allocator, 1024 * 1024) catch {
+        var stdout_buf = std.ArrayList(u8).init(self.allocator);
+        var stderr_buf = std.ArrayList(u8).init(self.allocator);
+        defer stdout_buf.deinit();
+        defer stderr_buf.deinit();
+
+        var done = std.atomic.Value(bool).init(false);
+        var timed_out = std.atomic.Value(bool).init(false);
+        var watchdog: ?std.Thread = null;
+
+        const TimeoutCtx = struct {
+            child: *process.Child,
+            done: *std.atomic.Value(bool),
+            timed_out: *std.atomic.Value(bool),
+            timeout_ms: u32,
+
+            fn run(ctx: *@This()) void {
+                std.Thread.sleep(@as(u64, ctx.timeout_ms) * std.time.ns_per_ms);
+                if (!ctx.done.load(.acquire)) {
+                    ctx.timed_out.store(true, .release);
+                    _ = ctx.child.kill() catch {};
+                }
+            }
+        };
+
+        var timeout_ctx: TimeoutCtx = undefined;
+        if (timeout_ms > 0) {
+            timeout_ctx = .{
+                .child = &child,
+                .done = &done,
+                .timed_out = &timed_out,
+                .timeout_ms = timeout_ms,
+            };
+            watchdog = std.Thread.spawn(.{}, TimeoutCtx.run, .{&timeout_ctx}) catch null;
+        }
+
+        process.Child.collectOutput(child, self.allocator, &stdout_buf, &stderr_buf, 1024 * 1024) catch {
+            done.store(true, .release);
+            if (watchdog) |t| t.join();
             return SecretError.IoError;
         };
 
-        const term = child.wait() catch return SecretError.CommandFailed;
+        const term = child.wait() catch {
+            done.store(true, .release);
+            if (watchdog) |t| t.join();
+            return SecretError.CommandFailed;
+        };
+        done.store(true, .release);
+        if (watchdog) |t| t.join();
+
+        if (timed_out.load(.acquire)) {
+            return SecretError.Timeout;
+        }
+
         if (term.Exited != 0) {
-            self.allocator.free(result);
             return SecretError.CommandFailed;
         }
 
-        // Trim trailing newline
-        const trimmed = mem.trimRight(u8, result, "\n\r");
-        if (trimmed.len < result.len) {
-            const final = self.allocator.dupe(u8, trimmed) catch return SecretError.OutOfMemory;
-            self.allocator.free(result);
-            return final;
+        const trimmed = mem.trimRight(u8, stdout_buf.items, "\n\r");
+        if (json_field) |field| {
+            return extractJsonField(self.allocator, trimmed, field);
         }
 
-        return result;
+        return self.allocator.dupe(u8, trimmed) catch return SecretError.OutOfMemory;
+    }
+
+    fn extractJsonField(allocator: Allocator, json_bytes: []const u8, field: []const u8) SecretError![]u8 {
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, json_bytes, .{}) catch {
+            return SecretError.InvalidConfiguration;
+        };
+        defer parsed.deinit();
+
+        const root = parsed.value;
+        var target = root;
+
+        if (root == .object) {
+            if (root.object.get("data")) |data_val| {
+                if (data_val == .object) {
+                    if (data_val.object.get("data")) |inner| {
+                        target = inner;
+                    } else {
+                        target = data_val;
+                    }
+                }
+            }
+        }
+
+        if (target != .object) {
+            return SecretError.InvalidConfiguration;
+        }
+
+        const value = target.object.get(field) orelse return SecretError.SecretNotFound;
+        return jsonValueToString(allocator, value);
+    }
+
+    fn jsonValueToString(allocator: Allocator, value: std.json.Value) SecretError![]u8 {
+        return switch (value) {
+            .string => |s| allocator.dupe(u8, s) catch SecretError.OutOfMemory,
+            .integer => |i| blk: {
+                var buf: [32]u8 = undefined;
+                const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch return SecretError.OutOfMemory;
+                break :blk allocator.dupe(u8, str) catch SecretError.OutOfMemory;
+            },
+            .float => |f| blk: {
+                var buf: [64]u8 = undefined;
+                const str = std.fmt.bufPrint(&buf, "{d}", .{f}) catch return SecretError.OutOfMemory;
+                break :blk allocator.dupe(u8, str) catch SecretError.OutOfMemory;
+            },
+            .bool => |b| allocator.dupe(u8, if (b) "true" else "false") catch SecretError.OutOfMemory,
+            .null => SecretError.SecretNotFound,
+            else => SecretError.InvalidConfiguration,
+        };
     }
 
     /// Parse a secret reference string

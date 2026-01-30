@@ -35,8 +35,10 @@
 //! ```
 
 const std = @import("std");
+const builtin = @import("builtin");
 const mem = std.mem;
 const http = std.http;
+const net = std.net;
 const Uri = std.Uri;
 const Allocator = mem.Allocator;
 
@@ -49,6 +51,7 @@ pub const RemoteError = error{
     Unauthorized,
     Timeout,
     OutOfMemory,
+    InvalidConfiguration,
     /// URL validation failed (SSRF protection)
     InvalidUrl,
     /// URL points to a private/internal address (SSRF protection)
@@ -74,11 +77,9 @@ pub const SecurityOptions = struct {
 /// Returns error if URL is invalid or points to a private address
 ///
 /// SECURITY NOTE (DNS Rebinding - #68):
-/// This validation occurs BEFORE DNS resolution. An attacker controlling DNS could
-/// potentially rebind from a public IP to a private IP after validation passes.
-/// Mitigations in this library:
-/// - Short HTTP timeouts reduce the rebind window
-/// - Most DNS resolvers cache results for TTL duration
+/// This validation performs a best-effort DNS resolution and blocks any
+/// hostname that resolves to private/internal IPs. This narrows the window
+/// for rebinding but cannot fully prevent it without pinning the resolved IP.
 /// For high-security deployments, consider:
 /// - Using IP addresses instead of hostnames in configuration
 /// - Deploying a local DNS resolver with rebinding protection
@@ -103,14 +104,19 @@ pub fn validateUrl(url: []const u8, options: SecurityOptions) RemoteError!void {
 
     // Check for private/internal addresses if blocking is enabled
     if (options.block_private_ips) {
-        if (uri.host) |host| {
-            // Security: Decode URL-encoded host to prevent SSRF bypass (CWE-918, #71)
-            // Attackers may use URL encoding (e.g., %31%32%37.%30.%30.%31 = 127.0.0.1)
-            var decoded_host: [256]u8 = undefined;
-            const decoded = decodePercentEncoded(host.percent_encoded, &decoded_host);
-            if (isPrivateAddress(decoded)) {
-                return RemoteError.PrivateAddressBlocked;
-            }
+        var host_buf: [Uri.host_name_max]u8 = undefined;
+        const raw_host = uri.getHost(&host_buf) catch return RemoteError.InvalidUrl;
+        const host = normalizeHost(raw_host);
+
+        // Security: Block direct private IPs and internal hostnames (CWE-918)
+        if (isPrivateAddress(host)) {
+            return RemoteError.PrivateAddressBlocked;
+        }
+
+        // DNS rebinding mitigation: resolve hostnames and validate IPs (#68)
+        if (!isIpLiteral(host)) {
+            const port = uri.port orelse if (is_https) @as(u16, 443) else @as(u16, 80);
+            try validateResolvedAddresses(host, port);
         }
     }
 }
@@ -153,6 +159,32 @@ fn decodePercentEncoded(encoded: []const u8, buffer: []u8) []const u8 {
     }
 
     return buffer[0..write_idx];
+}
+
+fn normalizeHost(host: []const u8) []const u8 {
+    if (host.len > 2 and host[0] == '[' and host[host.len - 1] == ']') {
+        return host[1 .. host.len - 1];
+    }
+    return host;
+}
+
+fn isIpLiteral(host: []const u8) bool {
+    return net.Address.parseIp(host, 0) catch false;
+}
+
+fn validateResolvedAddresses(host: []const u8, port: u16) RemoteError!void {
+    const list = net.getAddressList(std.heap.page_allocator, host, port) catch return RemoteError.InvalidUrl;
+    defer list.deinit();
+
+    if (list.addrs.len == 0) {
+        return RemoteError.InvalidUrl;
+    }
+
+    for (list.addrs) |addr| {
+        if (isPrivateAddressForAddr(addr)) {
+            return RemoteError.PrivateAddressBlocked;
+        }
+    }
 }
 
 /// Check if a hostname/IP is a private or internal address
@@ -200,6 +232,74 @@ fn isPrivateAddress(host: []const u8) bool {
     if (mem.endsWith(u8, host, ".localhost")) return true;
 
     return false;
+}
+
+/// Check if a resolved address is private/internal (DNS rebinding mitigation)
+fn isPrivateAddressForAddr(addr: net.Address) bool {
+    switch (addr.any.family) {
+        std.posix.AF.INET => {
+            const bytes: *const [4]u8 = @ptrCast(&addr.in.sa.addr);
+            return isPrivateIPv4Bytes(bytes.*);
+        },
+        std.posix.AF.INET6 => {
+            return isPrivateIPv6Bytes(addr.in6.sa.addr);
+        },
+        else => return true,
+    }
+}
+
+fn isPrivateIPv4Bytes(bytes: [4]u8) bool {
+    if (bytes[0] == 127) return true; // Loopback
+    if (bytes[0] == 0) return true; // INADDR_ANY
+    if (bytes[0] == 10) return true; // 10.0.0.0/8
+    if (bytes[0] == 172 and bytes[1] >= 16 and bytes[1] <= 31) return true; // 172.16.0.0/12
+    if (bytes[0] == 192 and bytes[1] == 168) return true; // 192.168.0.0/16
+    if (bytes[0] == 169 and bytes[1] == 254) return true; // 169.254.0.0/16
+    return false;
+}
+
+fn isPrivateIPv6Bytes(bytes: [16]u8) bool {
+    // :: or ::1
+    const is_all_zero = blk: {
+        var all_zero = true;
+        for (bytes) |b| {
+            if (b != 0) {
+                all_zero = false;
+                break;
+            }
+        }
+        break :blk all_zero;
+    };
+    if (is_all_zero) return true;
+    if (bytes[0] == 0 and bytes[1] == 0 and bytes[2] == 0 and bytes[3] == 0 and
+        bytes[4] == 0 and bytes[5] == 0 and bytes[6] == 0 and bytes[7] == 0 and
+        bytes[8] == 0 and bytes[9] == 0 and bytes[10] == 0 and bytes[11] == 0 and
+        bytes[12] == 0 and bytes[13] == 0 and bytes[14] == 0 and bytes[15] == 1)
+    {
+        return true;
+    }
+
+    // Unique local fc00::/7
+    if ((bytes[0] & 0xfe) == 0xfc) return true;
+
+    // Link-local fe80::/10
+    if (bytes[0] == 0xfe and (bytes[1] & 0xc0) == 0x80) return true;
+
+    // IPv4-mapped ::ffff:x.x.x.x
+    if (isIpv4Mapped(bytes)) {
+        const mapped: [4]u8 = .{ bytes[12], bytes[13], bytes[14], bytes[15] };
+        return isPrivateIPv4Bytes(mapped);
+    }
+
+    return false;
+}
+
+fn isIpv4Mapped(bytes: [16]u8) bool {
+    if (bytes[0] != 0 or bytes[1] != 0 or bytes[2] != 0 or bytes[3] != 0) return false;
+    if (bytes[4] != 0 or bytes[5] != 0 or bytes[6] != 0 or bytes[7] != 0) return false;
+    if (bytes[8] != 0 or bytes[9] != 0) return false;
+    if (bytes[10] != 0xff or bytes[11] != 0xff) return false;
+    return true;
 }
 
 /// Check if an IPv4 address string is in a private range
@@ -359,6 +459,60 @@ fn isValidKeyChar(c: u8) bool {
     if (c == '_') return true;
     if (c == '.') return true;
     return false;
+}
+
+fn mapRequestError(err: anyerror) RemoteError {
+    return switch (err) {
+        error.OutOfMemory => RemoteError.OutOfMemory,
+        error.WouldBlock, error.ConnectionTimedOut => RemoteError.Timeout,
+        else => RemoteError.RequestFailed,
+    };
+}
+
+fn applyRequestTimeouts(request: *http.Client.Request, timeout_ms: u32) RemoteError!void {
+    if (timeout_ms == 0) return;
+    const connection = request.connection orelse return RemoteError.ConnectionFailed;
+    const stream = connection.stream_reader.getStream();
+    try setSocketTimeout(stream.handle, timeout_ms);
+}
+
+fn setSocketTimeout(handle: net.Stream.Handle, timeout_ms: u32) RemoteError!void {
+    if (timeout_ms == 0) return;
+
+    if (builtin.os.tag == .windows) {
+        var timeout_val: u32 = timeout_ms;
+        const buf = std.mem.asBytes(&timeout_val);
+        std.posix.setsockopt(handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, buf) catch return RemoteError.RequestFailed;
+        std.posix.setsockopt(handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, buf) catch return RemoteError.RequestFailed;
+        return;
+    }
+
+    var tv = std.posix.timeval{
+        .tv_sec = @intCast(timeout_ms / 1000),
+        .tv_usec = @intCast((timeout_ms % 1000) * 1000),
+    };
+    const buf = std.mem.asBytes(&tv);
+    std.posix.setsockopt(handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, buf) catch return RemoteError.RequestFailed;
+    std.posix.setsockopt(handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, buf) catch return RemoteError.RequestFailed;
+}
+
+fn buildBasicAuthHeader(
+    allocator: Allocator,
+    username: ?[]const u8,
+    password: ?[]const u8,
+) RemoteError!?[]u8 {
+    if (username == null and password == null) return null;
+    if (username == null or password == null) return RemoteError.InvalidConfiguration;
+
+    const creds = std.fmt.allocPrint(allocator, "{s}:{s}", .{ username.?, password.? }) catch return RemoteError.OutOfMemory;
+    defer allocator.free(creds);
+
+    const encoded_len = std.base64.standard.Encoder.calcSize(creds.len);
+    const encoded = allocator.alloc(u8, encoded_len) catch return RemoteError.OutOfMemory;
+    defer allocator.free(encoded);
+    _ = std.base64.standard.Encoder.encode(encoded, creds);
+
+    return std.fmt.allocPrint(allocator, "Basic {s}", .{encoded}) catch return RemoteError.OutOfMemory;
 }
 
 // ============================================================================

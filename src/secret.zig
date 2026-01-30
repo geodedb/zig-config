@@ -6,6 +6,7 @@
 //! Secure handling of secrets - enforces reading from files or stdin only.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const mem = std.mem;
 const fs = std.fs;
 const Allocator = mem.Allocator;
@@ -55,6 +56,51 @@ pub fn isPathSafe(path: []const u8) bool {
     return true;
 }
 
+/// Errors returned by no-follow file helpers.
+pub const OpenNoFollowError = error{SymlinkNotAllowed} || std.posix.OpenError || fs.File.OpenError;
+
+/// Open a file for read-only access without following symlinks when supported.
+/// On Windows, falls back to an explicit symlink check.
+pub fn openFileReadNoFollow(path: []const u8) OpenNoFollowError!fs.File {
+    if (builtin.os.tag == .windows) {
+        if (isSymlink(path)) return error.SymlinkNotAllowed;
+        return fs.cwd().openFile(path, .{});
+    }
+
+    const fd = std.posix.openat(
+        std.posix.AT.FDCWD,
+        path,
+        .{ .RDONLY = true, .NOFOLLOW = true, .CLOEXEC = true },
+        0,
+    ) catch |err| switch (err) {
+        error.SymLinkLoop => return error.SymlinkNotAllowed,
+        else => return err,
+    };
+    return fs.File{ .handle = fd };
+}
+
+/// Create a file without following symlinks when supported.
+/// When `exclusive` is true, fail if the path already exists.
+pub fn createFileNoFollow(path: []const u8, mode: std.posix.mode_t, exclusive: bool) OpenNoFollowError!fs.File {
+    if (builtin.os.tag == .windows) {
+        if (isSymlink(path)) return error.SymlinkNotAllowed;
+        return fs.cwd().createFile(path, .{ .mode = mode, .exclusive = exclusive });
+    }
+
+    var flags = std.posix.O{ .WRONLY = true, .CREAT = true, .NOFOLLOW = true, .CLOEXEC = true };
+    if (exclusive) {
+        flags.EXCL = true;
+    } else {
+        flags.TRUNC = true;
+    }
+
+    const fd = std.posix.openat(std.posix.AT.FDCWD, path, flags, mode) catch |err| switch (err) {
+        error.SymLinkLoop => return error.SymlinkNotAllowed,
+        else => return err,
+    };
+    return fs.File{ .handle = fd };
+}
+
 /// Read a secret from a file
 /// Security: Validates path to prevent directory traversal (CWE-22)
 pub fn readFromFile(path: []const u8, allocator: Allocator) SecretError![]const u8 {
@@ -79,17 +125,14 @@ pub fn readFromFileWithOptions(path: []const u8, allocator: Allocator, options: 
         }
     }
 
-    // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #69)
-    // Note: This introduces a small TOCTOU window, but it's better than following symlinks
-    if (!options.follow_symlinks) {
-        if (isSymlink(path)) {
-            return SecretError.SymlinkNotAllowed;
-        }
-    }
-
-    const file = fs.cwd().openFile(path, .{}) catch {
-        return SecretError.FileNotFound;
-    };
+    const file = if (options.follow_symlinks)
+        fs.cwd().openFile(path, .{})
+    else
+        openFileReadNoFollow(path) catch |err| switch (err) {
+            error.SymlinkNotAllowed => return SecretError.SymlinkNotAllowed,
+            error.FileNotFound => return SecretError.FileNotFound,
+            else => return SecretError.ReadError,
+        };
     defer file.close();
 
     const content = file.readToEndAlloc(allocator, 64 * 1024) catch {

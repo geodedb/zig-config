@@ -13,8 +13,8 @@ const Allocator = mem.Allocator;
 const secret = @import("secret.zig");
 
 // Security: Import helpers for symlink and path traversal protection (CWE-59, CWE-22, #72, #74)
-const isSymlink = secret.isSymlink;
 const isPathSafe = secret.isPathSafe;
+const openFileReadNoFollow = secret.openFileReadNoFollow;
 
 /// Environment variable entry
 pub const EnvEntry = struct {
@@ -32,12 +32,7 @@ pub fn load(path: []const u8, allocator: Allocator) ![]EnvEntry {
         return entries.toOwnedSlice(allocator);
     }
 
-    // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #72)
-    if (isSymlink(path)) {
-        return entries.toOwnedSlice(allocator);
-    }
-
-    const file = fs.cwd().openFile(path, .{}) catch {
+    const file = openFileReadNoFollow(path) catch {
         return entries.toOwnedSlice(allocator);
     };
     defer file.close();
@@ -149,12 +144,7 @@ pub fn loadAndApply(path: []const u8, allocator: Allocator) !EnvMap {
         return map; // Return empty map for security violations
     }
 
-    // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #72)
-    if (isSymlink(path)) {
-        return map; // Return empty map for security violations
-    }
-
-    const file = fs.cwd().openFile(path, .{}) catch {
+    const file = openFileReadNoFollow(path) catch {
         return map; // Return empty map if file doesn't exist
     };
     defer file.close();

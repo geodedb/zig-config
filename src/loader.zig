@@ -42,8 +42,8 @@ const ini_mod = @import("ini.zig");
 const properties_mod = @import("properties.zig");
 const secret = @import("secret.zig");
 
-// Security: Import isSymlink helper for symlink attack prevention (CWE-59, #69)
-const isSymlink = secret.isSymlink;
+// Security: Import no-follow open helper for symlink attack prevention (CWE-59, #69)
+const openFileReadNoFollow = secret.openFileReadNoFollow;
 const Source = provenance.Source;
 const ProvenanceTracker = provenance.ProvenanceTracker;
 
@@ -676,13 +676,7 @@ pub fn Loader(comptime T: type) type {
         }
 
         fn loadFromPath(self: *Self, path: []const u8, source: Source) LoadError!void {
-            // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #69)
-            // Note: This introduces a small TOCTOU window, but it's better than following symlinks
-            if (isSymlink(path)) {
-                return LoadError.FileNotFound; // Treat symlinks as not found for security
-            }
-
-            const file = fs.cwd().openFile(path, .{}) catch {
+            const file = openFileReadNoFollow(path) catch {
                 return LoadError.FileNotFound;
             };
             defer file.close();

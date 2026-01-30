@@ -1,332 +1,111 @@
-# Security Gap Analysis
+# GAP Analysis
 
-**Last Updated:** 2026-01-30
-**Review Commit:** 240b355 (working tree with adversarial review round 3)
-**Reviewed By:** Security Code Review Agent (Adversarial Review)
-**Remediation Status:** 29 Closed, 0 Open ✅
+Last updated: 2026-01-30
+Review commit: e473be6 (working tree)
+Reviewed by: Security Code Review Agent (adversarial)
 
 ## Summary
-
-This document tracks security findings from comprehensive security reviews of the zigconfig library.
 
 ### Severity Breakdown
 
 | Severity | Count | Open | Closed | Description |
 |----------|-------|------|--------|-------------|
 | Critical | 0 | 0 | 0 | No critical vulnerabilities found |
-| High | 6 | 0 | 6 | Path traversal, command injection, missing encryption, ReDoS, SSRF bypass, arbitrary exec |
-| Medium | 14 | 0 | 14 | HTTP defaults, SSRF, credential exposure, temp files, path validation, DNS rebinding, symlinks, injection |
-| Low | 9 | 0 | 9 | Thread safety, TOCTOU, CI config, limits, gitleaks config, URL encoding, permissions |
-| **Total** | **29** | **0** | **29** | |
+| High | 1 | 1 | 0 | Local code execution / high-impact secrets risk |
+| Medium | 9 | 9 | 0 | Auth gaps, DoS risks, symlink race conditions, SSRF edge cases |
+| Low | 4 | 4 | 0 | Hardening and policy alignment |
+| **Total** | **14** | **14** | **0** | |
 
-### All Security Findings Closed ✅
+### Top 5 Risks
 
-All 29 identified security findings have been remediated.
+1. Vault CLI PATH hijack allows arbitrary binary execution (High, #77)
+2. Secret provider config fields ignored (Vault/1Password) (Medium, #76)
+3. CI pipeline skips build/test, allowing unverified releases (Medium, #82)
+4. Remote client timeouts unused (DoS risk) (Medium, #80)
+5. Vault field selector ignored; full JSON returned (Medium, #78)
 
 ## Stack-Ranked Findings
 
-### New Findings (Adversarial Review Round 3 - 2026-01-30)
-
-| Rank | Severity | Risk Score | Finding | Component | CWE/OWASP | Evidence | GitLab Issue | Status |
-|------|----------|------------|---------|-----------|-----------|----------|--------------|--------|
-| 1 | Medium | 32 | Consul key path injection | remote.zig | CWE-74 | L591-647 | [#73](https://gitlab.com/devnw/zig/config/-/issues/73) | **Closed** |
-| 2 | Medium | 24 | Incomplete symlink protection | multiple | CWE-59 | dotenv.zig:24 | [#72](https://gitlab.com/devnw/zig/config/-/issues/72) | **Closed** |
-| 3 | Medium | 24 | Missing path validation in parsers | ini.zig, properties.zig, dotenv.zig | CWE-22 | L189,254,24 | [#74](https://gitlab.com/devnw/zig/config/-/issues/74) | **Closed** |
-| 4 | Low | 12 | Default file permissions too permissive | serialize.zig, config.zig | CWE-732 | L462,690 | [#75](https://gitlab.com/devnw/zig/config/-/issues/75) | **Closed** |
-
-### Findings (Adversarial Review Round 2 - 2026-01-30)
-
-| Rank | Severity | Risk Score | Finding | Component | CWE/OWASP | Evidence | GitLab Issue | Status |
-|------|----------|------------|---------|-----------|-----------|----------|--------------|--------|
-| 1 | High | 64 | SSRF bypass via decimal/octal IP formats | remote.zig | CWE-918 | L150-154 | [#65](https://gitlab.com/devnw/zig/config/-/issues/65) | **Closed** |
-| 2 | High | 60 | Arbitrary binary execution via op_path | encrypted_secrets.zig | CWE-78 | L234,399 | [#66](https://gitlab.com/devnw/zig/config/-/issues/66) | **Closed** |
-| 3 | Medium | 36 | Unvalidated vault and path_prefix fields | encrypted_secrets.zig | CWE-74 | L229,209 | [#67](https://gitlab.com/devnw/zig/config/-/issues/67) | **Closed** |
-| 4 | Medium | 32 | DNS rebinding attack surface | remote.zig | CWE-918 | L73-99 | [#68](https://gitlab.com/devnw/zig/config/-/issues/68) | **Closed** |
-| 5 | Medium | 32 | HTTP redirect following bypasses SSRF | remote.zig | CWE-918 | L344-368 | [#70](https://gitlab.com/devnw/zig/config/-/issues/70) | **Closed** |
-| 6 | Medium | 24 | Symlink following in file operations (partial) | multiple | CWE-59 | secret.zig:68 | [#69](https://gitlab.com/devnw/zig/config/-/issues/69) | **Closed** |
-| 7 | Low | 16 | URL-encoded IP bypass potential | remote.zig | CWE-918 | L93-95 | [#71](https://gitlab.com/devnw/zig/config/-/issues/71) | **Closed** |
-
-### Findings (Adversarial Review Round 1 - 2026-01-30)
-
-| Rank | Severity | Risk Score | Finding | Component | CWE/OWASP | Evidence | GitLab Issue | Status |
-|------|----------|------------|---------|-----------|-----------|----------|--------------|--------|
-| 1 | High | 64 | ReDoS in pattern matching | validation.zig | CWE-1333 | L359-478 | [#58](https://gitlab.com/devnw/zig/config/-/issues/58) | **Closed** |
-| 2 | Medium | 48 | SSRF bypass via IPv6/alt IP formats | remote.zig | CWE-918 | L103-135 | [#60](https://gitlab.com/devnw/zig/config/-/issues/60) | **Closed** |
-| 3 | Medium | 48 | File write operations lack path validation | serialize.zig, config.zig | CWE-22 | L450-521 | [#62](https://gitlab.com/devnw/zig/config/-/issues/62) | **Closed** |
-| 4 | Medium | 36 | SensitiveString not applied to config structs | encrypted_secrets.zig | CWE-532 | L175-214 | [#59](https://gitlab.com/devnw/zig/config/-/issues/59) | **Closed** |
-| 5 | Medium | 32 | Predictable temp file names | serialize.zig | CWE-377 | L468 | [#61](https://gitlab.com/devnw/zig/config/-/issues/61) | **Closed** |
-| 6 | Low | 16 | Gitleaks allowlist excludes security files | .gitleaks.toml | CWE-693 | L11-18 | [#63](https://gitlab.com/devnw/zig/config/-/issues/63) | **Closed** |
-| 7 | Low | 16 | Inconsistent file size limits | multiple | CWE-400 | various | [#64](https://gitlab.com/devnw/zig/config/-/issues/64) | **Closed** |
-
-### Initial Security Review Findings (Closed)
-
-| Rank | Severity | Risk Score | Finding | Component | CWE/OWASP | GitLab Issue | Status |
-|------|----------|------------|---------|-----------|-----------|--------------|--------|
-| 1 | High | 80 | Encrypted file provider returns plaintext | encrypted_secrets.zig | CWE-311 | [#47](https://gitlab.com/devnw/zig/config/-/issues/47) | **Closed** |
-| 2 | High | 60 | Path traversal in secret file loading | secret.zig | CWE-22 | [#45](https://gitlab.com/devnw/zig/config/-/issues/45) | **Closed** |
-| 3 | Medium | 48 | HTTP default for remote config/Vault | remote.zig | CWE-319 | [#48](https://gitlab.com/devnw/zig/config/-/issues/48) | **Closed** |
-| 4 | High | 40 | Command injection via Vault/1Password CLI | encrypted_secrets.zig | CWE-78 | [#46](https://gitlab.com/devnw/zig/config/-/issues/46) | **Closed** |
-| 5 | Medium | 36 | SSRF in remote config endpoints | remote.zig | CWE-918 | [#49](https://gitlab.com/devnw/zig/config/-/issues/49) | **Closed** |
-| 6 | Medium | 36 | AWS KMS provider stub | encrypted_secrets.zig | CWE-311 | [#57](https://gitlab.com/devnw/zig/config/-/issues/57) | **Closed** |
-| 7 | Low | 24 | SBOM scan allows failure in CI | .gitlab-ci.yml | CWE-937 | [#53](https://gitlab.com/devnw/zig/config/-/issues/53) | **Closed** |
-| 8 | Low | 16 | Global mutable state (thread safety) | config.zig | CWE-362 | [#51](https://gitlab.com/devnw/zig/config/-/issues/51) | **Closed** |
-| 9 | Low | 16 | TOCTOU race in file watcher | watch.zig | CWE-367 | [#52](https://gitlab.com/devnw/zig/config/-/issues/52) | **Closed** |
-| 10 | Low | 16 | No config parser depth limits | loader.zig | CWE-400 | [#54](https://gitlab.com/devnw/zig/config/-/issues/54) | **Closed** |
-| 11 | Low | 16 | Missing HTTP security headers | remote.zig | CWE-287 | [#55](https://gitlab.com/devnw/zig/config/-/issues/55) | **Closed** |
-| 12 | Low | 12 | Non-standard dependency hash format | build.zig.zon | CWE-494 | [#56](https://gitlab.com/devnw/zig/config/-/issues/56) | **Closed** |
+| Rank | Severity | RiskScore | Finding | Component | CWE/OWASP | Evidence (file:line) | GitLab Issue | Fix Summary | Owner | SLA/Due | Status |
+|------|----------|-----------|---------|-----------|-----------|----------------------|--------------|------------|-------|---------|--------|
+| 1 | High | 40 | Vault CLI PATH hijack allows arbitrary binary execution | encrypted_secrets | CWE-426 | src/encrypted_secrets.zig:411 | https://gitlab.com/devnw/zig/config/-/issues/77 | Add allowlisted vault_path or verify binary | TBD | 2026-03-01 | Open (confidence::confirmed) |
+| 2 | Medium | 48 | Secret provider config fields ignored (Vault/1Password) | encrypted_secrets | CWE-922 | src/encrypted_secrets.zig:240 | https://gitlab.com/devnw/zig/config/-/issues/76 | Apply config to child env or API | TBD | 2026-04-30 | Open (confidence::confirmed) |
+| 3 | Medium | 48 | CI pipeline skips build/test | CI/CD | CWE-693 | .gitlab-ci.yml:5 | https://gitlab.com/devnw/zig/config/-/issues/82 | Add build/test stages; gate release | TBD | 2026-04-30 | Open (confidence::confirmed) |
+| 4 | Medium | 36 | Remote client timeout_ms unused (DoS risk) | remote | CWE-400 | src/remote.zig:373 | https://gitlab.com/devnw/zig/config/-/issues/80 | Enforce timeouts in requests | TBD | 2026-04-30 | Open (confidence::confirmed) |
+| 5 | Medium | 36 | Vault field selector ignored; full JSON returned | encrypted_secrets | CWE-200 | src/encrypted_secrets.zig:476 | https://gitlab.com/devnw/zig/config/-/issues/78 | Parse JSON and return field only | TBD | 2026-04-30 | Open (confidence::confirmed) |
+| 6 | Medium | 32 | Symlink checks are TOCTOU; file ops still follow symlinks | file IO | CWE-59 | src/secret.zig:82 | https://gitlab.com/devnw/zig/config/-/issues/69 | Use O_NOFOLLOW/exclusive open | TBD | 2026-04-30 | Open (confidence::confirmed) |
+| 7 | Medium | 32 | Predictable temp file names in safeWriteConfig | file IO | CWE-377 | src/config.zig:697 | https://gitlab.com/devnw/zig/config/-/issues/61 | Random temp names + O_EXCL | TBD | 2026-04-30 | Open (confidence::confirmed) |
+| 8 | Medium | 32 | DNS rebinding attack surface in SSRF protection | remote | CWE-918 | src/remote.zig:73 | https://gitlab.com/devnw/zig/config/-/issues/68 | Resolve & validate IPs; pin DNS | TBD | 2026-04-30 | Open (confidence::suspected) |
+| 9 | Medium | 24 | Secret provider command execution lacks timeout/stderr handling | encrypted_secrets | CWE-400 | src/encrypted_secrets.zig:480 | https://gitlab.com/devnw/zig/config/-/issues/79 | Drain stderr; enforce timeout | TBD | 2026-04-30 | Open (confidence::confirmed) |
+| 10 | Medium | 24 | Etcd username/password options ignored | remote | CWE-287 | src/remote.zig:375 | https://gitlab.com/devnw/zig/config/-/issues/81 | Implement auth or reject config | TBD | 2026-04-30 | Open (confidence::confirmed) |
+| 11 | Low | 24 | Secret env provider contradicts documented policy | encrypted_secrets/docs | CWE-214 | src/encrypted_secrets.zig:177 | https://gitlab.com/devnw/zig/config/-/issues/84 | Remove or gate env provider; update docs | TBD | 2026-07-29 | Open (confidence::confirmed) |
+| 12 | Low | 16 | Serialize writes use default permissions | serialize | CWE-732 | src/serialize.zig:462 | https://gitlab.com/devnw/zig/config/-/issues/75 | Use 0o600 by default | TBD | 2026-07-29 | Open (confidence::confirmed) |
+| 13 | Low | 16 | Pre-commit config malformed; hooks may not run | dev workflow | CWE-693 | .pre-commit-config.yaml:11 | https://gitlab.com/devnw/zig/config/-/issues/83 | Fix YAML indentation; validate in CI | TBD | 2026-07-29 | Open (confidence::confirmed) |
+| 14 | Low | 16 | File watcher TOCTOU race condition | watch | CWE-367 | src/watch.zig:205 | https://gitlab.com/devnw/zig/config/-/issues/52 | Document/mitigate TOCTOU | TBD | 2026-07-29 | Open (confidence::suspected) |
 
 ## Findings by Area
 
-### Application/API Security
-
-| Finding | Status | Issue | Fix |
-|---------|--------|-------|-----|
-| ReDoS in pattern matching | **Closed** | [#58](https://gitlab.com/devnw/zig/config/-/issues/58) | Added bounded iteration with max_iterations limit |
-| Path traversal in secret loading | **Closed** | [#45](https://gitlab.com/devnw/zig/config/-/issues/45) | Added isPathSafe() |
-| Command injection in CLI wrappers | **Closed** | [#46](https://gitlab.com/devnw/zig/config/-/issues/46) | Added isValidSecretIdentifier() |
-| File write path traversal | **Closed** | [#62](https://gitlab.com/devnw/zig/config/-/issues/62) | Added isPathSafe() to all write operations |
-| No parser depth limits | **Closed** | [#54](https://gitlab.com/devnw/zig/config/-/issues/54) | Documented |
-| Arbitrary binary execution via op_path | **Closed** | [#66](https://gitlab.com/devnw/zig/config/-/issues/66) | Added isValidOpPath() allowlist validation |
-| Unvalidated vault/path_prefix fields | **Closed** | [#67](https://gitlab.com/devnw/zig/config/-/issues/67) | Added isValidSecretIdentifier() validation |
-| Consul key path injection | **Closed** | [#73](https://gitlab.com/devnw/zig/config/-/issues/73) | Added isValidKVKey() validation |
-| Missing path validation in parsers | **Closed** | [#74](https://gitlab.com/devnw/zig/config/-/issues/74) | Added isPathSafe() to ini.zig, properties.zig, dotenv.zig |
-
-### Authentication/Secrets
-
-| Finding | Status | Issue | Fix |
-|---------|--------|-------|-----|
-| Encrypted file provider unimplemented | **Closed** | [#47](https://gitlab.com/devnw/zig/config/-/issues/47) | Returns FeatureNotImplemented |
-| AWS KMS provider stub | **Closed** | [#57](https://gitlab.com/devnw/zig/config/-/issues/57) | Returns FeatureNotImplemented |
-| SensitiveString not applied | **Closed** | [#59](https://gitlab.com/devnw/zig/config/-/issues/59) | Applied to KmsConfig, VaultConfig, OnePasswordConfig |
-
-### Network/Data Security
-
-| Finding | Status | Issue | Fix |
-|---------|--------|-------|-----|
-| HTTP defaults (no TLS) | **Closed** | [#48](https://gitlab.com/devnw/zig/config/-/issues/48) | Defaults changed to HTTPS |
-| SSRF in remote endpoints | **Closed** | [#49](https://gitlab.com/devnw/zig/config/-/issues/49) | Added validateUrl() |
-| SSRF bypass via IPv6/alt formats | **Closed** | [#60](https://gitlab.com/devnw/zig/config/-/issues/60) | Added IPv6-mapped address handling, fe80:: detection |
-| Missing HTTP headers | **Closed** | [#55](https://gitlab.com/devnw/zig/config/-/issues/55) | Added User-Agent, fixed token |
-| SSRF bypass via decimal/octal IP | **Closed** | [#65](https://gitlab.com/devnw/zig/config/-/issues/65) | Added parseIPv4ToInt() with decimal/octal/hex support |
-| DNS rebinding attack surface | **Closed** | [#68](https://gitlab.com/devnw/zig/config/-/issues/68) | Documented limitation with mitigation recommendations |
-| HTTP redirect SSRF bypass | **Closed** | [#70](https://gitlab.com/devnw/zig/config/-/issues/70) | Disabled redirect following with .redirect_behavior = .not_allowed |
-| URL-encoded IP bypass | **Closed** | [#71](https://gitlab.com/devnw/zig/config/-/issues/71) | Added decodePercentEncoded() before private IP check |
-
-### File System Security
-
-| Finding | Status | Issue | Fix |
-|---------|--------|-------|-----|
-| Predictable temp files | **Closed** | [#61](https://gitlab.com/devnw/zig/config/-/issues/61) | Uses crypto random for temp file names |
-| Symlink following in file ops (partial) | **Closed** | [#69](https://gitlab.com/devnw/zig/config/-/issues/69) | Added isSymlink() check in secret.zig, loader.zig, watch.zig |
-| Incomplete symlink protection | **Closed** | [#72](https://gitlab.com/devnw/zig/config/-/issues/72) | Added isSymlink() to dotenv.zig, async.zig, ini.zig, properties.zig, config.zig |
-| Default file permissions too permissive | **Closed** | [#75](https://gitlab.com/devnw/zig/config/-/issues/75) | Added .mode = 0o600 to createFile() calls |
-
-### CI/CD Security
-
-| Finding | Status | Issue | Fix |
-|---------|--------|-------|-----|
-| SBOM scan allows failure | **Closed** | [#53](https://gitlab.com/devnw/zig/config/-/issues/53) | Removed allow_failure |
-| Gitleaks excludes security files | **Closed** | [#63](https://gitlab.com/devnw/zig/config/-/issues/63) | Removed security source files from allowlist |
+### App/API
 
-### Code Quality/Hardening
+| Finding | Status | Issue | Notes |
+|---------|--------|-------|-------|
+| Symlink checks are TOCTOU; file ops still follow symlinks | Open | https://gitlab.com/devnw/zig/config/-/issues/69 | Use no-follow/exclusive open flags |
+| Predictable temp file names in safeWriteConfig | Open | https://gitlab.com/devnw/zig/config/-/issues/61 | Randomize temp names and add O_EXCL |
+| Serialize writes use default permissions | Open | https://gitlab.com/devnw/zig/config/-/issues/75 | Set 0o600 by default |
+| File watcher TOCTOU race condition | Open | https://gitlab.com/devnw/zig/config/-/issues/52 | Document or rework watcher |
 
-| Finding | Status | Issue | Fix |
-|---------|--------|-------|-----|
-| Global mutable state | **Closed** | [#51](https://gitlab.com/devnw/zig/config/-/issues/51) | Added mutex |
-| TOCTOU race condition | **Closed** | [#52](https://gitlab.com/devnw/zig/config/-/issues/52) | Documented |
-| Dependency hash format | **Closed** | [#56](https://gitlab.com/devnw/zig/config/-/issues/56) | Verified |
-| Inconsistent file size limits | **Closed** | [#64](https://gitlab.com/devnw/zig/config/-/issues/64) | Documented and centralized constants |
+### Auth/Secrets
 
-## Remediation Priority
+| Finding | Status | Issue | Notes |
+|---------|--------|-------|-------|
+| Vault CLI PATH hijack allows arbitrary binary execution | Open | https://gitlab.com/devnw/zig/config/-/issues/77 | Allowlist vault_path or verify binary |
+| Secret provider config fields ignored (Vault/1Password) | Open | https://gitlab.com/devnw/zig/config/-/issues/76 | Apply config to child env/API |
+| Vault field selector ignored; full JSON returned | Open | https://gitlab.com/devnw/zig/config/-/issues/78 | Parse JSON and return field |
+| Command execution lacks timeout/stderr handling | Open | https://gitlab.com/devnw/zig/config/-/issues/79 | Enforce timeout, drain stderr |
+| Secret env provider contradicts documented policy | Open | https://gitlab.com/devnw/zig/config/-/issues/84 | Remove or gate env provider |
 
-### All Remediation Complete ✅
+### Data/Network
 
-All 29 security findings have been addressed:
-- **Critical:** 0 (none identified)
-- **High:** 6 closed
-- **Medium:** 14 closed
-- **Low:** 9 closed
+| Finding | Status | Issue | Notes |
+|---------|--------|-------|-------|
+| Remote client timeout_ms unused (DoS risk) | Open | https://gitlab.com/devnw/zig/config/-/issues/80 | Enforce timeouts |
+| Etcd username/password options ignored | Open | https://gitlab.com/devnw/zig/config/-/issues/81 | Implement auth or reject config |
+| DNS rebinding attack surface in SSRF protection | Open | https://gitlab.com/devnw/zig/config/-/issues/68 | Resolve and validate IPs |
 
-## Findings Detail (Round 3 - All Closed)
+### CI/CD
 
-### #72 - Incomplete Symlink Protection in File Parsers (CLOSED)
-**confidence::confirmed**
-**status::closed**
+| Finding | Status | Issue | Notes |
+|---------|--------|-------|-------|
+| CI pipeline skips build/test | Open | https://gitlab.com/devnw/zig/config/-/issues/82 | Add build/test stages |
+| Pre-commit config malformed; hooks may not run | Open | https://gitlab.com/devnw/zig/config/-/issues/83 | Fix indentation; validate config |
 
-The symlink protection fix (#69) was applied to secret.zig, loader.zig, and watch.zig but missed several file parsing modules.
+### IaC
 
-**Evidence:**
-- `src/dotenv.zig:24` - `.env` file loading
-- `src/async.zig:222` - Async file loading
-- `src/ini.zig:189` - INI file loading
-- `src/properties.zig:254` - Properties file loading
-- `src/config.zig:354` - parseFile()
+None identified in this repository.
 
-**Fix Applied:** Added `isSymlink()` import and check before `openFile()` in all affected modules.
+### Container
 
-### #73 - Consul Key Path Injection (CLOSED)
-**confidence::confirmed**
-**status::closed**
+None identified in this repository.
 
-The Consul client constructs URLs using the `key` parameter directly without validation, enabling potential path injection.
+### Ops
 
-**Evidence:** `src/remote.zig:591-647`
-```zig
-const url = std.fmt.allocPrint(self.allocator, "{s}/v1/kv/{s}?raw", .{ self.options.address, key })
-```
+None identified beyond CI/CD and dev workflow items above.
 
-**Fix Applied:** Added `isValidKVKey()` validation function that rejects:
-- Path traversal sequences (`..`)
-- URL-encoded traversal (`%2e`, `%2f`)
-- Query/fragment injection (`?`, `#`)
-- Null bytes (`\x00`, `%00`)
-- Invalid characters (only alphanumeric, `/`, `-`, `_`, `.` allowed)
-- Leading/trailing slashes
-- Keys > 512 chars
+## Quick wins / Medium / Strategic
 
-### #74 - Missing Path Traversal Validation in Parsers (CLOSED)
-**confidence::confirmed**
-**status::closed**
+### Quick wins (days)
+- Fix `.pre-commit-config.yaml` indentation and validate config in CI (#83).
+- Add restrictive permissions (0o600) to serialize write helpers (#75).
+- Remove or gate `env://` provider and align docs (#84).
 
-The path traversal fix (#62) was applied to write operations but INI, Properties, and Dotenv file reading lacked validation.
+### Medium-term (weeks)
+- Apply Vault/1Password config fields to CLI execution or move to direct APIs (#76).
+- Enforce timeouts and drain stderr for external secret commands (#79).
+- Enforce HTTP timeouts for remote clients (#80).
+- Fix symlink handling with no-follow/exclusive opens and randomized temp files (#69, #61).
+- Implement or explicitly reject etcd username/password options (#81).
 
-**Evidence:**
-- `src/ini.zig:189` - No isPathSafe() before openFile
-- `src/properties.zig:254` - No isPathSafe() before openFile
-- `src/dotenv.zig:24` - No isPathSafe() before openFile
-
-**Fix Applied:** Imported `secret.isPathSafe()` and added path validation before opening files.
-
-### #75 - Default File Permissions Too Permissive (CLOSED)
-**confidence::confirmed**
-**status::closed**
-
-Files created use default permissions (typically 0644) instead of restrictive mode.
-
-**Evidence:**
-- `src/config.zig:690,704,740,753` - safe write without mode
-
-**Fix Applied:** Added `.mode = 0o600` to all `createFile()` calls in safe write functions.
-
-## Previous Findings Detail (Round 2 - Closed)
-
-### #65 - SSRF Bypass via Decimal/Octal IP Formats (CLOSED)
-**confidence::confirmed**
-**status::closed**
-
-The `isPrivateIPv4()` function only parses decimal format IPs (base 10). An attacker can bypass SSRF protection using:
-- Decimal IP: `2130706433` (equivalent to 127.0.0.1)
-- Octal: `0177.0.0.1` (equivalent to 127.0.0.1)
-- Hex octets: `0x7f.0.0.1` (equivalent to 127.0.0.1)
-
-**Evidence:** `src/remote.zig:150-154`
-
-**Fix Applied:** Added `parseIPv4ToInt()` and `parseIntWithBase()` functions that normalize all IP formats to 32-bit integers before checking private ranges.
-
-### #66 - Arbitrary Binary Execution via op_path (CLOSED)
-**confidence::confirmed**
-**status::closed**
-
-The `op_path` field in `OnePasswordConfig` is used directly as the executable without validation.
-
-**Evidence:** `src/encrypted_secrets.zig:234,399`
-
-**Fix Applied:** Added `isValidOpPath()` with allowlist validation for known safe binary locations.
-
-### #67 - Unvalidated vault and path_prefix Fields (CLOSED)
-**confidence::confirmed**
-**status::closed**
-
-The `vault` and `path_prefix` fields are not validated before being used in URIs.
-
-**Evidence:** `src/encrypted_secrets.zig:229,209,404`
-
-**Fix Applied:** Added `isValidSecretIdentifier()` validation in `loadFromVault()` and `loadFromOnePassword()`.
-
-### #68 - DNS Rebinding Attack Surface (CLOSED)
-**confidence::suspected**
-**status::closed (documented limitation)**
-
-URL validation happens before DNS resolution. An attacker controlling DNS can rebind from public IP to private IP after validation passes.
-
-**Evidence:** `src/remote.zig:73-99`
-
-**Fix Applied:** Documented as a known limitation with mitigation recommendations.
-
-### #69 - Symlink Following in File Operations (CLOSED)
-**confidence::suspected**
-**status::closed (partial)**
-
-File operations use `openFile` which follows symlinks by default.
-
-**Evidence:** `secret.zig:68`, `loader.zig:675`, `watch.zig:239`
-
-**Fix Applied:** Added `isSymlink()` helper function. Note: Additional locations identified in #72.
-
-### #70 - HTTP Redirect Following Bypasses SSRF (CLOSED)
-**confidence::suspected**
-**status::closed**
-
-The HTTP client may follow redirects from validated public URLs to internal IPs.
-
-**Evidence:** `src/remote.zig:344-368`
-
-**Fix Applied:** Set `.redirect_behavior = .not_allowed` on all HTTP client requests.
-
-### #71 - URL-Encoded IP Bypass (CLOSED)
-**confidence::suspected**
-**status::closed**
-
-URL-encoded private IPs like `%31%32%37.%30.%30.%31` (127.0.0.1) may bypass validation.
-
-**Evidence:** `src/remote.zig:93-95`
-
-**Fix Applied:** Added `decodePercentEncoded()` function to decode hostnames before checking.
-
-## Methodology
-
-This adversarial review (Round 3) specifically targeted:
-
-1. **Completeness of Previous Fixes**
-   - Verified symlink protection applied to all file operations
-   - Verified path validation applied to all file parsers
-   - Checked for consistent patterns across modules
-
-2. **Injection Vectors**
-   - Consul key path injection
-   - Additional URI construction points
-
-3. **File System Security**
-   - File creation permissions
-   - Remaining symlink vectors
-
-4. **Code Pattern Analysis**
-   - grep for openFile without isSymlink check
-   - grep for createFile without mode specification
-   - grep for URL construction with user-controlled values
-
-## What Was Verified Working
-
-The following security controls were verified as correctly implemented:
-- **isPathSafe()** - Correctly blocks ".." and null bytes in secret.zig, serialize.zig, config.zig
-- **isValidSecretIdentifier()** - Correctly validates CLI arguments
-- **HTTPS defaults** - etcd, Consul, Vault now default to HTTPS
-- **IPv6-mapped address blocking** - `::ffff:` prefixes correctly detected
-- **IP format normalization** - Decimal/octal/hex IPs correctly parsed
-- **Redirect blocking** - HTTP redirects disabled in all clients
-- **URL decoding** - Percent-encoded hosts decoded before validation
-
-## Blockers/Unknowns
-
-1. **etcd key safety** - etcd uses base64 encoding in JSON body, appears safe from injection
-2. **Async loader thread safety** - Needs review for concurrent file access patterns
-
-## References
-
-- [OWASP Top 10](https://owasp.org/Top10/)
-- [CWE/SANS Top 25](https://cwe.mitre.org/top25/)
-- [SSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
-- [CWE-59: Improper Link Resolution Before File Access](https://cwe.mitre.org/data/definitions/59.html)
-- [CWE-22: Path Traversal](https://cwe.mitre.org/data/definitions/22.html)
-- [CWE-74: Injection](https://cwe.mitre.org/data/definitions/74.html)
-- [CWE-732: Incorrect Permission Assignment](https://cwe.mitre.org/data/definitions/732.html)
+### Strategic (quarter)
+- Replace CLI-based secret providers with direct SDK/API integrations for stronger auth/TLS controls (#76, #77, #79).
+- Implement DNS rebinding mitigation (resolve and pin IPs) in SSRF checks (#68).
+- Add full build/test gating in CI with required approvals before release (#82).

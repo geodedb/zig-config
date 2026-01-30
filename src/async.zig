@@ -42,6 +42,7 @@ const secret = @import("secret.zig");
 // Security: Import helpers for symlink and path traversal protection (CWE-59, CWE-22, #72, #74)
 const isSymlink = secret.isSymlink;
 const isPathSafe = secret.isPathSafe;
+const openFileReadNoFollow = secret.openFileReadNoFollow;
 
 /// Async loading errors
 pub const AsyncError = error{
@@ -229,12 +230,7 @@ pub fn AsyncLoader(comptime T: type) type {
                 return; // Silently skip for security violations
             }
 
-            // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #72)
-            if (isSymlink(path)) {
-                return; // Silently skip for security violations
-            }
-
-            const file = fs.cwd().openFile(path, .{}) catch {
+            const file = openFileReadNoFollow(path) catch {
                 return; // File not found is ok for optional configs
             };
             defer file.close();
@@ -348,13 +344,7 @@ pub fn loadParallel(comptime T: type, allocator: Allocator, paths: []const []con
                     return;
                 }
 
-                // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #72)
-                if (isSymlink(c.path)) {
-                    c.err = error.SymlinkNotAllowed;
-                    return;
-                }
-
-                const file = fs.cwd().openFile(c.path, .{}) catch |e| {
+                const file = openFileReadNoFollow(c.path) catch |e| {
                     c.err = e;
                     return;
                 };

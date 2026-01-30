@@ -11,6 +11,7 @@ const mem = std.mem;
 const Allocator = mem.Allocator;
 const crypto = std.crypto;
 const secret = @import("secret.zig");
+const createFileNoFollow = secret.createFileNoFollow;
 
 /// Output format for serialization
 pub const OutputFormat = enum {
@@ -459,7 +460,7 @@ pub fn writeToFile(comptime T: type, value: T, path: []const u8, allocator: Allo
     const content = try serialize(T, value, allocator, options);
     defer allocator.free(content);
 
-    const file = try std.fs.cwd().createFile(path, .{});
+    const file = try createFileNoFollow(path, 0o600, false);
     defer file.close();
 
     try file.writeAll(content);
@@ -480,14 +481,25 @@ pub fn safeWriteToFile(comptime T: type, value: T, path: []const u8, allocator: 
 
     // Create temp file path with cryptographically secure random suffix
     // Security: Uses crypto random instead of predictable timestamp (CWE-377, #61)
-    var random_bytes: [8]u8 = undefined;
-    crypto.random.bytes(&random_bytes);
-    const random_suffix = std.fmt.fmtSliceHexLower(&random_bytes);
-    const temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, random_suffix });
+    var temp_path: []u8 = &.{};
+    var temp_file: std.fs.File = undefined;
+    var attempt: u8 = 0;
+    while (attempt < 5) : (attempt += 1) {
+        var random_bytes: [8]u8 = undefined;
+        crypto.random.bytes(&random_bytes);
+        const random_suffix = std.fmt.fmtSliceHexLower(&random_bytes);
+        temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, random_suffix });
+        temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                allocator.free(temp_path);
+                continue;
+            },
+            else => return err,
+        };
+        break;
+    }
+    if (attempt == 5) return error.PathAlreadyExists;
     defer allocator.free(temp_path);
-
-    // Write to temp file
-    const temp_file = try std.fs.cwd().createFile(temp_path, .{});
     errdefer std.fs.cwd().deleteFile(temp_path) catch {};
 
     try temp_file.writeAll(content);

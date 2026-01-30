@@ -43,8 +43,8 @@ const fs = std.fs;
 const Allocator = mem.Allocator;
 const Thread = std.Thread;
 
-// Security: Import isSymlink helper for symlink attack prevention (CWE-59, #69)
-const isSymlink = secret.isSymlink;
+// Security: Import no-follow open helper for symlink attack prevention (CWE-59, #69)
+const openFileReadNoFollow = secret.openFileReadNoFollow;
 
 /// Watch errors
 pub const WatchError = error{
@@ -240,12 +240,7 @@ const FileStat = struct {
 };
 
 fn getFileStat(path: []const u8) ?FileStat {
-    // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #69)
-    if (isSymlink(path)) {
-        return null; // Treat symlinks as not found for security
-    }
-
-    const file = fs.cwd().openFile(path, .{}) catch return null;
+    const file = openFileReadNoFollow(path) catch return null;
     defer file.close();
 
     const stat = file.stat() catch return null;

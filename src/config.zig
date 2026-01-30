@@ -43,6 +43,7 @@ pub const provenance = @import("provenance.zig");
 pub const xdg = @import("xdg.zig");
 pub const dotenv = @import("dotenv.zig");
 pub const secret = @import("secret.zig");
+const createFileNoFollow = secret.createFileNoFollow;
 pub const validate = @import("validate.zig");
 pub const flags = @import("flags.zig");
 pub const merge = @import("merge.zig");
@@ -362,8 +363,10 @@ pub fn parseFile(allocator: Allocator, path: []const u8) !Value {
         return error.SymlinkNotAllowed;
     }
 
-    const file = std.fs.cwd().openFile(path, .{}) catch {
-        return error.FileNotFound;
+    const file = secret.openFileReadNoFollow(path) catch |err| switch (err) {
+        error.SymlinkNotAllowed => return error.SymlinkNotAllowed,
+        error.FileNotFound => return error.FileNotFound,
+        else => return error.FileNotFound,
     };
     defer file.close();
 
@@ -694,12 +697,26 @@ pub fn safeWriteConfig(
     } else |_| {}
 
     if (options.atomic) {
-        // Write to temp file first
-        const temp_path = std.fmt.allocPrint(allocator, "{s}.tmp", .{path}) catch return SafeWriteError.OutOfMemory;
+        // Write to temp file first (randomized, exclusive)
+        var temp_path: []u8 = &.{};
+        var temp_file: std.fs.File = undefined;
+        var attempt: u8 = 0;
+        while (attempt < 5) : (attempt += 1) {
+            var random_bytes: [8]u8 = undefined;
+            std.crypto.random.bytes(&random_bytes);
+            const random_suffix = std.fmt.fmtSliceHexLower(&random_bytes);
+            temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, random_suffix }) catch return SafeWriteError.OutOfMemory;
+            temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
+                error.PathAlreadyExists => {
+                    allocator.free(temp_path);
+                    continue;
+                },
+                else => return SafeWriteError.IoError,
+            };
+            break;
+        }
+        if (attempt == 5) return SafeWriteError.IoError;
         defer allocator.free(temp_path);
-
-        // Security: Use restrictive file permissions (CWE-732, #75)
-        const temp_file = cwd.createFile(temp_path, .{ .mode = 0o600 }) catch return SafeWriteError.IoError;
         temp_file.writeAll(content) catch {
             temp_file.close();
             cwd.deleteFile(temp_path) catch {};
@@ -714,7 +731,7 @@ pub fn safeWriteConfig(
         };
     } else {
         // Security: Use restrictive file permissions (CWE-732, #75)
-        const file = cwd.createFile(path, .{ .mode = 0o600 }) catch return SafeWriteError.IoError;
+        const file = createFileNoFollow(path, 0o600, false) catch return SafeWriteError.IoError;
         defer file.close();
         file.writeAll(content) catch return SafeWriteError.IoError;
     }
@@ -747,11 +764,25 @@ pub fn safeWriteConfigWithBackup(
     } else |_| {}
 
     if (options.atomic) {
-        const temp_path = std.fmt.allocPrint(allocator, "{s}.tmp", .{path}) catch return SafeWriteError.OutOfMemory;
+        var temp_path: []u8 = &.{};
+        var temp_file: std.fs.File = undefined;
+        var attempt: u8 = 0;
+        while (attempt < 5) : (attempt += 1) {
+            var random_bytes: [8]u8 = undefined;
+            std.crypto.random.bytes(&random_bytes);
+            const random_suffix = std.fmt.fmtSliceHexLower(&random_bytes);
+            temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, random_suffix }) catch return SafeWriteError.OutOfMemory;
+            temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
+                error.PathAlreadyExists => {
+                    allocator.free(temp_path);
+                    continue;
+                },
+                else => return SafeWriteError.IoError,
+            };
+            break;
+        }
+        if (attempt == 5) return SafeWriteError.IoError;
         defer allocator.free(temp_path);
-
-        // Security: Use restrictive file permissions (CWE-732, #75)
-        const temp_file = cwd.createFile(temp_path, .{ .mode = 0o600 }) catch return SafeWriteError.IoError;
         temp_file.writeAll(content) catch {
             temp_file.close();
             cwd.deleteFile(temp_path) catch {};
@@ -765,7 +796,7 @@ pub fn safeWriteConfigWithBackup(
         };
     } else {
         // Security: Use restrictive file permissions (CWE-732, #75)
-        const file = cwd.createFile(path, .{ .mode = 0o600 }) catch return SafeWriteError.IoError;
+        const file = createFileNoFollow(path, 0o600, false) catch return SafeWriteError.IoError;
         defer file.close();
         file.writeAll(content) catch return SafeWriteError.IoError;
     }
@@ -838,7 +869,11 @@ pub const FormatRegistry = struct {
 
         // Check custom decoders first
         if (self.decoders.get(ext)) |decoder| {
-            const file = std.fs.cwd().openFile(path, .{}) catch return error.FileNotFound;
+            const file = secret.openFileReadNoFollow(path) catch |err| switch (err) {
+                error.SymlinkNotAllowed => return error.SymlinkNotAllowed,
+                error.FileNotFound => return error.FileNotFound,
+                else => return error.FileNotFound,
+            };
             defer file.close();
 
             const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);

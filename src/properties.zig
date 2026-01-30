@@ -30,8 +30,8 @@ const Allocator = mem.Allocator;
 const secret = @import("secret.zig");
 
 // Security: Import helpers for symlink and path traversal protection (CWE-59, CWE-22, #72, #74)
-const isSymlink = secret.isSymlink;
 const isPathSafe = secret.isPathSafe;
+const openFileReadNoFollow = secret.openFileReadNoFollow;
 
 /// Properties parsing errors
 pub const PropertiesError = error{
@@ -262,12 +262,10 @@ pub fn parseFile(allocator: Allocator, path: []const u8) !Properties {
         return error.PathTraversalDetected;
     }
 
-    // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #72)
-    if (isSymlink(path)) {
-        return error.SymlinkNotAllowed;
-    }
-
-    const file = try std.fs.cwd().openFile(path, .{});
+    const file = openFileReadNoFollow(path) catch |err| switch (err) {
+        error.SymlinkNotAllowed => return error.SymlinkNotAllowed,
+        else => return err,
+    };
     defer file.close();
 
     const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
