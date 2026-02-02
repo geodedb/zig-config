@@ -5,6 +5,41 @@
 //!
 //! Provides high-performance parallel implementations for configuration
 //! operations including file loading, merge operations, and validation.
+//!
+//! ## Overview
+//!
+//! This module enables parallel processing of configuration operations
+//! using the spice thread pool. Ideal for loading multiple config files
+//! or validating large configuration structures.
+//!
+//! ## Build Configuration
+//!
+//! Enable: `-Dspice=true` (default)
+//! Disable: `-Dspice=false`
+//!
+//! ## Usage Example
+//!
+//! ```zig
+//! const parallel = @import("parallel.zig");
+//!
+//! // Load multiple config files in parallel
+//! var inputs: [3]parallel.FileLoadInput = .{
+//!     .{ .path = "/etc/app/system.yaml", .format = .yaml },
+//!     .{ .path = "~/.config/app/user.yaml", .format = .yaml },
+//!     .{ .path = "./config.yaml", .format = .yaml },
+//! };
+//! var results: [3]parallel.FileLoadResult = undefined;
+//!
+//! parallel.parallelFileLoad(allocator, &inputs, &results);
+//! ```
+//!
+//! ## Performance Thresholds
+//!
+//! | Operation      | Threshold | Sequential Below |
+//! |----------------|-----------|------------------|
+//! | File Load      | 2 files   | Yes              |
+//! | Validation     | 8 rules   | Yes              |
+//! | Serialization  | 2 formats | Yes              |
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -438,5 +473,152 @@ test "parallel validate" {
 
     for (results) |result| {
         try std.testing.expect(result.valid);
+    }
+}
+
+test "parallel file load - empty path" {
+    if (!build_options.enable_spice) return error.SkipZigTest;
+
+    var inputs: [4]FileLoadInput = undefined;
+    var results: [4]FileLoadResult = undefined;
+
+    for (&inputs) |*input| {
+        input.* = .{
+            .path = "", // Empty path
+            .format = .yaml,
+        };
+    }
+
+    parallelFileLoad(std.testing.allocator, &inputs, &results);
+
+    for (results) |result| {
+        try std.testing.expect(!result.success);
+        try std.testing.expect(result.error_msg != null);
+    }
+}
+
+test "parallel file load - single item" {
+    var inputs: [1]FileLoadInput = undefined;
+    var results: [1]FileLoadResult = undefined;
+
+    inputs[0] = .{
+        .path = "/path/to/config.yaml",
+        .format = .yaml,
+    };
+
+    parallelFileLoad(std.testing.allocator, &inputs, &results);
+    try std.testing.expect(results[0].success);
+}
+
+test "parallel validate - required empty value" {
+    if (!build_options.enable_spice) return error.SkipZigTest;
+
+    var rules: [8]ValidationRule = undefined;
+    var values: [8][]const u8 = undefined;
+    var results: [8]ValidationResult = undefined;
+
+    for (&rules, 0..) |*rule, i| {
+        rule.* = .{
+            .field = "required_field",
+            .rule_type = .required,
+            .param = null,
+        };
+        values[i] = ""; // Empty value for required field
+    }
+
+    parallelValidate(&rules, &values, &results);
+
+    for (results) |result| {
+        try std.testing.expect(!result.valid);
+        try std.testing.expect(result.error_msg != null);
+    }
+}
+
+test "parallel validate - min_length" {
+    if (!build_options.enable_spice) return error.SkipZigTest;
+
+    var rules: [8]ValidationRule = undefined;
+    var values: [8][]const u8 = undefined;
+    var results: [8]ValidationResult = undefined;
+
+    for (&rules, 0..) |*rule, i| {
+        rule.* = .{
+            .field = "name",
+            .rule_type = .min_length,
+            .param = "5",
+        };
+        values[i] = if (i % 2 == 0) "ab" else "abcdef";
+    }
+
+    parallelValidate(&rules, &values, &results);
+
+    for (results, 0..) |result, i| {
+        if (i % 2 == 0) {
+            try std.testing.expect(!result.valid);
+        } else {
+            try std.testing.expect(result.valid);
+        }
+    }
+}
+
+test "parallel validate - max_length" {
+    if (!build_options.enable_spice) return error.SkipZigTest;
+
+    var rules: [8]ValidationRule = undefined;
+    var values: [8][]const u8 = undefined;
+    var results: [8]ValidationResult = undefined;
+
+    for (&rules, 0..) |*rule, i| {
+        rule.* = .{
+            .field = "code",
+            .rule_type = .max_length,
+            .param = "5",
+        };
+        values[i] = if (i % 2 == 0) "ab" else "abcdefghij";
+    }
+
+    parallelValidate(&rules, &values, &results);
+
+    for (results, 0..) |result, i| {
+        if (i % 2 == 0) {
+            try std.testing.expect(result.valid);
+        } else {
+            try std.testing.expect(!result.valid);
+        }
+    }
+}
+
+test "parallel serialize - basic" {
+    if (!build_options.enable_spice) return error.SkipZigTest;
+
+    var inputs: [4]SerializeInput = undefined;
+    var results: [4]SerializeResult = undefined;
+
+    inputs[0] = .{ .format = .json, .data = "test" };
+    inputs[1] = .{ .format = .yaml, .data = "test" };
+    inputs[2] = .{ .format = .toml, .data = "test" };
+    inputs[3] = .{ .format = .json, .data = "test" };
+
+    parallelSerialize(std.testing.allocator, &inputs, &results);
+
+    for (results) |result| {
+        try std.testing.expect(result.success);
+    }
+}
+
+test "parallel serialize - empty data" {
+    if (!build_options.enable_spice) return error.SkipZigTest;
+
+    var inputs: [4]SerializeInput = undefined;
+    var results: [4]SerializeResult = undefined;
+
+    for (&inputs) |*input| {
+        input.* = .{ .format = .json, .data = "" };
+    }
+
+    parallelSerialize(std.testing.allocator, &inputs, &results);
+
+    for (results) |result| {
+        try std.testing.expect(!result.success);
     }
 }
