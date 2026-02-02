@@ -169,7 +169,8 @@ fn normalizeHost(host: []const u8) []const u8 {
 }
 
 fn isIpLiteral(host: []const u8) bool {
-    return net.Address.parseIp(host, 0) catch false;
+    _ = net.Address.parseIp(host, 0) catch return false;
+    return true;
 }
 
 fn validateResolvedAddresses(host: []const u8, port: u16) RemoteError!void {

@@ -70,7 +70,7 @@ pub fn openFileReadNoFollow(path: []const u8) OpenNoFollowError!fs.File {
     const fd = std.posix.openat(
         std.posix.AT.FDCWD,
         path,
-        .{ .RDONLY = true, .NOFOLLOW = true, .CLOEXEC = true },
+        .{ .ACCMODE = .RDONLY, .NOFOLLOW = true, .CLOEXEC = true },
         0,
     ) catch |err| switch (err) {
         error.SymLinkLoop => return error.SymlinkNotAllowed,
@@ -87,7 +87,7 @@ pub fn createFileNoFollow(path: []const u8, mode: std.posix.mode_t, exclusive: b
         return fs.cwd().createFile(path, .{ .mode = mode, .exclusive = exclusive });
     }
 
-    var flags = std.posix.O{ .WRONLY = true, .CREAT = true, .NOFOLLOW = true, .CLOEXEC = true };
+    var flags = std.posix.O{ .ACCMODE = .WRONLY, .CREAT = true, .NOFOLLOW = true, .CLOEXEC = true };
     if (exclusive) {
         flags.EXCL = true;
     } else {
@@ -126,7 +126,10 @@ pub fn readFromFileWithOptions(path: []const u8, allocator: Allocator, options: 
     }
 
     const file = if (options.follow_symlinks)
-        fs.cwd().openFile(path, .{})
+        fs.cwd().openFile(path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return SecretError.FileNotFound,
+            else => return SecretError.ReadError,
+        }
     else
         openFileReadNoFollow(path) catch |err| switch (err) {
             error.SymlinkNotAllowed => return SecretError.SymlinkNotAllowed,
