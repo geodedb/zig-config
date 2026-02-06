@@ -33,6 +33,11 @@ pub const SecretError = error{
 /// Security: Used to prevent symlink following attacks (CWE-59, #69)
 /// Note: Uses fstatat with SYMLINK_NOFOLLOW to detect symlinks without following them.
 pub fn isSymlink(path: []const u8) bool {
+    if (comptime builtin.os.tag == .windows) {
+        // Windows: use std.fs to check for symlinks
+        const md = fs.cwd().statFile(path) catch return false;
+        return md.kind == .sym_link;
+    }
     const stat = std.posix.fstatat(std.posix.AT.FDCWD, path, std.posix.AT.SYMLINK_NOFOLLOW) catch {
         return false; // If we can't stat, assume not a symlink (file may not exist)
     };
