@@ -78,6 +78,7 @@ pub fn getPathsForPlatform(allocator: std.mem.Allocator, platform: Platform) !Xd
 
 /// Get Linux/BSD XDG paths
 fn getLinuxPaths(allocator: std.mem.Allocator) !XdgPaths {
+    if (comptime builtin.os.tag == .windows) return getWindowsPaths(allocator);
     const home = std.posix.getenv("HOME") orelse "/";
 
     // Config home
@@ -121,6 +122,7 @@ fn getLinuxPaths(allocator: std.mem.Allocator) !XdgPaths {
 
 /// Get macOS paths following Apple conventions
 fn getMacosPaths(allocator: std.mem.Allocator) !XdgPaths {
+    if (comptime builtin.os.tag == .windows) return getWindowsPaths(allocator);
     const home = std.posix.getenv("HOME") orelse "/";
 
     // macOS uses ~/Library paths by default
