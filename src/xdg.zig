@@ -62,6 +62,18 @@ pub const XdgPaths = struct {
     }
 };
 
+/// Cross-platform environment variable lookup that returns an owned copy.
+/// Returns null if the variable is not set or on allocation failure.
+/// Caller is responsible for freeing the returned slice with the same allocator.
+fn getEnvOwned(allocator: std.mem.Allocator, key: []const u8) ?[]u8 {
+    if (comptime builtin.os.tag == .windows) {
+        return std.process.getEnvVarOwned(allocator, key) catch null;
+    } else {
+        const val = std.posix.getenv(key) orelse return null;
+        return allocator.dupe(u8, val) catch null;
+    }
+}
+
 /// Get XDG directories for the current user (platform-aware)
 pub fn getPaths(allocator: std.mem.Allocator) !XdgPaths {
     return getPathsForPlatform(allocator, Platform.current());
@@ -167,45 +179,39 @@ fn getWindowsPaths(allocator: std.mem.Allocator) !XdgPaths {
     // Windows uses environment variables for paths
     // APPDATA = C:\Users\<user>\AppData\Roaming
     // LOCALAPPDATA = C:\Users\<user>\AppData\Local
-    // PROGRAMDATA = C:\ProgramData
 
-    const appdata = std.posix.getenv("APPDATA") orelse
-        std.posix.getenv("USERPROFILE") orelse "C:\\Users\\Default";
-    const localappdata = std.posix.getenv("LOCALAPPDATA") orelse appdata;
+    const appdata = getEnvOwned(allocator, "APPDATA") orelse
+        getEnvOwned(allocator, "USERPROFILE") orelse
+        try allocator.dupe(u8, "C:\\Users\\Default");
+    defer allocator.free(appdata);
+
+    const localappdata = getEnvOwned(allocator, "LOCALAPPDATA") orelse
+        try allocator.dupe(u8, appdata);
+    defer allocator.free(localappdata);
 
     // Still respect XDG vars if set for cross-platform compatibility
-    const config_home = if (std.posix.getenv("XDG_CONFIG_HOME")) |ch|
-        try allocator.dupe(u8, ch)
-    else
+    const config_home = getEnvOwned(allocator, "XDG_CONFIG_HOME") orelse
         try allocator.dupe(u8, appdata);
+    errdefer allocator.free(config_home);
 
-    const data_home = if (std.posix.getenv("XDG_DATA_HOME")) |dh|
-        try allocator.dupe(u8, dh)
-    else
+    const data_home = getEnvOwned(allocator, "XDG_DATA_HOME") orelse
         try allocator.dupe(u8, localappdata);
+    errdefer allocator.free(data_home);
 
-    const cache_home = if (std.posix.getenv("XDG_CACHE_HOME")) |ch|
-        try allocator.dupe(u8, ch)
-    else
+    const cache_home = getEnvOwned(allocator, "XDG_CACHE_HOME") orelse
         try std.fmt.allocPrint(allocator, "{s}\\cache", .{localappdata});
+    errdefer allocator.free(cache_home);
 
-    const state_home = if (std.posix.getenv("XDG_STATE_HOME")) |sh|
-        try allocator.dupe(u8, sh)
-    else
+    const state_home = getEnvOwned(allocator, "XDG_STATE_HOME") orelse
         try allocator.dupe(u8, localappdata);
-
-    const runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR");
-
-    // System config/data directories on Windows
-    const programdata = std.posix.getenv("PROGRAMDATA") orelse "C:\\ProgramData";
-    _ = programdata;
+    errdefer allocator.free(state_home);
 
     return XdgPaths{
         .config_home = config_home,
         .data_home = data_home,
         .cache_home = cache_home,
         .state_home = state_home,
-        .runtime_dir = runtime_dir,
+        .runtime_dir = null, // Windows does not have XDG_RUNTIME_DIR
         .config_dirs = &.{}, // Windows doesn't have standard system config dirs
         .data_dirs = &.{}, // Windows doesn't have standard system data dirs
         .allocator = allocator,
@@ -219,6 +225,20 @@ pub fn getConfigDir(allocator: std.mem.Allocator, app_name: []const u8) ![]const
 
 /// Get the configuration directory for a specific platform
 pub fn getConfigDirForPlatform(allocator: std.mem.Allocator, app_name: []const u8, platform: Platform) ![]const u8 {
+    if (comptime builtin.os.tag == .windows) {
+        // On Windows, std.posix.getenv is unavailable; use getEnvOwned throughout.
+        if (getEnvOwned(allocator, "XDG_CONFIG_HOME")) |ch| {
+            defer allocator.free(ch);
+            return try std.fmt.allocPrint(allocator, "{s}\\{s}", .{ ch, app_name });
+        }
+        const appdata = getEnvOwned(allocator, "APPDATA") orelse
+            getEnvOwned(allocator, "USERPROFILE") orelse
+            try allocator.dupe(u8, "C:\\Users\\Default");
+        defer allocator.free(appdata);
+        return try std.fmt.allocPrint(allocator, "{s}\\{s}", .{ appdata, app_name });
+    }
+
+    // Non-Windows: std.posix.getenv is available.
     // Always respect XDG_CONFIG_HOME if set
     if (std.posix.getenv("XDG_CONFIG_HOME")) |ch| {
         return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ ch, app_name });
@@ -234,6 +254,7 @@ pub fn getConfigDirForPlatform(allocator: std.mem.Allocator, app_name: []const u
             return try std.fmt.allocPrint(allocator, "{s}/Library/Preferences/{s}", .{ home, app_name });
         },
         .windows => {
+            // Cross-platform testing: simulate Windows paths on non-Windows
             const appdata = std.posix.getenv("APPDATA") orelse
                 std.posix.getenv("USERPROFILE") orelse "C:\\Users\\Default";
             return try std.fmt.allocPrint(allocator, "{s}\\{s}", .{ appdata, app_name });
@@ -248,6 +269,20 @@ pub fn getDataDir(allocator: std.mem.Allocator, app_name: []const u8) ![]const u
 
 /// Get the data directory for a specific platform
 pub fn getDataDirForPlatform(allocator: std.mem.Allocator, app_name: []const u8, platform: Platform) ![]const u8 {
+    if (comptime builtin.os.tag == .windows) {
+        if (getEnvOwned(allocator, "XDG_DATA_HOME")) |dh| {
+            defer allocator.free(dh);
+            return try std.fmt.allocPrint(allocator, "{s}\\{s}", .{ dh, app_name });
+        }
+        const localappdata = getEnvOwned(allocator, "LOCALAPPDATA") orelse
+            getEnvOwned(allocator, "APPDATA") orelse
+            getEnvOwned(allocator, "USERPROFILE") orelse
+            try allocator.dupe(u8, "C:\\Users\\Default");
+        defer allocator.free(localappdata);
+        return try std.fmt.allocPrint(allocator, "{s}\\{s}", .{ localappdata, app_name });
+    }
+
+    // Non-Windows: std.posix.getenv is available.
     // Always respect XDG_DATA_HOME if set
     if (std.posix.getenv("XDG_DATA_HOME")) |dh| {
         return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dh, app_name });
@@ -278,6 +313,20 @@ pub fn getCacheDir(allocator: std.mem.Allocator, app_name: []const u8) ![]const 
 
 /// Get the cache directory for a specific platform
 pub fn getCacheDirForPlatform(allocator: std.mem.Allocator, app_name: []const u8, platform: Platform) ![]const u8 {
+    if (comptime builtin.os.tag == .windows) {
+        if (getEnvOwned(allocator, "XDG_CACHE_HOME")) |ch| {
+            defer allocator.free(ch);
+            return try std.fmt.allocPrint(allocator, "{s}\\{s}", .{ ch, app_name });
+        }
+        const localappdata = getEnvOwned(allocator, "LOCALAPPDATA") orelse
+            getEnvOwned(allocator, "APPDATA") orelse
+            getEnvOwned(allocator, "USERPROFILE") orelse
+            try allocator.dupe(u8, "C:\\Users\\Default");
+        defer allocator.free(localappdata);
+        return try std.fmt.allocPrint(allocator, "{s}\\cache\\{s}", .{ localappdata, app_name });
+    }
+
+    // Non-Windows: std.posix.getenv is available.
     // Always respect XDG_CACHE_HOME if set
     if (std.posix.getenv("XDG_CACHE_HOME")) |ch| {
         return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ ch, app_name });
@@ -308,6 +357,13 @@ pub fn getSystemConfigDir(app_name: []const u8, allocator: std.mem.Allocator) ![
 
 /// Get the system configuration directory for a specific platform
 pub fn getSystemConfigDirForPlatform(app_name: []const u8, allocator: std.mem.Allocator, platform: Platform) ![]const u8 {
+    if (comptime builtin.os.tag == .windows) {
+        const programdata = getEnvOwned(allocator, "PROGRAMDATA") orelse
+            try allocator.dupe(u8, "C:\\ProgramData");
+        defer allocator.free(programdata);
+        return try std.fmt.allocPrint(allocator, "{s}\\{s}", .{ programdata, app_name });
+    }
+
     return switch (platform) {
         .linux, .other => try std.fmt.allocPrint(allocator, "/etc/{s}", .{app_name}),
         .macos => try std.fmt.allocPrint(allocator, "/Library/Preferences/{s}", .{app_name}),
@@ -331,12 +387,24 @@ pub fn getConfigFilePaths(
     try paths.append(cwd_config);
 
     // User-level
-    const user_config = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{
-        std.posix.getenv("XDG_CONFIG_HOME") orelse "~/.config",
-        app_name,
-        filename,
-    });
-    try paths.append(user_config);
+    if (comptime builtin.os.tag == .windows) {
+        const xdg_home = getEnvOwned(allocator, "XDG_CONFIG_HOME") orelse
+            try allocator.dupe(u8, "~/.config");
+        defer allocator.free(xdg_home);
+        const user_config = try std.fmt.allocPrint(allocator, "{s}\\{s}\\{s}", .{
+            xdg_home,
+            app_name,
+            filename,
+        });
+        try paths.append(user_config);
+    } else {
+        const user_config = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{
+            std.posix.getenv("XDG_CONFIG_HOME") orelse "~/.config",
+            app_name,
+            filename,
+        });
+        try paths.append(user_config);
+    }
 
     // System-level
     const system_config = try std.fmt.allocPrint(allocator, "/etc/{s}/{s}", .{ app_name, filename });
