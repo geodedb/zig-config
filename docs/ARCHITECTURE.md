@@ -1,162 +1,250 @@
 # Architecture
 
-This document describes the architecture of the zigconfig library.
+This document describes the architecture of the zigconfig library (Zig 0.15.2).
 
 ## Module Structure
 
 ```
 src/
-├── config.zig      # Main entry point and unified API
-├── loader.zig      # Configuration loading with precedence
-├── provenance.zig  # Value source tracking
-├── xdg.zig         # XDG Base Directory support
-├── dotenv.zig      # .env file parsing
-├── secret.zig      # Secure secret handling
-└── validate.zig    # Validation utilities
+├── config.zig             # Main entry point and unified API (Value, Config builder, safeWriteConfig)
+├── loader.zig             # Typed config loader with comptime struct reflection (Loader(T))
+├── provenance.zig         # Value source tracking with JSON escaping
+├── xdg.zig                # XDG Base Directory support (Linux, macOS, Windows)
+├── environ.zig            # Cross-platform env var access (getenv, getEnvOwned)
+├── dotenv.zig             # .env file parsing (parseLine, parseContent, load)
+├── secret.zig             # Secure secret handling (file/stdin, secureZero, O_NOFOLLOW)
+├── encrypted_secrets.zig  # Encrypted secret providers (Vault, 1Password CLI, SensitiveString)
+├── flags.zig              # Command-line flag parsing (long, short, boolean)
+├── merge.zig              # Configuration merging (mergeMaps, capacity hints)
+├── diff.zig               # Configuration diff utilities (diffMaps, case-insensitive)
+├── expand.zig             # Environment variable expansion (${VAR}, ${VAR:-default})
+├── validation.zig         # Validation utilities (pattern matching, ReDoS hardening)
+├── serialize.zig          # Configuration serialization (createFileNoFollow, 0o600)
+├── watch.zig              # Hot-reload / file watching (polling-based, TOCTOU-documented)
+├── remote.zig             # Remote config clients (etcd v3, Consul KV, SSRF protection)
+├── async.zig              # Async/parallel loading (AsyncLoader, loadParallel)
+├── parallel.zig           # Thread pool-based parallel file I/O (spice scheduler)
+├── ini.zig                # INI file format parsing
+├── properties.zig         # Java Properties format parsing
+├── limits.zig             # Centralized size limits (CWE-400 prevention)
+└── integration_test.zig   # Integration test suite
 ```
 
 ## Core Concepts
 
 ### Unified Value API (`config.zig`)
 
-The `Value` type provides a format-agnostic interface for working with configuration data:
+The `Value` type provides a format-agnostic interface for working with configuration data.
+All internal modules are re-exported through `config.zig` as the single public entry point.
 
-```zig
-pub const Value = struct {
-    pub fn getString(self: Self, path: []const u8) ?[]const u8;
-    pub fn getInt(self: Self, path: []const u8) ?i64;
-    pub fn getBool(self: Self, path: []const u8) ?bool;
-    pub fn getPath(self: Self, path: []const u8) ?Self;
-    // ...
-};
-```
+Supported formats (6):
+- **YAML** -- External `yaml` library
+- **JSON** -- External `json` library (std.json used internally for remote responses)
+- **TOML** -- External `toml` library
+- **INI** -- `ini.zig`
+- **Properties** -- `properties.zig` (Java .properties)
+- **dotenv** -- `dotenv.zig` (.env files)
 
-Supported formats:
-- **YAML** - Using external yaml library
-- **JSON** - Using std.json for parsing
-- **TOML** - Using external toml library
+Format is auto-detected from file extension, or from content when the extension is unknown.
 
 ### Typed Loader (`loader.zig`)
 
-The `Loader(T)` generic provides type-safe configuration loading:
+The `Loader(T)` generic uses comptime struct reflection to populate an arbitrary user-defined
+struct from configuration sources. Key design decisions:
 
-```zig
-pub fn Loader(comptime T: type) type {
-    return struct {
-        pub fn init(allocator: Allocator) Self;
-        pub fn load(self: *Self, options: LoadOptions) LoadError!T;
-        pub fn getTracker(self: *const Self) *const ProvenanceTracker;
-    };
-}
-```
+- **Comptime field iteration** -- No runtime reflection overhead.
+- **Arena allocator** -- All loaded strings share the arena lifetime; one `deinit` frees everything.
+- **Single env snapshot** -- `getEnvMap` is called once and reused across all fields.
+- **Stack buffers** -- `bufPrint` with stack-allocated buffers avoids heap allocation for key normalization.
+- **Case-insensitive keys** -- `normalizeKey` lowercases keys using an arena-backed buffer.
 
 ### Configuration Precedence
 
 Values are loaded in this order (later sources override earlier):
 
-1. **default** - Struct field default values
-2. **system** - `/etc/APP/config.toml`
-3. **user** - `~/.config/APP/config.toml`
-4. **project** - `./config.toml`
-5. **env** - Environment variables (`PREFIX_FIELD`)
-6. **flag** - Command-line overrides (highest priority)
+1. **default** -- Struct field default values
+2. **system** -- `/etc/APP/config.EXT`
+3. **user** -- `~/.config/APP/config.EXT` (XDG)
+4. **project** -- `./config.EXT`
+5. **env** -- Environment variables (`PREFIX_FIELD`)
+6. **flag** -- Command-line overrides (highest priority)
 
-See: [#8 - Add command-line flag parsing](https://gitlab.com/devnw/zig/config/-/issues/8)
+The provenance module additionally tracks `override` (explicit `Set()`) and `runtime_default`
+(`SetDefault()`) sources for Viper-compatible precedence.
 
 ### Provenance Tracking (`provenance.zig`)
 
-Every configuration value can be traced to its source:
+Every configuration value is annotated with its `Source` (flag, env, project, user, system,
+default, override, runtime_default) and an optional source path. The `ProvenanceTracker`
+records all tracked values and supports JSON-serialized output with proper escaping.
 
-```zig
-pub const Source = enum {
-    flag, env, project, user, system, default
-};
+### XDG / Platform Support (`xdg.zig`)
 
-pub const TrackedValue = struct {
-    key: []const u8,
-    value: []const u8,
-    source: Source,
-    source_path: ?[]const u8,
-};
-```
+Cross-platform configuration directory resolution:
 
-### XDG Support (`xdg.zig`)
+| Platform | Config | Data | Cache |
+|----------|--------|------|-------|
+| Linux/BSD | `~/.config` | `~/.local/share` | `~/.cache` |
+| macOS | `~/Library/Preferences` | `~/Library/Application Support` | `~/Library/Caches` |
+| Windows | `%APPDATA%` | `%LOCALAPPDATA%` | `%LOCALAPPDATA%` |
 
-Implements XDG Base Directory Specification:
+Environment variables (`XDG_CONFIG_HOME`, etc.) override defaults on all platforms.
+Uses `environ.zig` for cross-platform env var access.
 
-| Directory | Default | Environment Variable |
-|-----------|---------|---------------------|
-| Config | `~/.config` | `XDG_CONFIG_HOME` |
-| Data | `~/.local/share` | `XDG_DATA_HOME` |
-| Cache | `~/.cache` | `XDG_CACHE_HOME` |
-| State | `~/.local/state` | `XDG_STATE_HOME` |
+### Secret Handling (`secret.zig`, `encrypted_secrets.zig`)
 
-See: [#12 - Add Windows and macOS XDG equivalent paths](https://gitlab.com/devnw/zig/config/-/issues/12)
+Two-tier secret architecture:
 
-### Secret Handling (`secret.zig`)
+**`secret.zig`** -- Local secret operations:
+- Read secrets only from files or stdin (never flags or env)
+- `secureZero` for memory sanitization
+- `isPathSafe` / `isPathSafeStrict` for path traversal prevention
+- `openFileReadNoFollow` with `O_NOFOLLOW` to block symlink attacks (CWE-59)
+- `createFileNoFollow` with 0o600 permissions for safe writes
 
-Secure handling of sensitive values:
+**`encrypted_secrets.zig`** -- External secret providers:
+- HashiCorp Vault (PATH allowlist via `resolveVaultPath`)
+- 1Password CLI (binary allowlist via `resolveOpPath`)
+- `SensitiveString` wrapper with `[REDACTED]` formatting (CWE-532)
+- Timeout watchdog and `handleTermination` for tagged-union child processes
+- Minimal env maps passed to child processes
 
-- **Never** accept secrets from flags or environment variables
-- Read secrets only from files or stdin
-- Secure memory zeroing when done
-- Redaction for logging
+### Remote Configuration (`remote.zig`)
 
-See: [#18 - Add encrypted secrets support](https://gitlab.com/devnw/zig/config/-/issues/18)
+Clients for remote configuration stores:
 
-### Validation (`validate.zig`)
+- **etcd v3** -- gRPC-gateway REST API, `std.json.parseFromSliceLeaky` for typed parsing
+- **Consul KV** -- Standard KV API
 
-Built-in validators:
+Security hardening:
+- SSRF protection: `validateUrl`, `isPrivateIPv4Bytes`, CGNAT range blocking, percent-decode normalization
+- DNS rebinding mitigation
+- Redirect blocking
+- `isValidHeaderValue` for CRLF injection prevention
+- `ResponseTooLarge` checks against `MAX_REMOTE_RESPONSE_SIZE`
+- `SensitiveString` for credentials
 
-| Function | Description |
-|----------|-------------|
-| `required()` | Value must be non-empty |
-| `minLength()` | Minimum string length |
-| `maxLength()` | Maximum string length |
-| `intRange()` | Integer within range |
-| `oneOf()` | Value in allowed set |
-| `port()` | Valid port number |
-| `hostname()` | Valid hostname |
-| `url()` | Valid HTTP(S) URL |
-| `email()` | Basic email format |
-| `pathExists()` | File/directory exists |
+### Validation (`validation.zig`)
 
-See: [#10 - Add regex pattern validation](https://gitlab.com/devnw/zig/config/-/issues/10)
+Unified validation module with:
+- Pattern matching via decomposed `matchPatternImpl`
+- Escape sequence handling
+- ReDoS hardening for user-supplied patterns
+- Built-in validators: required, length, range, oneOf, port, hostname, URL, email, pathExists
+
+### Merge and Diff (`merge.zig`, `diff.zig`)
+
+- **merge** -- `mergeMaps` with `getPtr` for in-place updates, capacity hints, configurable strategy (override, keep_first, concat_arrays, unique_arrays)
+- **diff** -- `diffMaps` with O(n) case-insensitive comparison via lowered-key HashMap
+
+### Environment Variable Expansion (`expand.zig`)
+
+Expands variable references in configuration values:
+- `${VAR}` and `$VAR` syntax
+- `${VAR:-default}` for fallback values
+- `${VAR:+alternate}` for conditional substitution
+
+### Serialization (`serialize.zig`)
+
+Writes configuration structs to JSON, YAML, TOML, or env format. Uses `createFileNoFollow`
+and 0o600 permissions. Supports `atomicWriteFile` (write-to-temp then rename) for safe updates.
+
+### File Watching (`watch.zig`)
+
+Polling-based hot-reload with documented TOCTOU limitations (CWE-367). Callers should
+validate configuration in the reload callback, not rely on change detection alone.
+
+### Async and Parallel Loading (`async.zig`, `parallel.zig`)
+
+- **async.zig** -- `AsyncLoader` for loading multiple config files concurrently using Zig threads. `MAX_PARALLEL_THREADS=16`.
+- **parallel.zig** -- Thread pool via the `spice` dependency for parallel file I/O and serialization. Falls back to sequential below threshold (2 files).
+
+### Centralized Limits (`limits.zig`)
+
+All size limits in one place to prevent resource exhaustion (CWE-400):
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `MAX_CONFIG_FILE_SIZE` | 1 MB | Configuration files |
+| `MAX_REMOTE_RESPONSE_SIZE` | 1 MB | Network responses |
+| `MAX_SECRET_FILE_SIZE` | 64 KB | Secret files |
+| `MAX_CLI_OUTPUT_SIZE` | 1 MB | CLI tool output |
+| `MAX_DOTENV_FILE_SIZE` | 1 MB | .env files |
 
 ## Data Flow
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│ Config File │────▶│   Parser    │────▶│    Value    │
-│ (YAML/JSON/ │     │  (format-   │     │  (unified   │
-│   TOML)     │     │  specific)  │     │   API)      │
-└─────────────┘     └─────────────┘     └─────────────┘
-                                               │
-                                               ▼
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Typed     │◀────│   Loader    │◀────│ Precedence  │
-│   Config    │     │  (generic)  │     │   Merge     │
-│   Struct    │     │             │     │             │
-└─────────────┘     └─────────────┘     └─────────────┘
-                           │
-                           ▼
-                    ┌─────────────┐
-                    │ Provenance  │
-                    │  Tracker    │
-                    └─────────────┘
+                        ┌──────────────┐
+                        │  Config File │
+                        │ (YAML/JSON/  │
+                        │ TOML/INI/    │
+                        │ Properties/  │
+                        │ dotenv)      │
+                        └──────┬───────┘
+                               │
+              ┌────────────────┼────────────────┐
+              ▼                ▼                 ▼
+       ┌─────────────┐ ┌─────────────┐  ┌──────────────┐
+       │  Format     │ │ Remote      │  │ Encrypted    │
+       │  Parser     │ │ (etcd/      │  │ Secrets      │
+       │             │ │  Consul)    │  │ (Vault/1P)   │
+       └──────┬──────┘ └──────┬──────┘  └──────┬───────┘
+              │               │                 │
+              └───────────────┼─────────────────┘
+                              ▼
+                       ┌─────────────┐
+                       │   Loader    │    Precedence merge:
+                       │  (comptime  │    default → system → user
+                       │  reflection)│    → project → env → flag
+                       └──────┬──────┘
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+       ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+       │   Typed     │ │ Provenance  │ │ Validation  │
+       │   Config    │ │  Tracker    │ │             │
+       │   Struct    │ │             │ │             │
+       └─────────────┘ └─────────────┘ └─────────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+       ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+       │ Serialize   │ │   Watch     │ │    Diff     │
+       │ (write out) │ │ (hot-reload)│ │ (compare)   │
+       └─────────────┘ └─────────────┘ └─────────────┘
 ```
 
 ## Dependencies
 
-External Zig libraries:
-- `yaml` - YAML parsing
-- `toml` - TOML parsing
-- `json` - JSON Schema (future validation)
+External Zig libraries (declared in `build.zig.zon`):
 
-## Future Enhancements
+| Library | Version | Purpose |
+|---------|---------|---------|
+| `yaml` | 0.1.1 | YAML parsing |
+| `toml` | 0.1.0 | TOML parsing |
+| `json` | 0.1.0 | JSON parsing and schema |
+| `spice` | main | Thread pool for parallel operations |
 
-- [#5 - JSON Schema validation](https://gitlab.com/devnw/zig/config/-/issues/5)
-- [#15 - Hot-reload support](https://gitlab.com/devnw/zig/config/-/issues/15)
-- [#16 - Async loading](https://gitlab.com/devnw/zig/config/-/issues/16)
-- [#17 - Configuration merging utilities](https://gitlab.com/devnw/zig/config/-/issues/17)
-- [#19 - Configuration serialization](https://gitlab.com/devnw/zig/config/-/issues/19)
+Standard library usage: `std.json` for remote API response parsing (etcd/Consul),
+`std.http` for remote clients, `std.Thread` for async loading.
+
+## Key Architectural Patterns
+
+- **Comptime struct reflection** -- Zero-overhead typed configuration loading.
+- **Arena allocator** -- Single lifetime for all config values; one free releases everything.
+- **Provenance tracking** -- Every value carries its source for debugging and auditing.
+- **SSRF protection** -- All remote endpoints validated against private IP ranges, CGNAT, percent-encoding tricks, and DNS rebinding.
+- **Centralized limits** -- `limits.zig` prevents resource exhaustion across all I/O paths.
+- **Cross-platform abstraction** -- `environ.zig` and `xdg.zig` handle POSIX/Windows differences.
+- **Symlink attack prevention** -- `O_NOFOLLOW` on reads, `createFileNoFollow` on writes.
+- **Sensitive data protection** -- `SensitiveString` redacts credentials in logs and debug output.
+
+## Security Considerations
+
+The library addresses the following CWE categories:
+- **CWE-59** -- Symlink following (`O_NOFOLLOW`, `isSymlink` checks)
+- **CWE-214** -- Env-based secret exposure (env:// provider disabled by default)
+- **CWE-367** -- TOCTOU in file watching (documented, mitigated by validation-on-reload)
+- **CWE-400** -- Resource exhaustion (centralized size limits)
+- **CWE-532** -- Credential logging (`SensitiveString` with `[REDACTED]`)
+- **CWE-918** -- SSRF (IP validation, redirect blocking, DNS rebinding mitigation)

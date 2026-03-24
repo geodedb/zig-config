@@ -1,33 +1,35 @@
 # Viper Feature Comparison
 
-This document compares zigconfig features with [Viper](https://github.com/spf13/viper), the popular Go configuration library, to identify feature parity and gaps.
+This document compares zigconfig features with [Viper](https://github.com/spf13/viper), the popular Go configuration library, to identify feature parity and remaining gaps.
 
 ## Feature Matrix
 
-| Feature | Viper | zigconfig | Status | Issue |
+| Feature | Viper | zigconfig | Status | Notes |
 |---------|-------|-----------|--------|-------|
 | **Format Support** |
 | JSON | Yes | Yes | Complete | - |
 | YAML | Yes | Yes | Complete | - |
 | TOML | Yes | Yes | Complete | - |
-| INI | Yes | No | Planned | [#24](https://gitlab.com/devnw/zig/config/-/issues/24) |
-| Java Properties | Yes | No | Planned | [#25](https://gitlab.com/devnw/zig/config/-/issues/25) |
-| Envfile | Yes | Yes | Complete | - |
+| INI | Yes | Yes | Complete | `src/ini.zig` |
+| Java Properties | Yes | Yes | Complete | `src/properties.zig` |
+| Envfile | Yes | Yes | Complete | `src/dotenv.zig` |
+| HCL | Yes | No | Planned | [#85](https://gitlab.com/devnw/zig/config/-/issues/85) |
+| HOCON | No | No | Planned | [#86](https://gitlab.com/devnw/zig/config/-/issues/86) |
 | **Configuration Sources** |
 | Default values | Yes | Yes | Complete | - |
 | Config files | Yes | Yes | Complete | - |
 | Environment variables | Yes | Yes | Complete | - |
-| Command-line flags | Yes | No | Planned | [#8](https://gitlab.com/devnw/zig/config/-/issues/8) |
-| Remote config (etcd, Consul) | Yes | No | Planned | [#27](https://gitlab.com/devnw/zig/config/-/issues/27) |
+| Command-line flags | Yes | Yes | Complete | `src/flags.zig` |
+| Remote config (etcd, Consul) | Yes | Yes | Complete | `src/remote.zig` with SSRF protection |
 | **Value Management** |
 | Set() explicit overrides | Yes | Yes | Complete | [#26](https://gitlab.com/devnw/zig/config/-/issues/26) |
 | SetDefault() runtime defaults | Yes | Yes | Complete | [#41](https://gitlab.com/devnw/zig/config/-/issues/41) |
 | Key aliases | Yes | Yes | Complete | [#33](https://gitlab.com/devnw/zig/config/-/issues/33) |
-| Case-insensitive keys | Yes | Yes | Complete | [#34](https://gitlab.com/devnw/zig/config/-/issues/34) |
+| Case-insensitive keys | Yes | Yes | Complete | `normalizeKey` with arena-based lowercase |
 | IsSet() check | Yes | Yes | Complete | [#42](https://gitlab.com/devnw/zig/config/-/issues/42) |
 | **Path Access** |
 | Dot notation | Yes | Yes | Complete | - |
-| Array indexing | Yes | No | Planned | [#35](https://gitlab.com/devnw/zig/config/-/issues/35) |
+| Array indexing | Yes | Yes | Complete | e.g. `servers.0.host` via `applyJsonValue` |
 | Sub() extraction | Yes | No | Planned | [#36](https://gitlab.com/devnw/zig/config/-/issues/36) |
 | Custom key delimiter | Yes | No | Planned | [#40](https://gitlab.com/devnw/zig/config/-/issues/40) |
 | **Environment Variables** |
@@ -35,19 +37,20 @@ This document compares zigconfig features with [Viper](https://github.com/spf13/
 | AutomaticEnv() | Yes | Yes | Complete | [#31](https://gitlab.com/devnw/zig/config/-/issues/31) |
 | SetEnvPrefix() | Yes | Yes | Complete | - |
 | SetEnvKeyReplacer() | Yes | Yes | Complete | [#32](https://gitlab.com/devnw/zig/config/-/issues/32) |
+| Env var expansion | No | Yes | zigconfig advantage | `src/expand.zig` -- `${VAR:-default}` syntax |
 | **File Operations** |
 | ReadInConfig() | Yes | Yes | Complete | - |
-| WriteConfig() | Yes | No | Planned | [#19](https://gitlab.com/devnw/zig/config/-/issues/19) |
-| SafeWriteConfig() | Yes | No | Planned | [#29](https://gitlab.com/devnw/zig/config/-/issues/29) |
-| WatchConfig() | Yes | No | Planned | [#15](https://gitlab.com/devnw/zig/config/-/issues/15) |
-| Multiple search paths | Yes | No | Planned | [#28](https://gitlab.com/devnw/zig/config/-/issues/28) |
+| WriteConfig() | Yes | Yes | Complete | `writeConfigToFile` via `src/serialize.zig` |
+| SafeWriteConfig() | Yes | Yes | Complete | `safeWriteConfig`, `safeWriteConfigWithBackup` |
+| WatchConfig() / hot-reload | Yes | Yes | Complete | `src/watch.zig` -- polling-based, cross-platform |
+| Multiple search paths | Yes | Partial | Partial | `addConfigPath` in loader; [#28](https://gitlab.com/devnw/zig/config/-/issues/28) |
 | Files without extension | Yes | No | Planned | [#44](https://gitlab.com/devnw/zig/config/-/issues/44) |
 | **Data Export** |
 | AllSettings() | Yes | No | Planned | [#37](https://gitlab.com/devnw/zig/config/-/issues/37) |
 | AllKeys() | Yes | No | Planned | [#43](https://gitlab.com/devnw/zig/config/-/issues/43) |
 | **Input Sources** |
 | Read from io.Reader | Yes | No | Planned | [#38](https://gitlab.com/devnw/zig/config/-/issues/38) |
-| Custom format decoders | Yes | No | Planned | [#39](https://gitlab.com/devnw/zig/config/-/issues/39) |
+| Custom format decoders | Yes | Partial | Partial | Via `Format` enum; [#39](https://gitlab.com/devnw/zig/config/-/issues/39) |
 | **Type Support** |
 | Unmarshal to struct | Yes | Yes | Complete | - |
 | Type-specific getters | Yes | Yes | Complete | - |
@@ -55,10 +58,21 @@ This document compares zigconfig features with [Viper](https://github.com/spf13/
 | Provenance tracking | No | Yes | zigconfig advantage | - |
 | Secure secrets | No | Yes | zigconfig advantage | - |
 | XDG compliance | No | Yes | zigconfig advantage | - |
+| Encrypted secrets (Vault, 1Password) | No | Yes | zigconfig advantage | `src/encrypted_secrets.zig` |
+| Config diff / comparison | No | Yes | zigconfig advantage | `src/diff.zig` |
+| Config merging | No | Yes | zigconfig advantage | `src/merge.zig` |
+| Serialization | No | Yes | zigconfig advantage | `src/serialize.zig` |
+| Async loading | No | Yes | zigconfig advantage | `src/async.zig` |
+| Parallel loading | No | Yes | zigconfig advantage | `src/parallel.zig` |
+| SSRF protection | No | Yes | zigconfig advantage | Private-IP blocking, DNS rebinding mitigation |
+| Path traversal prevention | No | Yes | zigconfig advantage | `isPathSafe`, `openFileReadNoFollow` |
+| Centralized size limits | No | Yes | zigconfig advantage | `src/limits.zig` (CWE-400) |
+| SensitiveString redaction | No | Yes | zigconfig advantage | Credential wrapper in `encrypted_secrets.zig` |
+| Binary allowlists for CLI tools | No | Yes | zigconfig advantage | CWE-78 / CWE-426 prevention |
 
 ## zigconfig Advantages
 
-Features that zigconfig provides that Viper doesn't:
+Features that zigconfig provides that Viper does not.
 
 ### Provenance Tracking
 ```zig
@@ -76,49 +90,112 @@ const password = try secret.readFromFile("/run/secrets/password", allocator);
 defer secret.secureZero(password);
 ```
 
+### Encrypted Secrets (Vault, 1Password CLI)
+```zig
+const sm = encrypted_secrets.SecretManager.init(allocator);
+
+// HashiCorp Vault
+const db_pass = try sm.resolve("vault://secret/data/db#password");
+
+// 1Password CLI
+const api_key = try sm.resolve("op://vault/item/field");
+```
+
 ### XDG Base Directory Support
 ```zig
 const config_dir = try xdg.getConfigDir(allocator, "myapp");
 // ~/.config/myapp or $XDG_CONFIG_HOME/myapp
 ```
 
-## Viper Features to Implement
+### Config Diff and Comparison
+```zig
+const changes = try diff.compare(allocator, old_config, new_config);
+defer allocator.free(changes);
 
-### Recently Completed
+for (changes) |change| {
+    std.debug.print("{s}: {s} -> {s}\n", .{change.key, change.old_value, change.new_value});
+}
+```
+
+### Config Merging
+```zig
+const merged = try merge.mergeConfigs(allocator, base, overlay, .{
+    .strategy = .override,
+    .deep_merge = true,
+});
+```
+
+### Environment Variable Expansion
+```zig
+// Supports ${VAR}, $VAR, ${VAR:-default}, ${VAR:+alternate}
+const expanded = try expand.expand("${HOME}/config", allocator, .{});
+```
+
+### SSRF Protection on Remote Endpoints
+```zig
+// Private IP blocking enabled by default
+var etcd = try remote.Etcd.init(allocator, .{
+    .endpoints = &.{"https://etcd.example.com:2379"},
+    // .security.block_private_ips = true (default)
+});
+
+// For local development only
+var local = try remote.Etcd.init(allocator, .{
+    .endpoints = &.{"http://localhost:2379"},
+    .security = .{ .allow_insecure_http = true, .block_private_ips = false },
+});
+```
+
+### Path Traversal Prevention
+```zig
+// safeWriteConfig rejects paths containing ".." (CWE-22)
+// openFileReadNoFollow prevents symlink attacks (CWE-59)
+try config.safeWriteConfig(allocator, path, content, .{ .atomic = true });
+```
+
+### Centralized Size Limits
+```zig
+// Defined in src/limits.zig -- prevents resource exhaustion (CWE-400)
+// MAX_CONFIG_FILE_SIZE:   1 MB
+// MAX_REMOTE_RESPONSE_SIZE: 1 MB
+// MAX_SECRET_FILE_SIZE:   64 KB
+// MAX_CLI_OUTPUT_SIZE:    1 MB
+```
+
+### SensitiveString Credential Redaction
+```zig
+const token = SensitiveString.initOwned(allocator, raw_token);
+defer token.deinit();
+
+// Formatting automatically redacts: prints "[REDACTED]" instead of the value
+std.debug.print("token: {s}\n", .{token});
+```
+
+### Binary Allowlists for External CLI Tools
+```zig
+// 1Password and Vault CLI binary paths are validated against allowlists
+// to prevent PATH hijack attacks (CWE-78, CWE-426)
+```
+
+## Remaining Gaps
+
+### Planned Features
 
 | Feature | Issue | Description |
 |---------|-------|-------------|
-| Runtime Set() | [#26](https://gitlab.com/devnw/zig/config/-/issues/26) | Explicit value overrides |
-| SetDefault() | [#41](https://gitlab.com/devnw/zig/config/-/issues/41) | Runtime defaults |
-| BindEnv() | [#30](https://gitlab.com/devnw/zig/config/-/issues/30) | Explicit env binding |
-| AutomaticEnv() | [#31](https://gitlab.com/devnw/zig/config/-/issues/31) | Auto env discovery |
-| SetEnvKeyReplacer() | [#32](https://gitlab.com/devnw/zig/config/-/issues/32) | Env key transformation |
-| Key aliases | [#33](https://gitlab.com/devnw/zig/config/-/issues/33) | Multiple keys -> one value |
-| Case-insensitive | [#34](https://gitlab.com/devnw/zig/config/-/issues/34) | Key normalization |
-| IsSet() | [#42](https://gitlab.com/devnw/zig/config/-/issues/42) | Check explicit set |
-
-### High Priority (v0.2.0)
-
-| Feature | Issue | Description |
-|---------|-------|-------------|
-| Multiple paths | [#28](https://gitlab.com/devnw/zig/config/-/issues/28) | Search multiple directories |
-| Sub() | [#36](https://gitlab.com/devnw/zig/config/-/issues/36) | Config subset extraction |
-| AllSettings | [#37](https://gitlab.com/devnw/zig/config/-/issues/37) | Export all settings |
-| AllKeys | [#43](https://gitlab.com/devnw/zig/config/-/issues/43) | List all keys |
-| Array indexing | [#35](https://gitlab.com/devnw/zig/config/-/issues/35) | Path array access |
-| parseReader | [#38](https://gitlab.com/devnw/zig/config/-/issues/38) | Read from io.Reader |
-
-### Medium Priority (v0.3.0)
-
-| Feature | Issue | Description |
-|---------|-------|-------------|
-| Remote config | [#27](https://gitlab.com/devnw/zig/config/-/issues/27) | etcd, Consul, NATS |
-| INI format | [#24](https://gitlab.com/devnw/zig/config/-/issues/24) | INI file support |
-| Properties format | [#25](https://gitlab.com/devnw/zig/config/-/issues/25) | Java properties |
-| Safe write | [#29](https://gitlab.com/devnw/zig/config/-/issues/29) | Prevent overwrite |
-| Custom formats | [#39](https://gitlab.com/devnw/zig/config/-/issues/39) | Extensible decoders |
-| Key delimiter | [#40](https://gitlab.com/devnw/zig/config/-/issues/40) | Custom delimiter |
-| Extensionless files | [#44](https://gitlab.com/devnw/zig/config/-/issues/44) | Files without extension |
+| HCL format | [#85](https://gitlab.com/devnw/zig/config/-/issues/85) | HashiCorp Configuration Language |
+| HOCON format | [#86](https://gitlab.com/devnw/zig/config/-/issues/86) | Human-Optimized Config Object Notation |
+| SOPS integration | [#87](https://gitlab.com/devnw/zig/config/-/issues/87) | Mozilla SOPS encrypted files |
+| age/GPG encryption | [#88](https://gitlab.com/devnw/zig/config/-/issues/88) | age/GPG encrypted config files |
+| JSON Schema validation | [#5](https://gitlab.com/devnw/zig/config/-/issues/5) | Schema-based config validation |
+| Sub() extraction | [#36](https://gitlab.com/devnw/zig/config/-/issues/36) | Config subset extraction |
+| AllSettings() | [#37](https://gitlab.com/devnw/zig/config/-/issues/37) | Export all settings as map |
+| AllKeys() | [#43](https://gitlab.com/devnw/zig/config/-/issues/43) | List all known keys |
+| parseReader() | [#38](https://gitlab.com/devnw/zig/config/-/issues/38) | Read from io.Reader |
+| Custom format decoders | [#39](https://gitlab.com/devnw/zig/config/-/issues/39) | Extensible format registry |
+| Custom key delimiter | [#40](https://gitlab.com/devnw/zig/config/-/issues/40) | Replace default "." delimiter |
+| Files without extension | [#44](https://gitlab.com/devnw/zig/config/-/issues/44) | Auto-detect format |
+| Multiple search paths | [#28](https://gitlab.com/devnw/zig/config/-/issues/28) | Full multi-path search (partial via `addConfigPath`) |
 
 ## API Comparison
 
@@ -165,7 +242,7 @@ viper.AutomaticEnv()
 viper.BindEnv("host", "SERVICE_HOST")
 ```
 
-**zigconfig (Zig) - Current:**
+**zigconfig (Zig):**
 ```zig
 const cfg = try loader.load(.{
     .app_name = "myapp",
@@ -173,17 +250,85 @@ const cfg = try loader.load(.{
 });
 ```
 
-**zigconfig (Zig) - Planned:**
+### Command-Line Flags
+
+**Viper (Go):**
+```go
+pflag.Int("port", 8080, "server port")
+viper.BindPFlags(pflag.CommandLine)
+```
+
+**zigconfig (Zig):**
 ```zig
-try loader.automaticEnv(.{ .prefix = "MYAPP" });
-try loader.bindEnv("host", "SERVICE_HOST");
+var parser = flags.FlagParser.init(allocator);
+try parser.addFlag(.{ .name = "port", .short = 'p', .description = "server port" });
+const values = try parser.parse(args);
+```
+
+### Remote Configuration
+
+**Viper (Go):**
+```go
+viper.AddRemoteProvider("etcd3", "https://etcd.example.com:2379", "/config/app")
+viper.ReadRemoteConfig()
+```
+
+**zigconfig (Zig):**
+```zig
+var etcd = try remote.Etcd.init(allocator, .{
+    .endpoints = &.{"https://etcd.example.com:2379"},
+});
+defer etcd.deinit();
+const value = try etcd.get("config/app/host");
+```
+
+### Writing Configuration
+
+**Viper (Go):**
+```go
+viper.SafeWriteConfig()
+```
+
+**zigconfig (Zig):**
+```zig
+// Safe write (refuses to overwrite existing files)
+try config.safeWriteConfig(allocator, "config.yaml", content, .{ .atomic = true });
+
+// Safe write with backup of existing file
+try config.safeWriteConfigWithBackup(allocator, "config.yaml", content, .{
+    .backup_extension = ".bak",
+});
+
+// Direct write via serialization
+try config.writeConfigToFile("config.json", data, .{ .format = .json_pretty });
+```
+
+### Watching Configuration
+
+**Viper (Go):**
+```go
+viper.WatchConfig()
+viper.OnConfigChange(func(e fsnotify.Event) {
+    fmt.Println("Config changed:", e.Name)
+})
+```
+
+**zigconfig (Zig):**
+```zig
+var watcher = watch.Watcher.init(allocator, .{
+    .poll_interval_ms = 1000,
+});
+defer watcher.deinit();
+
+try watcher.addPath("config.toml", onConfigChanged);
+try watcher.start();
 ```
 
 ## Contributing
 
-Help us reach Viper parity! See the issues linked above and [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
+Help us close the remaining gaps! See the issues linked above and [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
 
 Priority contributions:
-1. High priority issues for v0.2.0
-2. Tests for new features
+1. Planned features listed in [Remaining Gaps](#remaining-gaps)
+2. Tests for existing features
 3. Documentation updates
