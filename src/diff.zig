@@ -257,38 +257,47 @@ pub fn formatDiff(allocator: Allocator, result: DiffResult) ![]u8 {
             result.modified_count,
         });
 
-        // Group by change type
-        if (result.added_count > 0) {
+        // Single pass: collect formatted lines into per-type buffers
+        var added_buf: std.ArrayListUnmanaged(u8) = .{};
+        defer added_buf.deinit(allocator);
+        var removed_buf: std.ArrayListUnmanaged(u8) = .{};
+        defer removed_buf.deinit(allocator);
+        var modified_buf: std.ArrayListUnmanaged(u8) = .{};
+        defer modified_buf.deinit(allocator);
+
+        const added_writer = added_buf.writer(allocator);
+        const removed_writer = removed_buf.writer(allocator);
+        const modified_writer = modified_buf.writer(allocator);
+
+        for (result.changes) |change| {
+            switch (change.change_type) {
+                .added => try added_writer.print("  + {s} = {s}\n", .{ change.key, change.new_value orelse "" }),
+                .removed => try removed_writer.print("  - {s} = {s}\n", .{ change.key, change.old_value orelse "" }),
+                .modified => try modified_writer.print("  ~ {s}: {s} -> {s}\n", .{
+                    change.key,
+                    change.old_value orelse "",
+                    change.new_value orelse "",
+                }),
+                .unchanged => {},
+            }
+        }
+
+        // Write grouped sections in order
+        if (added_buf.items.len > 0) {
             try writer.print("Added:\n", .{});
-            for (result.changes) |change| {
-                if (change.change_type == .added) {
-                    try writer.print("  + {s} = {s}\n", .{ change.key, change.new_value orelse "" });
-                }
-            }
+            try writer.writeAll(added_buf.items);
             try writer.print("\n", .{});
         }
 
-        if (result.removed_count > 0) {
+        if (removed_buf.items.len > 0) {
             try writer.print("Removed:\n", .{});
-            for (result.changes) |change| {
-                if (change.change_type == .removed) {
-                    try writer.print("  - {s} = {s}\n", .{ change.key, change.old_value orelse "" });
-                }
-            }
+            try writer.writeAll(removed_buf.items);
             try writer.print("\n", .{});
         }
 
-        if (result.modified_count > 0) {
+        if (modified_buf.items.len > 0) {
             try writer.print("Modified:\n", .{});
-            for (result.changes) |change| {
-                if (change.change_type == .modified) {
-                    try writer.print("  ~ {s}: {s} -> {s}\n", .{
-                        change.key,
-                        change.old_value orelse "",
-                        change.new_value orelse "",
-                    });
-                }
-            }
+            try writer.writeAll(modified_buf.items);
         }
     }
 

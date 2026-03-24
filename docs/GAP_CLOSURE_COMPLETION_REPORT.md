@@ -3,15 +3,15 @@
 **Project:** devnw/zig/config
 **Date:** 2026-03-24
 **Review commit:** fe9d0f6 (HEAD of main) + working tree
-**Waves completed:** 7 (all)
+**Waves completed:** 8 (all)
 **Platform:** GitLab (issues not updated in this pass -- skip-issues mode)
 
 ## Summary
 
-- **Items closed:** 73 (14 security + 34 quality + 25 performance)
+- **Items closed:** 85 (14 security + 34 quality + 37 performance)
 - **Items Won't Do:** 6 (4 quality + 2 performance)
 - **Items blocked:** 0
-- **Remaining open:** 13 (all deferred PERF backlog: 1 P2, 3 P3, 9 Info)
+- **Remaining open:** 1 (PERF-44: benchmark suite, P2)
 - **Tests:** PASS (758/758, 134 new tests added)
 - **Build:** PASS (5/5 build steps)
 - **Format:** CLEAN (`zig fmt --check src/` exit 0)
@@ -25,16 +25,14 @@
 |------|--------|---------|----------|----------------|-------|
 | GAP_ANALYSIS.md (Security) | 14 | 0 | 0 | 0 | 14 |
 | QUALITY_GAP_ANALYSIS.md | 34 | 0 | 4 | 0 | 38 |
-| PERF_GAP_ANALYSIS.md | 25 | 0 | 2 | 13 | 40 |
+| PERF_GAP_ANALYSIS.md | 37 | 0 | 2 | 1 | 40 |
 
-**Overall:** 73 closed, 0 blocked, 6 won't do, 13 remaining open out of 92 total items.
+**Overall:** 85 closed, 0 blocked, 6 won't do, 1 remaining open out of 92 total items.
 
-No security, quality, or P1 performance items remain open.
+No security, quality, P1, P3, or Info performance items remain open.
 
-The 13 remaining open PERF items are all deferred backlog:
-- 1 P2: PERF-44 (benchmark suite, L effort)
-- 3 P3: PERF-33 (auth header caching), PERF-37 (URI re-parse), PERF-42 (thread pool eagerness)
-- 9 Info: PERF-18/19/20 (not filed) + PERF-30/32/34/35/40/41 (low-priority optimizations)
+The 1 remaining open PERF item:
+- 1 P2: PERF-44 (benchmark suite, L effort, 3-5 days)
 
 ---
 
@@ -129,6 +127,23 @@ The 13 remaining open PERF items are all deferred backlog:
 | PERF-25 | Double allocLowerString in diff | `src/diff.zig` | seen_keys stores lowered keys; O(1) lookup |
 | PERF-43/45 | CI caching for Zig toolchain | `.gitlab-ci.yml` | Global cache block keyed on ZIG_VERSION |
 
+### Wave 8 (12 items -- Performance Closure)
+
+| Gap-ID | Title | Files Changed | Evidence |
+|--------|-------|---------------|----------|
+| PERF-33 | Auth header rebuilt per Etcd request | `src/remote.zig` | Cached at init, secureZero in deinit |
+| PERF-34 | Etcd URL allocPrint per failover | `src/remote.zig` | Cached URI with path override |
+| PERF-35 | Consul URL allocPrint per operation | `src/remote.zig` | Stack buffer bufPrint + cached URI |
+| PERF-37 | URI re-parsed per request | `src/remote.zig` | Cached parsed URIs at init for Etcd and Consul |
+| PERF-18 | JSON body allocPrint in Etcd | `src/remote.zig` | Stack buffer bufPrint (1024B), heap fallback |
+| PERF-19 | Base64 encode allocates per request | `src/remote.zig` | Stack buffer (512B), heap fallback |
+| PERF-20 | Lowercased key alloc per lookup | `src/loader.zig` | Stack buffer in normalizeKey, arena fallback |
+| PERF-30 | formatDiff iterates 3x | `src/diff.zig` | Single pass with 3 output buffers |
+| PERF-32 | prefix_with_dot heap alloc | `src/loader.zig` | Stack buffer bufPrint (256B) in sub/hasSub |
+| PERF-40 | page_allocator granularity waste | `src/parallel.zig` | initPool() with caller allocator + docs |
+| PERF-41 | pool_mutex contention | `src/parallel.zig` | Replaced with std.once for lock-free reads |
+| PERF-42 | Thread pool eager spawning | `src/parallel.zig` | Raised threshold from 2 to 4 files |
+
 ---
 
 ## Won't Do Items
@@ -182,12 +197,13 @@ No items are blocked.
 - Secret provider timeout watchdog + stderr pipe (#79)
 - env:// provider gated behind opt-in flag (#84)
 - DNS rebinding mitigation via recheckDnsBinding (#68)
+- Cached auth header secureZero'd in Etcd.deinit() to prevent credential leakage (PERF-33, Wave 8)
 
 ---
 
 ## Remaining Blockers
 
-None. All actionable items resolved. The 13 remaining open items in PERF_GAP_ANALYSIS.md are deferred backlog (P2/P3/Info) with no blockers.
+None. All actionable items resolved. The 1 remaining open item in PERF_GAP_ANALYSIS.md is PERF-44 (benchmark suite, P2, 3-5 days effort).
 
 ---
 
@@ -205,14 +221,14 @@ Previous waves 1-5 closed 37 GitLab issues. See prior report for full issue upda
 |------|-------|
 | `src/dotenv.zig` | 1, 6 |
 | `src/config.zig` | 1, 2, 6 |
-| `src/loader.zig` | 1, 2, 4, 5, 6, 7 |
+| `src/loader.zig` | 1, 2, 4, 5, 6, 7, 8 |
 | `src/provenance.zig` | 1, 5 |
 | `src/secret.zig` | 1, 2, 4 |
-| `src/remote.zig` | 1, 2, 3, 4, 5, 6, 7 |
+| `src/remote.zig` | 1, 2, 3, 4, 5, 6, 7, 8 |
 | `src/validation.zig` | 2 |
-| `src/parallel.zig` | 3 |
+| `src/parallel.zig` | 3, 8 |
 | `src/encrypted_secrets.zig` | 2, 6 |
-| `src/diff.zig` | 4, 7 |
+| `src/diff.zig` | 4, 7, 8 |
 | `src/merge.zig` | 5, 7 |
 | `src/async.zig` | 6 |
 | `build.zig` | 3 |

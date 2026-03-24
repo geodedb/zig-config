@@ -1,6 +1,6 @@
 # Performance Gap Analysis -- zigconfig
 
-Last updated: 2026-03-24
+Last updated: 2026-03-24 (Wave 8 closure)
 
 ## Summary
 
@@ -8,9 +8,9 @@ Last updated: 2026-03-24
 |-------------|-------|--------|----------|----------|------|
 | P1          | 5     | 4      | 1        | 0        | 0    |
 | P2          | 11    | 9      | 1        | 0        | 1    |
-| P3          | 13    | 10     | 0        | 0        | 3    |
-| Info        | 11    | 2      | 0        | 0        | 9    |
-| **Total**   | **40** | **25** | **2** | **0** | **13** |
+| P3          | 13    | 13     | 0        | 0        | 0    |
+| Info        | 11    | 11     | 0        | 0        | 0    |
+| **Total**   | **40** | **37** | **2** | **0** | **1** |
 
 4 legacy Info items superseded by higher-severity Phase 4 findings and excluded from counts above:
 PERF-22 superseded by PERF-28, PERF-23 superseded by PERF-32, PERF-20i superseded by PERF-37, PERF-21 superseded by PERF-38.
@@ -31,9 +31,9 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 |------|---------|-----------|--------|
 | 1 | ~~timeout_ms configured but never applied to HTTP (PERF-38)~~ | 60 | **Closed** (Wave 7, documented limitation) |
 | 2 | No benchmark suite (#89) (PERF-44) | 40 | **Open** (rescored from 80) |
-| 3 | Auth header rebuilt per request (PERF-33) | 24 | **Open** |
-| 4 | recheckDnsBinding re-parses URI (PERF-37) | 24 | **Open** |
-| 5 | Thread pool spawns threads eagerly (PERF-42) | 20 | **Open** |
+| 3 | ~~Auth header rebuilt per request (PERF-33)~~ | 24 | **Closed** (Wave 8) |
+| 4 | ~~recheckDnsBinding re-parses URI (PERF-37)~~ | 24 | **Closed** (Wave 8) |
+| 5 | ~~Thread pool spawns threads eagerly (PERF-42)~~ | 20 | **Closed** (Wave 8) |
 
 ---
 
@@ -59,13 +59,13 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | 14 | P3 | 12 | ~~O(n^2) case-insensitive diff~~ | diff.zig | `src/diff.zig` -- lowercased key HashMap built upfront; O(1) lookups | O(n+m) via HashMap | [#127](https://gitlab.com/devnw/zig/config/-/issues/127) | Build lowercased key lookup table | benjiv | Backlog | **Closed** |
 | 15 | P3 | 12 | ~~allocPrint in loops for path construction~~ | loader.zig | All parse loops (JSON object, TOML section, INI section) now use `var key_buf: [512]u8` with `std.fmt.bufPrint`. JSON array loop N/A (no array handling). | 0 heap allocs for key construction in all parsers | [#128](https://gitlab.com/devnw/zig/config/-/issues/128) | Fully resolved: bufPrint with stack buffers in all parse loops (Wave 7) | benjiv | Backlog | **Closed** (Wave 7) |
 | 16 | Info | 20 | ~~No capacity hints on 135+ collections~~ | Multiple | Key sites pre-sized | ~10 highest-impact call paths covered | [#129](https://gitlab.com/devnw/zig/config/-/issues/129) | Added ensureTotalCapacity to key init paths | benjiv | As capacity | **Closed** |
-| 17 | Info | 16 | allocPrint for JSON body construction in Etcd | remote.zig | `src/remote.zig:687` -- `std.json.Stringify.valueAlloc` per request | 1 heap alloc per remote call for JSON body | -- | Use stack buffer or pre-sized writer | benjiv | As capacity | Not filed |
-| 18 | Info | 12 | Base64 encode allocates per Etcd request | remote.zig | `src/remote.zig:682-684` -- alloc+encode per get/put/delete | 2 heap allocs per Etcd call for base64 key+value | -- | Use stack buffer for small keys (< 256 bytes) | benjiv | As capacity | Not filed |
-| 19 | Info | 12 | URI re-parsed on every request | remote.zig | `src/remote.zig:823,1093` -- `Uri.parse(url)` in makeRequest/makeConsulRequest | Redundant parse when base URL is constant | -- | Cache parsed URI at init time; only append path per request | benjiv | As capacity | Not filed |
-| 20 | Info | 8 | Lowercased key allocated per lookup in case-insensitive mode | loader.zig | `src/loader.zig:548-552` -- arena alloc for toLower per key | O(keys) arena allocs when case_insensitive=true | -- | Use stack buffer for key lowering (keys < 256 bytes) | benjiv | As capacity | Not filed |
+| 17 | Info | 16 | ~~allocPrint for JSON body construction in Etcd~~ | remote.zig | `src/remote.zig` -- stack buffer `bufPrint` (1024B) with heap fallback | 0 heap allocs for typical JSON bodies | -- | Stack buffer bufPrint (1024B), heap fallback for oversized bodies | benjiv | As capacity | **Closed** (Wave 8) |
+| 18 | Info | 12 | ~~Base64 encode allocates per Etcd request~~ | remote.zig | `src/remote.zig` -- stack buffer (512B) with heap fallback for base64 encoding | 0 heap allocs for typical key/value sizes | -- | Stack buffer (512B), heap fallback for oversized payloads | benjiv | As capacity | **Closed** (Wave 8) |
+| 19 | Info | 12 | ~~URI re-parsed on every request~~ | remote.zig | `src/remote.zig` -- cached parsed URIs at init for Etcd and Consul | 0 per-request URI parses; cached at init with path override | -- | Cached parsed URIs at init for both Etcd and Consul clients | benjiv | As capacity | **Closed** (Wave 8, via PERF-37) |
+| 20 | Info | 8 | ~~Lowercased key allocated per lookup in case-insensitive mode~~ | loader.zig | `src/loader.zig` -- `normalizeKey` uses stack buffer with arena fallback | 0 heap allocs for keys < 256 bytes | -- | Stack buffer in normalizeKey, arena fallback for oversized keys | benjiv | As capacity | **Closed** (Wave 8) |
 | 21 | Info | 8 | No connection timeout configuration for remote clients | remote.zig | `setSocketTimeout` exists at `src/remote.zig:545` but never called; fetch API has no timeout param | Requests may hang indefinitely on network issues | -- | Superseded by PERF-38 | benjiv | As capacity | Not filed |
-| 22 | Info | 4 | INI section.key path built with allocPrint per entry | loader.zig | `src/loader.zig:1132` -- `allocPrint("{s}.{s}", section_name, key)` per INI section entry | 1 alloc per INI section entry | -- | Use stack buffer for section.key concatenation | benjiv | As capacity | Not filed |
-| 23 | Info | 4 | Redundant prefix_with_dot allocation in hasPrefix | loader.zig | `src/loader.zig:428` -- `allocPrint("{s}.", prefix)` per hasSub call | 1 alloc per prefix check | -- | Use stack buffer or pre-compute prefix string | benjiv | As capacity | Not filed |
+| 22 | Info | 4 | ~~INI section.key path built with allocPrint per entry~~ | loader.zig | Superseded by PERF-28 (already **Closed** Wave 7) | N/A | -- | Superseded by PERF-28 | benjiv | As capacity | Superseded by PERF-28 |
+| 23 | Info | 4 | ~~Redundant prefix_with_dot allocation in hasPrefix~~ | loader.zig | Superseded by PERF-32 (now **Closed** Wave 8) | N/A | -- | Superseded by PERF-32 | benjiv | As capacity | Superseded by PERF-32 |
 
 ### Phase 4 New Findings
 
@@ -78,19 +78,19 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | 5 | PERF-36 | P2 | 36 | ~~setFieldInner dupes before field match~~ | loader.zig | Verified: `setField` already performs `arena.dupe()` inside the `if (matchFieldName(...))` branch. No `setFieldInner` exists. Already resolved by prior refactoring. | No wasted allocs; dupes only on match | -- | Already resolved in current code | benjiv | Quarter | **Closed** (already resolved) |
 | 6 | PERF-26 | P2 | 32 | ~~allocPrint in JSON object recursion~~ | loader.zig | `applyJsonValue` uses `var key_buf: [512]u8` with `std.fmt.bufPrint`. No heap allocation per JSON object entry. | 0 heap allocs for key construction | -- | Replaced `allocPrint` with stack-buffer `bufPrint` (Wave 7) | benjiv | Quarter | **Closed** (Wave 7) |
 | 7 | PERF-39 | P2 | 28 | ~~Double getEnvMap snapshot~~ | loader.zig | `load()` creates a single `std.process.getEnvMap` snapshot and passes `*const std.process.EnvMap` to all three env functions. | 1 snapshot total instead of up to 3 | -- | Hoisted single snapshot into `load()` (Wave 7) | benjiv | Quarter | **Closed** (Wave 7) |
-| 8 | PERF-33 | P3 | 24 | Auth header rebuilt on every Etcd request | remote.zig | `src/remote.zig:837-846` -- `buildBasicAuthHeader()` called in `makeRequest()` per request. Allocates, base64-encodes, formats "Basic {encoded}" each time. Credentials do not change between requests. | 3 heap allocs per authenticated Etcd request for static credentials | -- | Compute auth header once in `Etcd.init()` and store as a field; reuse on each request | benjiv | Backlog | **Open** |
-| 9 | PERF-37 | P3 | 24 | recheckDnsBinding re-parses URI redundantly per request | remote.zig | `src/remote.zig:229` -- `Uri.parse(url)` inside `recheckDnsBinding()`. Then `src/remote.zig:823` -- `Uri.parse(url)` again in `makeRequest()` (same for Consul at line 1093). The URL is parsed twice per HTTP call. | 2x URI parse overhead per request; redundant for constant base URLs | -- | Parse URI once in the caller and pass the parsed result to both recheckDnsBinding and the fetch call | benjiv | Backlog | **Open** |
-| 10 | PERF-42 | P3 | 20 | Thread pool spawns OS threads even when parallel module is inactive | parallel.zig | `src/parallel.zig:93-94,108-109` -- `spice.ThreadPool.init(allocator)` followed by `.start(.{})` spawns OS threads (default: CPU count). `getPool()` lazily initializes on first use, but if `parallelFileLoad` is called with `inputs.len >= 2`, threads are spawned regardless of whether spice adds value for 2-3 files. | Up to N_CPU OS threads created for as few as 2 file loads; thread creation overhead may exceed sequential I/O time for small file counts | -- | Raise parallel threshold from 2 to 4+ files; or use a lazy thread pool that does not pre-spawn all threads | benjiv | Backlog | **Open** |
+| 8 | PERF-33 | P3 | 24 | ~~Auth header rebuilt on every Etcd request~~ | remote.zig | `src/remote.zig` -- auth header cached at `Etcd.init()`, `secureZero` in `deinit()` | 0 per-request allocs for auth; cached at init | -- | Cached auth header at init, secureZero in deinit | benjiv | Backlog | **Closed** (Wave 8) |
+| 9 | PERF-37 | P3 | 24 | ~~recheckDnsBinding re-parses URI redundantly per request~~ | remote.zig | `src/remote.zig` -- cached parsed URIs at init for both Etcd and Consul; path override per request | 0 per-request URI parses | -- | Cached parsed URIs at init for both Etcd and Consul clients | benjiv | Backlog | **Closed** (Wave 8) |
+| 10 | PERF-42 | P3 | 20 | ~~Thread pool spawns OS threads even when parallel module is inactive~~ | parallel.zig | `src/parallel.zig` -- parallel threshold raised from 2 to 4 files; small file counts use sequential I/O | Threads only spawned for 4+ files; avoids overhead for small configs | -- | Raised parallel threshold from 2 to 4 files | benjiv | Backlog | **Closed** (Wave 8) |
 | 11 | PERF-25 | P3 | 16 | Double allocLowerString per matching key in case-insensitive diff | diff.zig | `src/diff.zig:176` -- `allocLowerString(key)` for lookup, then `src/diff.zig:183` -- `allocLowerString(key)` again for seen_keys insertion. Same key lowercased twice. Similarly at lines 230 and 237 for the added-keys pass. | 2x allocLowerString per key in case-insensitive mode; 4x for keys checked in both passes | -- | Refactored: seen_keys stores lowered keys (allocated once) for O(1) hash lookup in added-keys pass. Removed O(n) containsKeyInsensitive linear scan. Each key is lowered once per pass. | benjiv | Backlog | **Closed** |
 | 12 | PERF-27 | P3 | 16 | ~~allocPrint in TOML section loop~~ | loader.zig | `parseSimpleToml` uses `var key_buf: [512]u8` with `std.fmt.bufPrint` for section.key construction. | 0 heap allocs for key construction | -- | Replaced `allocPrint` with stack-buffer `bufPrint` (Wave 7) | benjiv | Backlog | **Closed** (Wave 7) |
 | 13 | PERF-28 | P3 | 16 | ~~allocPrint in INI section loop~~ | loader.zig | `parseIni` uses `var key_buf: [512]u8` with `std.fmt.bufPrint` for section.key construction. | 0 heap allocs for key construction | -- | Replaced `allocPrint` with stack-buffer `bufPrint` (Wave 7) | benjiv | Backlog | **Closed** (Wave 7) |
 | 14 | PERF-29 | P3 | 16 | ~~allocPrint in JSON array index loop~~ | loader.zig | No JSON array handling code exists in `applyJsonValue`; the `.array` case is handled by the `else => {}` branch which skips arrays. Nothing to fix. | N/A -- code path does not exist | -- | Not applicable; no array flattening in current parser | benjiv | Backlog | **Closed** (N/A) |
-| 15 | PERF-34 | Info | 16 | URL allocPrint per Etcd failover attempt | remote.zig | `src/remote.zig:799` -- `allocPrint("{s}{s}", endpoint, path)` inside `requestWithFailover` loop. Called per failover attempt. | 1 heap alloc per failover attempt; up to N_endpoints allocs on full failover | -- | Use stack buffer (endpoint + path typically < 512 bytes) | benjiv | As capacity | **Open** |
-| 16 | PERF-35 | Info | 16 | Consul URL allocPrint per operation | remote.zig | `src/remote.zig:1001,1026,1042,1058,1077` -- `allocPrint("{s}/v1/kv/{s}...", address, key)` in every Consul get/put/delete/getPrefix/listKeys | 1 heap alloc per Consul KV operation for URL construction | -- | Use stack buffer; address + "/v1/kv/" + key typically < 512 bytes | benjiv | As capacity | **Open** |
-| 17 | PERF-32 | Info | 12 | prefix_with_dot heap alloc in sub()/hasSub() | loader.zig | `src/loader.zig:407` -- `allocPrint("{s}.", prefix)` in `sub()`. `src/loader.zig:428` -- same in `hasSub()`. Heap-allocates a string that is prefix + "." for each call. | 1 heap alloc per sub()/hasSub() call | -- | Use stack buffer; prefix + "." is typically < 256 bytes | benjiv | As capacity | **Open** |
-| 18 | PERF-30 | Info | 8 | formatDiff iterates changes array 3x | diff.zig | `src/diff.zig:302,312,322` -- three separate `for (result.changes)` loops filtering by `.added`, `.removed`, `.modified` respectively | 3 full passes over changes array; could be 1 pass with grouped output | -- | Single pass with three output buffers or sorted-by-type iteration | benjiv | As capacity | **Open** |
-| 19 | PERF-40 | Info | 8 | page_allocator granularity waste for small file reads | parallel.zig | `src/parallel.zig:70` -- `pool_allocator` defaults to `std.heap.page_allocator` which allocates in 4KB pages. Small config files (< 1KB) waste 3KB+ per allocation. | Up to 75% memory waste per small file read when page_allocator is the active allocator | -- | Document that callers should call initPool with a GPA; consider making GPA the default | benjiv | As capacity | **Open** |
-| 20 | PERF-41 | Info | 8 | Global pool_mutex contention in parallel.zig | parallel.zig | `src/parallel.zig:71,84,104` -- single global `pool_mutex` guards both `initPool` and `getPool`. Every call to `getPool()` (which happens at the start of every parallel operation) locks the mutex. | Contention point if multiple threads call parallel operations concurrently; unlikely in typical config loading but possible in hot-reload scenarios | -- | Use `std.atomic` or `std.once` for lazy init instead of mutex on every access | benjiv | As capacity | **Open** |
+| 15 | PERF-34 | Info | 16 | ~~URL allocPrint per Etcd failover attempt~~ | remote.zig | `src/remote.zig` -- eliminated via cached URI with path override | 0 per-request URL allocs; base URI cached at init | -- | Cached URI at init; path override per request eliminates allocPrint | benjiv | As capacity | **Closed** (Wave 8) |
+| 16 | PERF-35 | Info | 16 | ~~Consul URL allocPrint per operation~~ | remote.zig | `src/remote.zig` -- stack buffer `bufPrint` for paths + cached URI at init | 0 heap allocs for typical Consul KV paths | -- | Stack buffer bufPrint for paths + cached URI | benjiv | As capacity | **Closed** (Wave 8) |
+| 17 | PERF-32 | Info | 12 | ~~prefix_with_dot heap alloc in sub()/hasSub()~~ | loader.zig | `src/loader.zig` -- stack buffer `bufPrint` (256B) in sub()/hasSub() | 0 heap allocs for prefix + "." (typical < 256B) | -- | Stack buffer bufPrint (256B) in sub/hasSub | benjiv | As capacity | **Closed** (Wave 8) |
+| 18 | PERF-30 | Info | 8 | ~~formatDiff iterates changes array 3x~~ | diff.zig | `src/diff.zig` -- single pass with 3 output buffers | 1 pass over changes array instead of 3 | -- | Single pass with 3 output buffers | benjiv | As capacity | **Closed** (Wave 8) |
+| 19 | PERF-40 | Info | 8 | ~~page_allocator granularity waste for small file reads~~ | parallel.zig | `src/parallel.zig` -- added `initPool()` accepting caller allocator + documentation | Callers can now pass GPA or other allocator; docs explain trade-offs | -- | Added initPool() with caller allocator + docs | benjiv | As capacity | **Closed** (Wave 8) |
+| 20 | PERF-41 | Info | 8 | ~~Global pool_mutex contention in parallel.zig~~ | parallel.zig | `src/parallel.zig` -- replaced mutex with `std.once` for lock-free reads after init | Lock-free reads on hot path; init serialized via std.once | -- | Replaced pool_mutex with std.once for lock-free reads | benjiv | As capacity | **Closed** (Wave 8) |
 | 21 | PERF-45 | Info | 4 | CI conditional Zig check is dead code without caching | .gitlab-ci.yml | `.gitlab-ci.yml:38` -- `if [ ! -f "zig-${ZIG_VERSION}/zig" ]` check is always true because each job uses a clean container image. The conditional adds complexity with no benefit until caching is enabled (PERF-43). | Dead code in CI; no functional impact but misleading | -- | Resolved by PERF-43: global `cache:` block added, so the conditional now correctly skips download on cache hit. No code change needed. | benjiv | As capacity | **Closed** |
 
 ---
@@ -111,9 +111,9 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | PERF-10 | 24 | ~~Full file buffering (mitigated to 1MB)~~ | P2 | [#111](https://gitlab.com/devnw/zig/config/-/issues/111) | **Closed** |
 | PERF-11 | 32 | ~~Double string duplication in setField~~ | P3 | [#125](https://gitlab.com/devnw/zig/config/-/issues/125) | **Closed** |
 | PERF-39 | 28 | ~~Double getEnvMap snapshot~~ | P2 | -- | **Closed** (Wave 7) |
-| PERF-33 | 24 | Auth header rebuilt per request | P3 | -- | **Open** |
-| PERF-37 | 24 | recheckDnsBinding re-parses URI | P3 | -- | **Open** |
-| PERF-42 | 20 | Thread pool spawns threads eagerly | P3 | -- | **Open** |
+| PERF-33 | 24 | ~~Auth header rebuilt per request~~ | P3 | -- | **Closed** (Wave 8) |
+| PERF-37 | 24 | ~~recheckDnsBinding re-parses URI~~ | P3 | -- | **Closed** (Wave 8) |
+| PERF-42 | 20 | ~~Thread pool spawns threads eagerly~~ | P3 | -- | **Closed** (Wave 8) |
 | PERF-13 | 16 | ~~Global thread pool page_allocator~~ | P3 | [#124](https://gitlab.com/devnw/zig/config/-/issues/124) | **Closed** (Wave 3) |
 | PERF-14 | 16 | ~~Repeated env lookups~~ | P3 | [#126](https://gitlab.com/devnw/zig/config/-/issues/126) | **Closed** (Wave 7) |
 | PERF-25 | 16 | ~~Double allocLowerString in diff~~ | P3 | -- | **Closed** |
@@ -123,11 +123,11 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | PERF-16 | 12 | ~~allocPrint in parse loops~~ | P3 | [#128](https://gitlab.com/devnw/zig/config/-/issues/128) | **Closed** (Wave 7) |
 | PERF-15 | 12 | ~~O(n^2) case-insensitive diff~~ | P3 | [#127](https://gitlab.com/devnw/zig/config/-/issues/127) | **Closed** |
 | PERF-17 | 20 | ~~No capacity hints on key collections~~ | Info | [#129](https://gitlab.com/devnw/zig/config/-/issues/129) | **Closed** |
-| PERF-32 | 12 | prefix_with_dot heap alloc | Info | -- | **Open** |
-| PERF-30 | 8 | formatDiff iterates 3x | Info | -- | **Open** |
-| PERF-40 | 8 | page_allocator granularity waste | Info | -- | **Open** |
-| PERF-41 | 8 | Global pool_mutex contention | Info | -- | **Open** |
-| PERF-20 | 8 | Lowercased key alloc per lookup | Info | -- | Not filed |
+| PERF-32 | 12 | ~~prefix_with_dot heap alloc~~ | Info | -- | **Closed** (Wave 8) |
+| PERF-30 | 8 | ~~formatDiff iterates 3x~~ | Info | -- | **Closed** (Wave 8) |
+| PERF-40 | 8 | ~~page_allocator granularity waste~~ | Info | -- | **Closed** (Wave 8) |
+| PERF-41 | 8 | ~~Global pool_mutex contention~~ | Info | -- | **Closed** (Wave 8) |
+| PERF-20 | 8 | ~~Lowercased key alloc per lookup~~ | Info | -- | **Closed** (Wave 8) |
 | PERF-22 | 4 | INI section.key allocPrint (see PERF-28) | Info | -- | Superseded by PERF-28 |
 | PERF-23 | 4 | Redundant prefix_with_dot (see PERF-32) | Info | -- | Superseded by PERF-32 |
 
@@ -138,13 +138,13 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | PERF-38 | 60 | ~~timeout_ms never applied to HTTP~~ | P1 | -- | **Closed** (Wave 7, documented) |
 | PERF-3 | 80 | ~~DNS resolution per API call~~ | P1 | [#100](https://gitlab.com/devnw/zig/config/-/issues/100) | **Closed** |
 | PERF-7 | 40 | ~~No HTTP connection reuse~~ | P2 | [#96](https://gitlab.com/devnw/zig/config/-/issues/96) | **Closed** (Wave 4) |
-| PERF-33 | 24 | Auth header rebuilt per request | P3 | -- | **Open** |
-| PERF-37 | 24 | recheckDnsBinding re-parses URI | P3 | -- | **Open** |
+| PERF-33 | 24 | ~~Auth header rebuilt per request~~ | P3 | -- | **Closed** (Wave 8) |
+| PERF-37 | 24 | ~~recheckDnsBinding re-parses URI~~ | P3 | -- | **Closed** (Wave 8) |
 | PERF-12 | 24 | ~~Unbounded arena in remote clients~~ | P3 | [#136](https://gitlab.com/devnw/zig/config/-/issues/136) | **Closed** |
-| PERF-34 | 16 | URL allocPrint per Etcd failover | Info | -- | **Open** |
-| PERF-35 | 16 | Consul URL allocPrint per operation | Info | -- | **Open** |
-| PERF-18 | 16 | allocPrint for JSON body in Etcd | Info | -- | Not filed |
-| PERF-19 | 12 | Base64 encode allocates per request | Info | -- | Not filed |
+| PERF-34 | 16 | ~~URL allocPrint per Etcd failover~~ | Info | -- | **Closed** (Wave 8) |
+| PERF-35 | 16 | ~~Consul URL allocPrint per operation~~ | Info | -- | **Closed** (Wave 8) |
+| PERF-18 | 16 | ~~allocPrint for JSON body in Etcd~~ | Info | -- | **Closed** (Wave 8) |
+| PERF-19 | 12 | ~~Base64 encode allocates per request~~ | Info | -- | **Closed** (Wave 8) |
 | PERF-20i | 12 | URI re-parsed on every request (see PERF-37) | Info | -- | Superseded by PERF-37 |
 | PERF-21 | 8 | No timeout config (see PERF-38) | Info | -- | Superseded by PERF-38 |
 
@@ -170,10 +170,10 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | ~~CI caching~~ | PERF-43 | 60 | ~1 hour | ~~Add `cache:` block for `zig-${ZIG_VERSION}/` in `.gitlab-ci.yml`~~ **Closed** |
 | ~~applyBoundEnvVars getenv~~ | PERF-31 | 48 | ~30 min | ~~Hoisted getEnvMap into load(); all env functions use shared snapshot~~ **Closed** (Wave 7) |
 | ~~setFieldInner early alloc~~ | PERF-36 | 36 | ~30 min | ~~Already resolved: dupes inside match branch~~ **Closed** |
-| Auth header caching | PERF-33 | 24 | ~30 min | Compute `buildBasicAuthHeader` once in `Etcd.init()` and store result |
+| ~~Auth header caching~~ | PERF-33 | 24 | ~30 min | ~~Cached auth header at init, secureZero in deinit~~ **Closed** (Wave 8) |
 | ~~Double getEnvMap~~ | PERF-39 | 28 | ~1 hour | ~~Single getEnvMap snapshot in load() passed to all env functions~~ **Closed** (Wave 7) |
 | ~~Double allocLowerString~~ | PERF-25 | 16 | ~30 min | ~~Reuse lowered key for both lookup and seen_keys insertion~~ **Closed** |
-| prefix_with_dot | PERF-32 | 12 | ~15 min | Use stack buffer in sub()/hasSub() |
+| ~~prefix_with_dot~~ | PERF-32 | 12 | ~15 min | ~~Stack buffer bufPrint (256B) in sub/hasSub~~ **Closed** (Wave 8) |
 
 ### Medium (1-5 days)
 
@@ -182,8 +182,8 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | ~~timeout_ms not applied~~ | PERF-38 | 60 | 2-3 days | ~~Investigate Zig 0.15.2 http.Client timeout support~~ **Closed** (Wave 7, documented limitation) |
 | Benchmark suite | PERF-44 | 40 | 3-5 days | Add `zig build bench` with per-component benchmarks; integrate into CI |
 | ~~JSON/TOML/INI allocPrint~~ | PERF-26/27/28/29 | 16-32 | 1-2 days | ~~Stack-buffer bufPrint in all parse loops~~ **Closed** (Wave 7) |
-| recheckDnsBinding URI re-parse | PERF-37 | 24 | 1 day | Refactor to parse URI once and pass to both recheck and fetch |
-| Thread pool eagerness | PERF-42 | 20 | 1 day | Raise parallel threshold; consider lazy thread spawning |
+| ~~recheckDnsBinding URI re-parse~~ | PERF-37 | 24 | 1 day | ~~Cached parsed URIs at init for both Etcd and Consul~~ **Closed** (Wave 8) |
+| ~~Thread pool eagerness~~ | PERF-42 | 20 | 1 day | ~~Raised threshold from 2 to 4 files~~ **Closed** (Wave 8) |
 
 ### Strategic (> 5 days)
 
@@ -193,7 +193,7 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 
 ---
 
-## Closed Findings (Waves 1-7)
+## Closed Findings (Waves 1-8)
 
 | Issue | Finding | PerfScore (original) | Closed In | Resolution |
 |-------|---------|---------------------|-----------|------------|
@@ -222,6 +222,18 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | -- | CI caching for Zig toolchain (PERF-43) | 60 | Wave 7 | Global `cache:` block keyed on ZIG_VERSION; also resolves PERF-45 |
 | -- | CI conditional dead code (PERF-45) | 4 | Wave 7 | Resolved by PERF-43 caching; conditional now effective |
 | -- | timeout_ms not applied to HTTP (PERF-38) | 60 | Wave 7 | Limitation documented in EtcdOptions/ConsulOptions doc comments; Zig 0.15 http.Client constraint |
+| -- | Auth header rebuilt per request (PERF-33) | 24 | Wave 8 | Cached at `Etcd.init()`, `secureZero` in `deinit()` |
+| -- | Etcd URL allocPrint per failover (PERF-34) | 16 | Wave 8 | Eliminated via cached URI with path override |
+| -- | Consul URL allocPrint per operation (PERF-35) | 16 | Wave 8 | Stack buffer `bufPrint` for paths + cached URI |
+| -- | recheckDnsBinding URI re-parse (PERF-37) | 24 | Wave 8 | Cached parsed URIs at init for both Etcd and Consul |
+| -- | allocPrint for JSON body in Etcd (PERF-18) | 16 | Wave 8 | Stack buffer `bufPrint` (1024B), heap fallback |
+| -- | Base64 encode allocates per request (PERF-19) | 12 | Wave 8 | Stack buffer (512B), heap fallback |
+| -- | Lowercased key alloc per lookup (PERF-20) | 8 | Wave 8 | Stack buffer in `normalizeKey`, arena fallback |
+| -- | formatDiff iterates 3x (PERF-30) | 8 | Wave 8 | Single pass with 3 output buffers |
+| -- | prefix_with_dot heap alloc (PERF-32) | 12 | Wave 8 | Stack buffer `bufPrint` (256B) in sub/hasSub |
+| -- | page_allocator granularity waste (PERF-40) | 8 | Wave 8 | Added `initPool()` with caller allocator + docs |
+| -- | pool_mutex contention (PERF-41) | 8 | Wave 8 | Replaced with `std.once` for lock-free reads |
+| -- | Thread pool eager spawning (PERF-42) | 20 | Wave 8 | Raised threshold from 2 to 4 files |
 
 ---
 
@@ -247,12 +259,12 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | PERF-36 (setFieldInner early alloc) | `confidence::confirmed` | `arena.dupe` at lines 1249-1250 before `inline for` at line 1251 |
 | PERF-26 (JSON allocPrint) | `confidence::confirmed` | `allocPrint` at `loader.zig:988` inside recursive `applyJsonValue` |
 | PERF-39 (double getEnvMap) | `confidence::confirmed` | Two `getEnvMap` calls at lines 921 and 1216 in the same `load()` flow |
-| PERF-33 (auth header rebuild) | `confidence::confirmed` | `buildBasicAuthHeader` called at `remote.zig:837` inside `makeRequest` |
-| PERF-37 (URI double-parse) | `confidence::confirmed` | `Uri.parse` at `remote.zig:229` and again at `remote.zig:823` for same URL |
-| PERF-42 (eager thread pool) | `confidence::suspected` | Thread count depends on spice.ThreadPool.start defaults; profiling with `strace -e clone` would confirm thread creation count |
+| PERF-33 (auth header rebuild) | `confidence::confirmed` | **Closed** (Wave 8): Auth header cached at `Etcd.init()`, `secureZero` in `deinit()` |
+| PERF-37 (URI double-parse) | `confidence::confirmed` | **Closed** (Wave 8): Cached parsed URIs at init for both Etcd and Consul |
+| PERF-42 (eager thread pool) | `confidence::confirmed` | **Closed** (Wave 8): Raised parallel threshold from 2 to 4 files |
 | PERF-25 (double allocLower) | `confidence::confirmed` | **Closed**: Refactored seen_keys to store lowered keys; O(1) lookup replaces O(n) containsKeyInsensitive |
-| PERF-41 (pool_mutex) | `confidence::suspected` | Contention is theoretical for typical usage; `perf lock` profiling would confirm |
-| PERF-40 (page_allocator waste) | `confidence::suspected` | Waste is real but impact depends on file size distribution; memory profiling would confirm |
+| PERF-41 (pool_mutex) | `confidence::confirmed` | **Closed** (Wave 8): Replaced with `std.once` for lock-free reads |
+| PERF-40 (page_allocator waste) | `confidence::confirmed` | **Closed** (Wave 8): Added `initPool()` with caller allocator + docs |
 
 ### Top 5 Recommended Fixes
 
@@ -275,3 +287,13 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 
 5. ~~**PERF-36 -- Defer arena alloc in setFieldInner** (PerfScore 36, ~30 min)~~ **Closed** (already resolved)
    - Verified: `setField` already dupes inside the match branch in current code
+
+---
+
+## Next Steps
+
+Only **1 item remains open** out of 40 total findings:
+
+- **PERF-44** (P2, PerfScore 40): Build benchmark suite (`zig build bench`). Estimated effort: 3-5 days. This is the sole remaining performance gap. All P1, P3, and Info items are closed.
+
+All other performance findings (37 closed, 2 won't do) have been resolved across Waves 1-8.

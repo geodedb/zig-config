@@ -1,6 +1,6 @@
 # Gap Analysis -- Resolved
 
-Last updated: 2026-03-24 (Waves 6-7 closure)
+Last updated: 2026-03-24 (Waves 6-8 closure)
 Review commit: fe9d0f6 (HEAD of main) + working tree
 
 ## Resolved Gaps
@@ -1040,3 +1040,115 @@ The following gaps were closed across waves 6-7 of implementation. 758/758 tests
 - **Evidence:**
   - `.gitlab-ci.yml` -- global `cache:` block for Zig toolchain
 - **Resolved date:** 2026-03-24 (Wave 7)
+
+---
+
+## Wave 8 Gap Closures (2026-03-24)
+
+### PERF-33: Auth header rebuilt per Etcd request [RESOLVED]
+
+- **ID:** PERF-33
+- **Category:** Performance (P3, PerfScore 24)
+- **Resolution:** Auth header is now computed once in `Etcd.init()` and cached as a struct field. The cached header is reused on every subsequent request. `secureZero` is called on the cached auth header in `deinit()` to prevent credential leakage.
+- **Evidence:**
+  - `src/remote.zig` -- `Etcd.init()` caches auth header; `deinit()` calls `secureZero`
+- **Resolved date:** 2026-03-24 (Wave 8)
+
+### PERF-34: Etcd URL allocPrint per failover attempt [RESOLVED]
+
+- **ID:** PERF-34
+- **Category:** Performance (Info, PerfScore 16)
+- **Resolution:** Eliminated per-request `allocPrint` for URL construction by caching the parsed URI at init time. Per-request path is applied as an override on the cached URI, avoiding heap allocation in the failover loop.
+- **Evidence:**
+  - `src/remote.zig` -- cached URI at init; path override per request
+- **Resolved date:** 2026-03-24 (Wave 8)
+
+### PERF-35: Consul URL allocPrint per operation [RESOLVED]
+
+- **ID:** PERF-35
+- **Category:** Performance (Info, PerfScore 16)
+- **Resolution:** Replaced heap-allocating `allocPrint` for Consul KV URL construction with stack buffer `bufPrint` for paths, combined with a cached URI at init. Typical Consul paths fit within the stack buffer, eliminating per-operation heap allocation.
+- **Evidence:**
+  - `src/remote.zig` -- stack buffer `bufPrint` for paths + cached URI at init
+- **Resolved date:** 2026-03-24 (Wave 8)
+
+### PERF-37: URI re-parsed per request [RESOLVED]
+
+- **ID:** PERF-37
+- **Category:** Performance (P3, PerfScore 24)
+- **Resolution:** Cached parsed URIs at init time for both Etcd and Consul clients. The previously redundant `Uri.parse()` calls in `recheckDnsBinding()` and `makeRequest()`/`makeConsulRequest()` are eliminated. Per-request operations use the cached parsed URI with a path override.
+- **Evidence:**
+  - `src/remote.zig` -- Etcd and Consul init cache parsed URIs; per-request path override
+- **Resolved date:** 2026-03-24 (Wave 8)
+
+### PERF-18: JSON body allocPrint in Etcd [RESOLVED]
+
+- **ID:** PERF-18
+- **Category:** Performance (Info, PerfScore 16)
+- **Resolution:** Replaced heap-allocating JSON body construction with a stack buffer `bufPrint` (1024 bytes). For the rare case where the JSON body exceeds the stack buffer, a heap fallback is used.
+- **Evidence:**
+  - `src/remote.zig` -- stack buffer `bufPrint` (1024B) with heap fallback for JSON body construction
+- **Resolved date:** 2026-03-24 (Wave 8)
+
+### PERF-19: Base64 encode allocates per request [RESOLVED]
+
+- **ID:** PERF-19
+- **Category:** Performance (Info, PerfScore 12)
+- **Resolution:** Replaced per-request heap allocation for base64 encoding with a stack buffer (512 bytes). For oversized payloads exceeding the stack buffer, a heap fallback is used.
+- **Evidence:**
+  - `src/remote.zig` -- stack buffer (512B) with heap fallback for base64 encoding
+- **Resolved date:** 2026-03-24 (Wave 8)
+
+### PERF-20: Lowercased key alloc per lookup [RESOLVED]
+
+- **ID:** PERF-20
+- **Category:** Performance (Info, PerfScore 8)
+- **Resolution:** `normalizeKey()` now uses a stack buffer for key lowering in case-insensitive mode. Keys shorter than the buffer size (256 bytes) avoid heap allocation entirely. An arena fallback is used for the rare case of oversized keys.
+- **Evidence:**
+  - `src/loader.zig` -- `normalizeKey` uses stack buffer with arena fallback
+- **Resolved date:** 2026-03-24 (Wave 8)
+
+### PERF-30: formatDiff iterates changes array 3x [RESOLVED]
+
+- **ID:** PERF-30
+- **Category:** Performance (Info, PerfScore 8)
+- **Resolution:** Replaced three separate filter passes over the changes array (one each for `.added`, `.removed`, `.modified`) with a single pass that writes to three separate output buffers simultaneously.
+- **Evidence:**
+  - `src/diff.zig` -- single pass with 3 output buffers replaces 3 filter loops
+- **Resolved date:** 2026-03-24 (Wave 8)
+
+### PERF-32: prefix_with_dot heap alloc in sub()/hasSub() [RESOLVED]
+
+- **ID:** PERF-32
+- **Category:** Performance (Info, PerfScore 12)
+- **Resolution:** Replaced heap-allocating `allocPrint("{s}.", prefix)` with stack buffer `bufPrint` (256 bytes) in both `sub()` and `hasSub()`. Typical prefixes are well under 256 bytes, eliminating per-call heap allocation.
+- **Evidence:**
+  - `src/loader.zig` -- stack buffer `bufPrint` (256B) in `sub()` and `hasSub()`
+- **Resolved date:** 2026-03-24 (Wave 8)
+
+### PERF-40: page_allocator granularity waste [RESOLVED]
+
+- **ID:** PERF-40
+- **Category:** Performance (Info, PerfScore 8)
+- **Resolution:** Added `initPool()` function that accepts a caller-provided allocator, allowing callers to pass a GPA or other fine-grained allocator instead of defaulting to `page_allocator`. Documentation added explaining trade-offs and recommended usage patterns.
+- **Evidence:**
+  - `src/parallel.zig` -- `initPool()` accepts caller allocator; documentation added
+- **Resolved date:** 2026-03-24 (Wave 8)
+
+### PERF-41: pool_mutex contention [RESOLVED]
+
+- **ID:** PERF-41
+- **Category:** Performance (Info, PerfScore 8)
+- **Resolution:** Replaced the global `pool_mutex` (which locked on every `getPool()` call) with `std.once` for one-time initialization. After init, pool reads are lock-free, eliminating contention on the hot path.
+- **Evidence:**
+  - `src/parallel.zig` -- `std.once` replaces `pool_mutex` for lock-free reads after init
+- **Resolved date:** 2026-03-24 (Wave 8)
+
+### PERF-42: Thread pool eager spawning [RESOLVED]
+
+- **ID:** PERF-42
+- **Category:** Performance (P3, PerfScore 20)
+- **Resolution:** Raised the parallel threshold from 2 to 4 files. For file counts below the threshold, sequential I/O is used, avoiding the overhead of OS thread creation for small workloads where parallelism does not provide a net benefit.
+- **Evidence:**
+  - `src/parallel.zig` -- parallel threshold raised from 2 to 4 files
+- **Resolved date:** 2026-03-24 (Wave 8)

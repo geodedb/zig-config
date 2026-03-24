@@ -207,38 +207,49 @@ pub fn Loader(comptime T: type) type {
         /// Set a value explicitly (highest precedence - like Viper's Set)
         /// This value will override all other sources including flags and env vars.
         pub fn set(self: *Self, key: []const u8, value: []const u8) !void {
-            const norm_key = self.normalizeKey(key);
+            var norm_buf: [512]u8 = undefined;
+            const norm_key = self.normalizeKey(key, &norm_buf);
+            // Dupe into arena for stable storage in maps
+            const owned_key = try self.arena.allocator().dupe(u8, norm_key);
             const owned_value = try self.arena.allocator().dupe(u8, value);
-            try self.overrides.put(norm_key, owned_value);
-            try self.tracker.set(norm_key, owned_value, .override, "set()");
+            try self.overrides.put(owned_key, owned_value);
+            try self.tracker.set(owned_key, owned_value, .override, "set()");
         }
 
         /// Set a default value at runtime (lowest precedence - like Viper's SetDefault)
         /// This is lower precedence than struct defaults and will only apply
         /// if no other source provides a value.
         pub fn setDefault(self: *Self, key: []const u8, value: []const u8) !void {
-            const norm_key = self.normalizeKey(key);
+            var norm_buf: [512]u8 = undefined;
+            const norm_key = self.normalizeKey(key, &norm_buf);
+            // Dupe into arena for stable storage in maps
+            const owned_key = try self.arena.allocator().dupe(u8, norm_key);
             const owned_value = try self.arena.allocator().dupe(u8, value);
-            try self.runtime_defaults.put(norm_key, owned_value);
+            try self.runtime_defaults.put(owned_key, owned_value);
             // Only set in tracker if no value exists yet
             if (self.tracker.get(norm_key) == null) {
-                try self.tracker.set(norm_key, owned_value, .runtime_default, "setDefault()");
+                try self.tracker.set(owned_key, owned_value, .runtime_default, "setDefault()");
             }
         }
 
         /// Register a key alias (like Viper's RegisterAlias)
         /// After registration, both keys reference the same value.
         pub fn registerAlias(self: *Self, alias: []const u8, canonical: []const u8) !void {
-            const norm_alias = self.normalizeKey(alias);
-            const norm_canonical = self.normalizeKey(canonical);
+            var norm_buf_alias: [512]u8 = undefined;
+            var norm_buf_canonical: [512]u8 = undefined;
+            const norm_alias = self.normalizeKey(alias, &norm_buf_alias);
+            const norm_canonical = self.normalizeKey(canonical, &norm_buf_canonical);
+            // Dupe both into arena for stable storage in maps
+            const owned_alias = try self.arena.allocator().dupe(u8, norm_alias);
             const owned_canonical = try self.arena.allocator().dupe(u8, norm_canonical);
-            try self.aliases.put(norm_alias, owned_canonical);
+            try self.aliases.put(owned_alias, owned_canonical);
         }
 
         /// Check if a key has been explicitly set (not just default)
         /// Returns true if the key was set from any source other than default.
         pub fn isSet(self: *const Self, key: []const u8) bool {
-            const norm_key = self.normalizeKey(key);
+            var norm_buf: [512]u8 = undefined;
+            const norm_key = self.normalizeKey(key, &norm_buf);
             const resolved_key = self.resolveAlias(norm_key);
 
             if (self.tracker.get(resolved_key)) |tracked| {
@@ -249,14 +260,16 @@ pub fn Loader(comptime T: type) type {
 
         /// Check if a key exists (including defaults)
         pub fn has(self: *const Self, key: []const u8) bool {
-            const norm_key = self.normalizeKey(key);
+            var norm_buf: [512]u8 = undefined;
+            const norm_key = self.normalizeKey(key, &norm_buf);
             const resolved_key = self.resolveAlias(norm_key);
             return self.tracker.get(resolved_key) != null;
         }
 
         /// Get a string value by key
         pub fn get(self: *const Self, key: []const u8) ?[]const u8 {
-            const norm_key = self.normalizeKey(key);
+            var norm_buf: [512]u8 = undefined;
+            const norm_key = self.normalizeKey(key, &norm_buf);
             const resolved_key = self.resolveAlias(norm_key);
 
             if (self.tracker.get(resolved_key)) |tracked| {
@@ -315,11 +328,13 @@ pub fn Loader(comptime T: type) type {
             var result = std.StringHashMap([]const u8).init(self.allocator);
             errdefer result.deinit();
 
+            // PERF-32: Use stack buffer instead of allocPrint for prefix_with_dot
+            var buf: [256]u8 = undefined;
             const prefix_with_dot = if (prefix.len > 0 and prefix[prefix.len - 1] != '.')
-                try std.fmt.allocPrint(self.allocator, "{s}.", .{prefix})
+                std.fmt.bufPrint(&buf, "{s}.", .{prefix}) catch
+                    return error.OutOfMemory // Prefix exceeds 256-byte stack buffer
             else
-                try self.allocator.dupe(u8, prefix);
-            defer self.allocator.free(prefix_with_dot);
+                prefix;
 
             var iter = self.tracker.values.iterator();
             while (iter.next()) |entry| {
@@ -337,8 +352,9 @@ pub fn Loader(comptime T: type) type {
 
         /// Check if a sub-configuration exists
         pub fn hasSub(self: *const Self, prefix: []const u8) bool {
-            const prefix_with_dot = std.fmt.allocPrint(self.allocator, "{s}.", .{prefix}) catch return false;
-            defer self.allocator.free(prefix_with_dot);
+            // PERF-32: Use stack buffer instead of allocPrint for prefix_with_dot
+            var buf: [256]u8 = undefined;
+            const prefix_with_dot = std.fmt.bufPrint(&buf, "{s}.", .{prefix}) catch return false;
 
             var iter = self.tracker.values.keyIterator();
             while (iter.next()) |key| {
@@ -454,7 +470,10 @@ pub fn Loader(comptime T: type) type {
         /// Bind a config key to specific environment variable(s)
         /// Like Viper's BindEnv - explicitly maps a key to env vars.
         pub fn bindEnv(self: *Self, key: []const u8, env_vars: []const []const u8) !void {
-            const norm_key = self.normalizeKey(key);
+            var norm_buf: [512]u8 = undefined;
+            const norm_key = self.normalizeKey(key, &norm_buf);
+            // Dupe into arena for stable storage in maps
+            const owned_key = try self.arena.allocator().dupe(u8, norm_key);
 
             // Copy env var names
             const owned_vars = try self.arena.allocator().alloc([]const u8, env_vars.len);
@@ -462,7 +481,7 @@ pub fn Loader(comptime T: type) type {
                 owned_vars[i] = try self.arena.allocator().dupe(u8, env_var);
             }
 
-            try self.env_bindings.put(norm_key, owned_vars);
+            try self.env_bindings.put(owned_key, owned_vars);
         }
 
         /// Bind a config key to a single environment variable
@@ -521,10 +540,18 @@ pub fn Loader(comptime T: type) type {
         // =====================================================================
 
         /// Normalize a key based on case sensitivity setting.
-        /// When case_insensitive is true, converts the key to lowercase
-        /// using the arena allocator so the normalized key outlives the call.
+        /// When case_insensitive is true, converts the key to lowercase.
         /// Returns the original key unchanged when case_insensitive is false.
-        fn normalizeKey(self: *const Self, key: []const u8) []const u8 {
+        ///
+        /// PERF-20: Uses the caller-provided stack buffer for keys up to 512
+        /// bytes, avoiding heap allocation on the hot lookup path. For keys
+        /// exceeding the buffer, falls back to arena allocation.
+        ///
+        /// The returned slice borrows from either `key` (already lowercase or
+        /// case_insensitive is false), `buf` (small key needing lowering), or
+        /// the arena (oversized key needing lowering). Callers on write paths
+        /// must dupe the result into stable storage before inserting into maps.
+        fn normalizeKey(self: *const Self, key: []const u8, buf: []u8) []const u8 {
             if (!self.case_insensitive) {
                 return key;
             }
@@ -541,7 +568,15 @@ pub fn Loader(comptime T: type) type {
                 return key;
             }
 
-            // Allocate a lowercase copy on the arena.
+            // PERF-20: Use caller's stack buffer for small keys
+            if (key.len <= buf.len) {
+                for (key, 0..) |c, i| {
+                    buf[i] = std.ascii.toLower(c);
+                }
+                return buf[0..key.len];
+            }
+
+            // Fallback: arena allocation for oversized keys.
             //
             // NEW-05: @constCast rationale -- normalizeKey must remain *const Self
             // because it is called from read-only methods (isSet, has, get) that
@@ -1756,7 +1791,8 @@ test "normalizeKey returns original key when case_insensitive is false" {
     defer ldr.deinit();
     // case_insensitive defaults to false
 
-    const result = ldr.normalizeKey("MyKey");
+    var norm_buf: [512]u8 = undefined;
+    const result = ldr.normalizeKey("MyKey", &norm_buf);
     try std.testing.expectEqualStrings("MyKey", result);
 }
 
@@ -1769,7 +1805,8 @@ test "normalizeKey lowercases key when case_insensitive is true" {
     defer ldr.deinit();
     ldr.case_insensitive = true;
 
-    const result = ldr.normalizeKey("MyKey");
+    var norm_buf: [512]u8 = undefined;
+    const result = ldr.normalizeKey("MyKey", &norm_buf);
     try std.testing.expectEqualStrings("mykey", result);
 }
 
@@ -1783,7 +1820,8 @@ test "normalizeKey returns original key when already lowercase in case_insensiti
     ldr.case_insensitive = true;
 
     const original = "alreadylower";
-    const result = ldr.normalizeKey(original);
+    var norm_buf: [512]u8 = undefined;
+    const result = ldr.normalizeKey(original, &norm_buf);
     // Should return the exact same pointer (no allocation)
     try std.testing.expectEqual(@intFromPtr(original.ptr), @intFromPtr(result.ptr));
     try std.testing.expectEqualStrings("alreadylower", result);

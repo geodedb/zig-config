@@ -635,6 +635,11 @@ pub const Etcd = struct {
     client: http.Client,
     /// Arena for response storage
     arena: std.heap.ArenaAllocator,
+    /// PERF-33: Auth header cached at init time to avoid rebuilding per request.
+    /// Security: The header contains base64-encoded credentials; freed and zeroed in deinit().
+    cached_auth_header: ?[]u8,
+    /// PERF-37: Endpoint URIs parsed at init time to avoid re-parsing per request.
+    cached_uris: []std.Uri,
 
     pub fn init(allocator: Allocator, options: EtcdOptions) RemoteError!Etcd {
         // Security: Validate all endpoint URLs at init time (#100)
@@ -652,15 +657,48 @@ pub const Etcd = struct {
         // Security: Warn when TLS certificate verification is disabled (CWE-295)
         warnIfTlsSkipVerify(options.security);
 
+        // PERF-33: Build auth header once at init time instead of per request
+        const auth_header = buildBasicAuthHeader(
+            allocator,
+            options.username,
+            options.password,
+        ) catch |err| switch (err) {
+            RemoteError.InvalidConfiguration => return RemoteError.InvalidConfiguration,
+            RemoteError.OutOfMemory => return RemoteError.OutOfMemory,
+            else => return RemoteError.InvalidConfiguration,
+        };
+
+        // PERF-37: Parse endpoint URIs once at init time instead of per request
+        const cached_uris = allocator.alloc(std.Uri, options.endpoints.len) catch return RemoteError.OutOfMemory;
+        for (options.endpoints, 0..) |endpoint, i| {
+            cached_uris[i] = Uri.parse(endpoint) catch {
+                allocator.free(cached_uris);
+                if (auth_header) |h| {
+                    secret.secureZero(h);
+                    allocator.free(h);
+                }
+                return RemoteError.InvalidUrl;
+            };
+        }
+
         return .{
             .allocator = allocator,
             .options = options,
             .client = http.Client{ .allocator = allocator },
             .arena = std.heap.ArenaAllocator.init(allocator),
+            .cached_auth_header = auth_header,
+            .cached_uris = cached_uris,
         };
     }
 
     pub fn deinit(self: *Etcd) void {
+        // PERF-33: Free cached auth header; zero it first for security (contains credentials)
+        if (self.cached_auth_header) |h| {
+            secret.secureZero(h);
+            self.allocator.free(h);
+        }
+        // PERF-37: Free cached parsed URIs
+        self.allocator.free(self.cached_uris);
         self.client.deinit();
         self.arena.deinit();
     }
@@ -675,26 +713,30 @@ pub const Etcd = struct {
 
         // etcd v3 uses gRPC-gateway REST API
         // POST /v3/kv/range with JSON body
-        const endpoint = self.options.endpoints[0];
 
-        // URL validated at init time (#100)
+        // PERF-37: Use cached parsed URI instead of constructing URL string
+        var uri = self.cached_uris[0];
+        uri.path = .{ .raw = "/v3/kv/range" };
 
-        const url = std.fmt.allocPrint(self.allocator, "{s}/v3/kv/range", .{endpoint}) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(url);
-
-        // Base64 encode the key (etcd v3 requirement)
+        // PERF-19: Base64 encode key using stack buffer (fallback to heap for oversized keys)
         const encoder = std.base64.standard;
         const encoded_len = encoder.Encoder.calcSize(key.len);
-        const encoded_key = self.allocator.alloc(u8, encoded_len) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(encoded_key);
+        var b64_stack_buf: [512]u8 = undefined;
+        var heap_encoded_key: ?[]u8 = null;
+        defer if (heap_encoded_key) |h| self.allocator.free(h);
+        const encoded_key = if (encoded_len <= b64_stack_buf.len)
+            b64_stack_buf[0..encoded_len]
+        else
+            (self.allocator.alloc(u8, encoded_len) catch return RemoteError.OutOfMemory);
+        if (encoded_len > b64_stack_buf.len) heap_encoded_key = encoded_key;
         _ = encoder.Encoder.encode(encoded_key, key);
 
-        // Build JSON request body
-        const body = std.fmt.allocPrint(self.allocator, "{{\"key\":\"{s}\"}}", .{encoded_key}) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(body);
+        // PERF-18: Build JSON request body using stack buffer
+        var body_buf: [1024]u8 = undefined;
+        const body = std.fmt.bufPrint(&body_buf, "{{\"key\":\"{s}\"}}", .{encoded_key}) catch return RemoteError.OutOfMemory;
 
         // Make HTTP request
-        const response = self.makeRequest(url, body) catch return RemoteError.RequestFailed;
+        const response = self.makeRequest(uri, body) catch return RemoteError.RequestFailed;
         defer self.allocator.free(response);
 
         // Parse response
@@ -709,30 +751,47 @@ pub const Etcd = struct {
             return RemoteError.InvalidKey;
         }
 
-        const endpoint = self.options.endpoints[0];
-
-        // URL validated at init time (#100)
-
-        const url = std.fmt.allocPrint(self.allocator, "{s}/v3/kv/put", .{endpoint}) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(url);
+        // PERF-37: Use cached parsed URI instead of constructing URL string
+        var uri = self.cached_uris[0];
+        uri.path = .{ .raw = "/v3/kv/put" };
 
         // Base64 encode key and value
         const encoder = std.base64.standard;
 
+        // PERF-19: Base64 encode key using stack buffer (fallback to heap for oversized keys)
         const encoded_key_len = encoder.Encoder.calcSize(key.len);
-        const encoded_key = self.allocator.alloc(u8, encoded_key_len) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(encoded_key);
+        var key_b64_stack: [512]u8 = undefined;
+        var heap_encoded_key: ?[]u8 = null;
+        defer if (heap_encoded_key) |h| self.allocator.free(h);
+        const encoded_key = if (encoded_key_len <= key_b64_stack.len)
+            key_b64_stack[0..encoded_key_len]
+        else
+            (self.allocator.alloc(u8, encoded_key_len) catch return RemoteError.OutOfMemory);
+        if (encoded_key_len > key_b64_stack.len) heap_encoded_key = encoded_key;
         _ = encoder.Encoder.encode(encoded_key, key);
 
+        // PERF-19: Base64 encode value using stack buffer (fallback to heap for oversized values)
         const encoded_value_len = encoder.Encoder.calcSize(value.len);
-        const encoded_value = self.allocator.alloc(u8, encoded_value_len) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(encoded_value);
+        var val_b64_stack: [512]u8 = undefined;
+        var heap_encoded_value: ?[]u8 = null;
+        defer if (heap_encoded_value) |h| self.allocator.free(h);
+        const encoded_value = if (encoded_value_len <= val_b64_stack.len)
+            val_b64_stack[0..encoded_value_len]
+        else
+            (self.allocator.alloc(u8, encoded_value_len) catch return RemoteError.OutOfMemory);
+        if (encoded_value_len > val_b64_stack.len) heap_encoded_value = encoded_value;
         _ = encoder.Encoder.encode(encoded_value, value);
 
-        const body = std.fmt.allocPrint(self.allocator, "{{\"key\":\"{s}\",\"value\":\"{s}\"}}", .{ encoded_key, encoded_value }) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(body);
+        // PERF-18: Build JSON request body using stack buffer
+        var body_buf: [1024]u8 = undefined;
+        const body = std.fmt.bufPrint(&body_buf, "{{\"key\":\"{s}\",\"value\":\"{s}\"}}", .{ encoded_key, encoded_value }) catch blk: {
+            // Fallback to heap for oversized body (large values)
+            break :blk std.fmt.allocPrint(self.allocator, "{{\"key\":\"{s}\",\"value\":\"{s}\"}}", .{ encoded_key, encoded_value }) catch return RemoteError.OutOfMemory;
+        };
+        const body_is_heap = body.ptr != &body_buf;
+        defer if (body_is_heap) self.allocator.free(body);
 
-        const response = self.makeRequest(url, body) catch return RemoteError.RequestFailed;
+        const response = self.makeRequest(uri, body) catch return RemoteError.RequestFailed;
         defer self.allocator.free(response);
     }
 
@@ -744,23 +803,28 @@ pub const Etcd = struct {
             return RemoteError.InvalidKey;
         }
 
-        const endpoint = self.options.endpoints[0];
+        // PERF-37: Use cached parsed URI instead of constructing URL string
+        var uri = self.cached_uris[0];
+        uri.path = .{ .raw = "/v3/kv/deleterange" };
 
-        // URL validated at init time (#100)
-
-        const url = std.fmt.allocPrint(self.allocator, "{s}/v3/kv/deleterange", .{endpoint}) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(url);
-
+        // PERF-19: Base64 encode key using stack buffer (fallback to heap for oversized keys)
         const encoder = std.base64.standard;
         const encoded_len = encoder.Encoder.calcSize(key.len);
-        const encoded_key = self.allocator.alloc(u8, encoded_len) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(encoded_key);
+        var b64_stack_buf: [512]u8 = undefined;
+        var heap_encoded_key: ?[]u8 = null;
+        defer if (heap_encoded_key) |h| self.allocator.free(h);
+        const encoded_key = if (encoded_len <= b64_stack_buf.len)
+            b64_stack_buf[0..encoded_len]
+        else
+            (self.allocator.alloc(u8, encoded_len) catch return RemoteError.OutOfMemory);
+        if (encoded_len > b64_stack_buf.len) heap_encoded_key = encoded_key;
         _ = encoder.Encoder.encode(encoded_key, key);
 
-        const body = std.fmt.allocPrint(self.allocator, "{{\"key\":\"{s}\"}}", .{encoded_key}) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(body);
+        // PERF-18: Build JSON request body using stack buffer
+        var body_buf: [1024]u8 = undefined;
+        const body = std.fmt.bufPrint(&body_buf, "{{\"key\":\"{s}\"}}", .{encoded_key}) catch return RemoteError.OutOfMemory;
 
-        const response = self.makeRequest(url, body) catch return RemoteError.RequestFailed;
+        const response = self.makeRequest(uri, body) catch return RemoteError.RequestFailed;
         defer self.allocator.free(response);
     }
 
@@ -772,17 +836,21 @@ pub const Etcd = struct {
             return RemoteError.InvalidKey;
         }
 
-        const endpoint = self.options.endpoints[0];
+        // PERF-37: Use cached parsed URI instead of constructing URL string
+        var uri = self.cached_uris[0];
+        uri.path = .{ .raw = "/v3/kv/range" };
 
-        // URL validated at init time (#100)
-
-        const url = std.fmt.allocPrint(self.allocator, "{s}/v3/kv/range", .{endpoint}) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(url);
-
+        // PERF-19: Base64 encode key using stack buffer (fallback to heap for oversized keys)
         const encoder = std.base64.standard;
         const encoded_len = encoder.Encoder.calcSize(prefix.len);
-        const encoded_key = self.allocator.alloc(u8, encoded_len) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(encoded_key);
+        var key_b64_stack: [512]u8 = undefined;
+        var heap_encoded_key: ?[]u8 = null;
+        defer if (heap_encoded_key) |h| self.allocator.free(h);
+        const encoded_key = if (encoded_len <= key_b64_stack.len)
+            key_b64_stack[0..encoded_len]
+        else
+            (self.allocator.alloc(u8, encoded_len) catch return RemoteError.OutOfMemory);
+        if (encoded_len > key_b64_stack.len) heap_encoded_key = encoded_key;
         _ = encoder.Encoder.encode(encoded_key, prefix);
 
         // Range end for prefix query (increment last byte)
@@ -802,23 +870,37 @@ pub const Etcd = struct {
             }
         }
         defer self.allocator.free(range_end);
+
+        // PERF-19: Base64 encode range_end using stack buffer
         const encoded_end_len = encoder.Encoder.calcSize(range_end.len);
-        const encoded_end = self.allocator.alloc(u8, encoded_end_len) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(encoded_end);
+        var end_b64_stack: [512]u8 = undefined;
+        var heap_encoded_end: ?[]u8 = null;
+        defer if (heap_encoded_end) |h| self.allocator.free(h);
+        const encoded_end = if (encoded_end_len <= end_b64_stack.len)
+            end_b64_stack[0..encoded_end_len]
+        else
+            (self.allocator.alloc(u8, encoded_end_len) catch return RemoteError.OutOfMemory);
+        if (encoded_end_len > end_b64_stack.len) heap_encoded_end = encoded_end;
         _ = encoder.Encoder.encode(encoded_end, range_end);
 
-        const body = std.fmt.allocPrint(self.allocator, "{{\"key\":\"{s}\",\"range_end\":\"{s}\"}}", .{ encoded_key, encoded_end }) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(body);
+        // PERF-18: Build JSON request body using stack buffer
+        var body_buf: [1024]u8 = undefined;
+        const body = std.fmt.bufPrint(&body_buf, "{{\"key\":\"{s}\",\"range_end\":\"{s}\"}}", .{ encoded_key, encoded_end }) catch blk: {
+            // Fallback to heap for oversized body
+            break :blk std.fmt.allocPrint(self.allocator, "{{\"key\":\"{s}\",\"range_end\":\"{s}\"}}", .{ encoded_key, encoded_end }) catch return RemoteError.OutOfMemory;
+        };
+        const body_is_heap = body.ptr != &body_buf;
+        defer if (body_is_heap) self.allocator.free(body);
 
-        const response = self.makeRequest(url, body) catch return RemoteError.RequestFailed;
+        const response = self.makeRequest(uri, body) catch return RemoteError.RequestFailed;
         defer self.allocator.free(response);
 
         return self.parseEtcdRangeResponse(response);
     }
 
-    fn makeRequest(self: *Etcd, url: []const u8, body: []const u8) ![]u8 {
-        const uri = Uri.parse(url) catch return error.InvalidUri;
-
+    /// PERF-37: Accepts a pre-parsed std.Uri instead of a URL string.
+    /// PERF-33: Uses cached_auth_header instead of rebuilding per request.
+    fn makeRequest(self: *Etcd, uri: std.Uri, body: []const u8) ![]u8 {
         // Build extra headers (User-Agent + optional Authorization)
         var extra_headers_buf: [2]http.Header = undefined;
         var extra_headers_len: usize = 0;
@@ -831,18 +913,8 @@ pub const Etcd = struct {
         extra_headers_len += 1;
 
         // Security: Wire etcd basic auth credentials into requests (#81)
-        const auth_header = buildBasicAuthHeader(
-            self.allocator,
-            self.options.username,
-            self.options.password,
-        ) catch |err| switch (err) {
-            RemoteError.InvalidConfiguration => return error.InvalidConfiguration,
-            RemoteError.OutOfMemory => return error.OutOfMemory,
-            else => return error.RequestFailed,
-        };
-        defer if (auth_header) |h| self.allocator.free(h);
-
-        if (auth_header) |header_value| {
+        // PERF-33: Use cached auth header built at init time
+        if (self.cached_auth_header) |header_value| {
             extra_headers_buf[extra_headers_len] = .{
                 .name = "Authorization",
                 .value = header_value,
@@ -973,6 +1045,8 @@ pub const Consul = struct {
     client: http.Client,
     /// Arena for response storage
     arena: std.heap.ArenaAllocator,
+    /// PERF-37: Address URI parsed at init time to avoid re-parsing per request.
+    cached_uri: std.Uri,
 
     pub fn init(allocator: Allocator, options: ConsulOptions) RemoteError!Consul {
         // Security: Validate address URL at init time (#100)
@@ -988,11 +1062,15 @@ pub const Consul = struct {
         // Security: Warn when TLS certificate verification is disabled (CWE-295)
         warnIfTlsSkipVerify(options.security);
 
+        // PERF-37: Parse address URI once at init time instead of per request
+        const cached_uri = Uri.parse(options.address) catch return RemoteError.InvalidUrl;
+
         return .{
             .allocator = allocator,
             .options = options,
             .client = http.Client{ .allocator = allocator },
             .arena = std.heap.ArenaAllocator.init(allocator),
+            .cached_uri = cached_uri,
         };
     }
 
@@ -1009,12 +1087,14 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // URL validated at init time (#100)
+        // PERF-35/37: Build URL path in stack buffer and set on cached URI
+        var path_buf: [512]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{key}) catch return RemoteError.OutOfMemory;
+        var uri = self.cached_uri;
+        uri.path = .{ .raw = path };
+        uri.query = .{ .raw = "raw" };
 
-        const url = std.fmt.allocPrint(self.allocator, "{s}/v1/kv/{s}?raw", .{ self.options.address, key }) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(url);
-
-        const response = self.makeGetRequest(url) catch |err| {
+        const response = self.makeGetRequest(uri) catch |err| {
             if (err == error.NotFound) return null;
             return RemoteError.RequestFailed;
         };
@@ -1034,12 +1114,14 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // URL validated at init time (#100)
+        // PERF-35/37: Build URL path in stack buffer and set on cached URI
+        var path_buf: [512]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{key}) catch return RemoteError.OutOfMemory;
+        var uri = self.cached_uri;
+        uri.path = .{ .raw = path };
+        uri.query = null;
 
-        const url = std.fmt.allocPrint(self.allocator, "{s}/v1/kv/{s}", .{ self.options.address, key }) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(url);
-
-        _ = self.makePutRequest(url, value) catch return RemoteError.RequestFailed;
+        _ = self.makePutRequest(uri, value) catch return RemoteError.RequestFailed;
     }
 
     /// Delete a key from Consul KV store
@@ -1050,12 +1132,14 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // URL validated at init time (#100)
+        // PERF-35/37: Build URL path in stack buffer and set on cached URI
+        var path_buf: [512]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{key}) catch return RemoteError.OutOfMemory;
+        var uri = self.cached_uri;
+        uri.path = .{ .raw = path };
+        uri.query = null;
 
-        const url = std.fmt.allocPrint(self.allocator, "{s}/v1/kv/{s}", .{ self.options.address, key }) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(url);
-
-        _ = self.makeDeleteRequest(url) catch return RemoteError.RequestFailed;
+        _ = self.makeDeleteRequest(uri) catch return RemoteError.RequestFailed;
     }
 
     /// Get all keys with a prefix
@@ -1066,12 +1150,14 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // URL validated at init time (#100)
+        // PERF-35/37: Build URL path in stack buffer and set on cached URI
+        var path_buf: [512]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{prefix}) catch return RemoteError.OutOfMemory;
+        var uri = self.cached_uri;
+        uri.path = .{ .raw = path };
+        uri.query = .{ .raw = "recurse" };
 
-        const url = std.fmt.allocPrint(self.allocator, "{s}/v1/kv/{s}?recurse", .{ self.options.address, prefix }) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(url);
-
-        const response = self.makeGetRequest(url) catch return RemoteError.RequestFailed;
+        const response = self.makeGetRequest(uri) catch return RemoteError.RequestFailed;
         defer self.allocator.free(response);
 
         return self.parseConsulKVList(response, prefix);
@@ -1085,19 +1171,21 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // URL validated at init time (#100)
+        // PERF-35/37: Build URL path in stack buffer and set on cached URI
+        var path_buf: [512]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{prefix}) catch return RemoteError.OutOfMemory;
+        var uri = self.cached_uri;
+        uri.path = .{ .raw = path };
+        uri.query = .{ .raw = "keys" };
 
-        const url = std.fmt.allocPrint(self.allocator, "{s}/v1/kv/{s}?keys", .{ self.options.address, prefix }) catch return RemoteError.OutOfMemory;
-        defer self.allocator.free(url);
-
-        const response = self.makeGetRequest(url) catch return RemoteError.RequestFailed;
+        const response = self.makeGetRequest(uri) catch return RemoteError.RequestFailed;
         defer self.allocator.free(response);
 
         return self.parseKeysList(response);
     }
 
-    fn makeGetRequest(self: *Consul, url: []const u8) ![]u8 {
-        const uri = Uri.parse(url) catch return error.InvalidUri;
+    /// PERF-37: Accepts a pre-constructed std.Uri instead of a URL string.
+    fn makeGetRequest(self: *Consul, uri: std.Uri) ![]u8 {
 
         // Build extra headers for security
         var extra_headers_buf: [2]http.Header = undefined;
@@ -1152,8 +1240,8 @@ pub const Consul = struct {
         return response_storage.toOwnedSlice() catch return error.OutOfMemory;
     }
 
-    fn makePutRequest(self: *Consul, url: []const u8, body: []const u8) ![]u8 {
-        const uri = Uri.parse(url) catch return error.InvalidUri;
+    /// PERF-37: Accepts a pre-constructed std.Uri instead of a URL string.
+    fn makePutRequest(self: *Consul, uri: std.Uri, body: []const u8) ![]u8 {
 
         // Build extra headers for security
         var extra_headers_buf: [2]http.Header = undefined;
@@ -1203,8 +1291,8 @@ pub const Consul = struct {
         return response_storage.toOwnedSlice() catch return error.OutOfMemory;
     }
 
-    fn makeDeleteRequest(self: *Consul, url: []const u8) ![]u8 {
-        const uri = Uri.parse(url) catch return error.InvalidUri;
+    /// PERF-37: Accepts a pre-constructed std.Uri instead of a URL string.
+    fn makeDeleteRequest(self: *Consul, uri: std.Uri) ![]u8 {
 
         // Build extra headers for security
         var extra_headers_buf: [2]http.Header = undefined;
