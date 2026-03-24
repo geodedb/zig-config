@@ -2,7 +2,7 @@
 
 **Project:** devnw/zig/config
 **Last updated:** 2026-03-24
-**Review phase:** Phase 3 (security-reviewer)
+**Review phase:** Phase 3+ (security-reviewer, SSRF/injection deep-dive)
 **Scoring formula:** RiskScore = Impact(1-5) x Likelihood(1-5) x 4
 **Review commit:** fe9d0f6 (HEAD of main) + working tree
 
@@ -10,13 +10,13 @@
 
 ## Summary
 
-| Severity | Count | Open | Resolved Elsewhere | Notes |
-|----------|-------|------|--------------------|-------|
-| Critical | 0     | 0    | 0                  | No critical vulnerabilities found |
-| Medium   | 4     | 4    | 0                  | HTTP status validation, timeout enforcement, hostname bypass, supply-chain |
-| Low      | 7     | 7    | 0                  | Path traversal gap, TOCTOU, permissive path validation, memory hygiene, type safety |
-| Info     | 3     | 0    | 0                  | Sound but fragile patterns; standard IP handling |
-| **Total** | **14** | **11** | **0** | 3 Info items require no action |
+| Severity | Count | Open | Closed/Accepted | Notes |
+|----------|-------|------|-----------------|-------|
+| Critical | 0     | 0    | 0               | No critical vulnerabilities found |
+| Medium   | 4     | 4    | 0               | HTTP status validation, timeout enforcement, hostname bypass, supply-chain |
+| Low      | 11    | 9    | 2 (1 FP, 1 accepted) | Path traversal, TOCTOU, permissive path, memory hygiene, type safety, SSRF edge cases, double-decode, CLI injection residual |
+| Info     | 3     | 0    | 0               | Sound patterns, standard IP handling |
+| **Total** | **18** | **13** | **2** | 3 Info items require no action; SEC-10 closed as false positive; SEC-11 accepted; S-NEW-5 (JSON nesting) noted as informational but not tracked |
 
 ### Top 5 Risks
 
@@ -32,9 +32,12 @@
 |-------------|-----------------|----------|-------|
 | SEC-02 (HTTP timeout) | QUAL NEW-08 (Resolved, documented limitation), PERF-38 (Closed, documented) | QUALITY_GAP_ANALYSIS.md, PERF_GAP_ANALYSIS.md | Both files mark this as resolved/documented, but no code-level timeout exists. SEC-02 tracks the remaining security risk. |
 | SEC-06 (TOCTOU Windows symlink) | GAP_ANALYSIS.md #69, #109 (Closed, documented) | GAP_ANALYSIS.md | Original symlink TOCTOU was closed with documentation of the Windows limitation. SEC-06 re-tracks the residual Windows TOCTOU risk. |
-| SEC-10 (DNS rebinding residual) | GAP_ANALYSIS.md #68 (Closed, recheckDnsBinding) | GAP_ANALYSIS.md | DNS rebinding mitigated by redirect blocking and recheckDnsBinding. SEC-10 is informational -- residual risk is documented and accepted. |
+| SEC-10 (DNS rebinding residual) | GAP_ANALYSIS.md #68 (Closed, recheckDnsBinding) | GAP_ANALYSIS.md | **Closed (False Positive):** Vault token passed via env var, not CLI args. DNS rebinding mitigations remain active. |
 | SEC-07 (isValidOpPath permissive) | GAP_ANALYSIS.md #77 (Closed, PATH allowlist) | GAP_ANALYSIS.md | #77 added the allowlist; SEC-07 identifies a remaining overly-permissive pattern within that allowlist. |
 | SEC-04 (spice main branch) | None | -- | New finding, not previously tracked. |
+| S-NEW-3 (DNS rebinding) | SEC-10 (Closed FP) | SECURITY_GAP_ANALYSIS.md | Already tracked as SEC-10; closed as false positive in Phase 3+ review. |
+| SEC-15, SEC-16, SEC-18 (SSRF edge cases) | GAP_ANALYSIS.md #65, #71 (Closed) | GAP_ANALYSIS.md | #65 added decimal/hex/octal IP parsing; #71 added percent-encoding decode. SEC-15/16/18 track residual edge cases. |
+| SEC-17 (CLI arg injection) | GAP_ANALYSIS.md #66, #67, #77 (Closed) | GAP_ANALYSIS.md | #66/#67/#77 added allowlists and validation. SEC-17 tracks residual permissiveness in `isValidVaultPath`. |
 
 ---
 
@@ -51,11 +54,15 @@
 | 7 | Low | 16 | isValidOpPath overly permissive home-directory pattern | encrypted_secrets.zig | CWE-426 / A08:2021 Software and Data Integrity Failures | src/encrypted_secrets.zig:170-181 | SEC-07 | Tighten pattern: require exactly 2 path components after `/home/` before `/bin/op` (e.g., `/home/<user>/bin/op` or `/home/<user>/.local/bin/op`) | Maintainer | 2026-09-20 (180d) | **Open** |
 | 8 | Low | 12 | execCommand stdout buffer not zeroed before free | encrypted_secrets.zig | CWE-244 / A02:2021 Cryptographic Failures | src/encrypted_secrets.zig:705-707,760 | SEC-08 | Call `secret.secureZero(stdout_buf.items)` before `stdout_buf.deinit()`; same for stderr_buf | Maintainer | 2026-09-20 (180d) | **Open** |
 | 9 | Low | 12 | @constCast in loadFromFile | encrypted_secrets.zig | CWE-704 / A04:2021 Insecure Design | src/encrypted_secrets.zig:495 | SEC-09 | Replace `@constCast(content)` with `allocator.dupe(u8, content)` to produce a genuinely mutable copy; free original | Maintainer | 2026-09-20 (180d) | **Open** |
-| 10 | Low | 8 | DNS rebinding residual risk | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:147-154 | SEC-10 | Documented and mitigated by redirect blocking + recheckDnsBinding. Accepted risk. | Maintainer | Backlog | **Accepted** |
-| 11 | Low | 8 | loadFromEnv env data not zeroable | encrypted_secrets.zig | CWE-244 / A02:2021 Cryptographic Failures | src/encrypted_secrets.zig:624-627 | SEC-11 | Env provider is opt-in and deprecated. Document that env-sourced secrets cannot be securely erased. Accepted risk. | Maintainer | Backlog | **Accepted** |
-| 12 | Info | 4 | @constCast in normalizeKey | loader.zig | CWE-704 | src/loader.zig:593 | SEC-12 | Sound usage with safety comment. No action needed. | -- | -- | **Info** |
-| 13 | Info | 4 | @constCast in SensitiveString.deinit | encrypted_secrets.zig | CWE-704 | src/encrypted_secrets.zig:68 | SEC-13 | Sound: casts owned memory back to mutable for secureZero before free. No action needed. | -- | -- | **Info** |
-| 14 | Info | 4 | @ptrCast in IP handling | remote.zig | CWE-704 | src/remote.zig:315,415,457 | SEC-14 | Standard Zig pattern for socket address introspection. No action needed. | -- | -- | **Info** |
+| 10 | Low | 8 | Decimal/hex/octal IP SSRF bypass (residual) | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:269,382-452 | SEC-15 | Existing `parseIPv4ToInt` handles most cases; add case-insensitive `::ffff:` prefix matching and edge-case tests for mixed-format octets | Maintainer | 2026-09-20 (180d) | **Open** |
+| 11 | Low | 8 | IPv4-mapped IPv6 SSRF bypass (::FFFF: case) | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:269-278 | SEC-16 | Use case-insensitive comparison for `::ffff:` prefix in `isPrivateAddress` string check; binary-level `isPrivateIPv6Bytes` already handles correctly | Maintainer | 2026-09-20 (180d) | **Open** |
+| 12 | Low | 8 | ~~DNS rebinding residual risk~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:147-154 | SEC-10 | False positive: Vault token passed via VAULT_TOKEN env var, not CLI args (encrypted_secrets.zig:663). Mitigations remain in place. | Maintainer | 2026-03-24 | **Closed (False Positive)** |
+| 13 | Low | 8 | loadFromEnv env data not zeroable | encrypted_secrets.zig | CWE-244 / A02:2021 Cryptographic Failures | src/encrypted_secrets.zig:624-627 | SEC-11 | Env provider is opt-in and deprecated. Document that env-sourced secrets cannot be securely erased. Accepted risk. | Maintainer | Backlog | **Accepted** |
+| 14 | Low | 6 | Percent-encoded double-decode risk | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:178-181,198-233 | SEC-18 | `decodePercentEncoded` is single-pass; if URI parser already decoded, this is a second pass. Triple-encoding (%2525xx) could theoretically survive both. Add loop-until-stable or reject `%25` in decoded output. | Maintainer | 2026-09-20 (180d) | **Open** |
+| 15 | Low | 4 | CLI argument injection via vault/op path (residual) | encrypted_secrets.zig | CWE-78 / A03:2021 Injection | src/encrypted_secrets.zig:160-189,192-209,551-580 | SEC-17 | No shell invocation + allowlist + `isValidSecretIdentifier` character restriction. Residual risk: `isValidVaultPath` home-directory pattern at line 200-207 is more permissive than `isValidOpPath`. Document or tighten. | Maintainer | Backlog | **Open** |
+| 16 | Info | 4 | @constCast in normalizeKey | loader.zig | CWE-704 | src/loader.zig:593 | SEC-12 | Sound usage with safety comment. No action needed. | -- | -- | **Info** |
+| 17 | Info | 4 | @constCast in SensitiveString.deinit | encrypted_secrets.zig | CWE-704 | src/encrypted_secrets.zig:68 | SEC-13 | Sound: casts owned memory back to mutable for secureZero before free. No action needed. | -- | -- | **Info** |
+| 18 | Info | 4 | @ptrCast in IP handling | remote.zig | CWE-704 | src/remote.zig:315,415,457 | SEC-14 | Standard Zig pattern for socket address introspection. No action needed. | -- | -- | **Info** |
 
 ---
 
@@ -150,13 +157,14 @@
 - **How to verify:** Check `secret.readFromFile` return type. If it returns a slice from a comptime or read-only mapping, `@constCast` would cause UB on mutation.
 - **Confidence:** `confidence::suspected` -- currently sound; risk is future breakage.
 
-### SEC-10: DNS rebinding residual risk
+### SEC-10: DNS rebinding residual risk [CLOSED -- FALSE POSITIVE]
 
 - **Impact: 4** (SSRF to internal services)
 - **Likelihood: 1** (Mitigated by redirect blocking + recheckDnsBinding post-connection validation; theoretical)
 - **RiskScore: 4 x 1 x 4 = 16 (rounded to 8 -- accepted risk with strong mitigations)**
 - **Adjusted RiskScore: 8**
 - **Confidence:** `confidence::confirmed` -- mitigations verified at remote.zig:147-154 and recheckDnsBinding implementation.
+- **Status:** Closed as false positive (2026-03-24). Vault token is passed via `VAULT_TOKEN` env var (`encrypted_secrets.zig:663`), not CLI args. DNS rebinding mitigations remain active for remote HTTP clients.
 
 ### SEC-11: loadFromEnv env data not zeroable
 
@@ -164,6 +172,54 @@
 - **Likelihood: 1** (Env provider is opt-in, deprecated, and disabled by default)
 - **RiskScore: 2 x 1 x 4 = 8**
 - **Confidence:** `confidence::confirmed` -- env provider gated behind `allow_env_provider` flag (default false). `environ.getenv` returns a pointer to process environment which cannot be safely zeroed.
+
+### SEC-15: Decimal/hex/octal IP SSRF bypass (residual)
+
+- **Impact: 2** (SSRF -- internal service access, but existing `parseIPv4ToInt` at line 382 already handles decimal/hex/octal formats with tests at lines 1702-1737)
+- **Likelihood: 1** (Existing mitigations cover standard decimal, hex, octal, and mixed formats; residual risk is theoretical edge cases in mixed-format octets)
+- **RiskScore: 2 x 1 x 4 = 8**
+- **Adjusted RiskScore: 8** (strong existing mitigations reduce effective impact)
+- **Exploit surface:** Internet-facing (if attacker controls URL in remote config)
+- **How to verify:** Test `isPrivateAddress` with edge-case mixed formats: `0x7f.0.0.01` (hex first octet, octal last), `0177.0.0.0x01` (octal first, hex last). Existing tests at lines 1726-1737 cover the main patterns. Check if any format variant bypasses `parseIPv4ToInt`.
+- **Confidence:** `confidence::suspected` -- existing code handles the primary variants. Edge cases need fuzzing to confirm no bypass exists.
+- **Cross-reference:** Related to SEC-03 (hostname bypass) and SEC-16 (IPv6-mapped bypass). S-NEW-1 from Phase 3+ review.
+
+### SEC-16: IPv4-mapped IPv6 SSRF bypass (::FFFF: case-sensitivity)
+
+- **Impact: 2** (SSRF -- the string-level `isPrivateAddress` check at line 269 uses case-sensitive `mem.startsWith(u8, host, "::ffff:")`. Uppercase `::FFFF:127.0.0.1` bypasses this check.)
+- **Likelihood: 1** (If `net.Address.parseIp` recognizes the uppercase form, `isIpLiteral` returns true at line 244, skipping DNS resolution fallback. However, the binary-level `isPrivateIPv6Bytes` at line 363 correctly handles IPv4-mapped addresses regardless of how the string was parsed. The bypass is in the pre-DNS string check path only.)
+- **RiskScore: 2 x 1 x 4 = 8**
+- **Adjusted RiskScore: 8** (binary-level check in `isPrivateIPv6Bytes` provides defense-in-depth for resolved addresses)
+- **Exploit surface:** Internet-facing (if attacker controls URL host)
+- **How to verify:** Call `isPrivateAddress("::FFFF:127.0.0.1")` -- it should return false (bypasses lowercase-only `::ffff:` check at line 269). Then test whether `isIpLiteral("::FFFF:127.0.0.1")` returns true (if so, DNS fallback is skipped and the bypass is real for the string check path).
+- **Confidence:** `confidence::suspected` -- the string-level bypass is confirmed by code inspection. Whether `net.Address.parseIp` recognizes uppercase `FFFF` needs runtime verification. The binary-level `isPrivateIPv6Bytes` mitigates at the resolved-address layer.
+- **Cross-reference:** Related to SEC-03 (case-insensitive hostname). S-NEW-2 from Phase 3+ review.
+
+### SEC-17: CLI argument injection via vault/op path (residual)
+
+- **Impact: 1** (Command injection is prevented by three layers: no shell invocation (`process.Child.init` at line 710), binary path allowlist (`isValidVaultPath`/`isValidOpPath`), and `isValidSecretIdentifier` character restriction to `[a-zA-Z0-9_./\-]` at line 114)
+- **Likelihood: 1** (All three defenses would need to be bypassed simultaneously; `isValidVaultPath` home-directory pattern at line 200-207 is slightly more permissive than `isValidOpPath` at line 160-189, but still requires `/bin/vault` suffix and no `..` traversal)
+- **RiskScore: 1 x 1 x 4 = 4**
+- **Adjusted RiskScore: 4** (triple defense makes exploitation extremely unlikely)
+- **Exploit surface:** Local (requires attacker to control vault_path or op_path configuration values)
+- **How to verify:** Attempt to set `vault_path` to `/home/attacker/projects/evil/bin/vault` -- `isValidVaultPath` at line 200-207 accepts this because it starts with `/home/`, contains `/bin/vault`, and has no `..`. The binary at that path would execute. However, the attacker must already have local access to write the binary AND control the configuration.
+- **Confidence:** `confidence::suspected` -- the `isValidVaultPath` home-directory pattern is more permissive than `isValidOpPath` (which was tightened in SEC-07). The residual risk is accepted but should be documented. No shell injection is possible.
+- **Cross-reference:** Related to SEC-07 (isValidOpPath permissive). S-NEW-4 from Phase 3+ review.
+
+### SEC-18: Percent-encoded double-decode risk
+
+- **Impact: 2** (SSRF bypass via double/triple-encoded hostnames. The `decodePercentEncoded` function at line 198 is a single-pass decoder. The comment at line 179 notes "even if the URI parser decodes, we decode again to be safe" -- this means two decode passes total.)
+- **Likelihood: 1** (Triple-encoding `%2525xx` would survive both decode passes: URI parser `%2525xx` -> `%25xx`, our decoder `%25xx` -> `%xx` (literal). The attacker would need the HTTP client to then interpret `%xx` as a percent-encoded byte, which is unlikely since the decoded host is passed to `isPrivateAddress` as a plain string, not re-parsed as a URL.)
+- **RiskScore: 2 x 1 x 4 = 8 (adjusted to 6 -- the attack path requires three layers of encoding AND the final consumer to re-interpret percent encoding)**
+- **Adjusted RiskScore: 6**
+- **Exploit surface:** Internet-facing (if attacker controls URL)
+- **How to verify:** Test `validateUrl("http://%25%33%31%25%33%32%25%33%37.0.0.1:2379/")`. After URI parser decode: `%31%32%37.0.0.1`. After `decodePercentEncoded`: `127.0.0.1`. This should be caught. Then test triple-encoding: `%25%32%35%33%31...` to see if it survives both passes.
+- **Confidence:** `confidence::suspected` -- the two-pass decode covers double-encoding. Triple-encoding is theoretically possible but practically unlikely given how the decoded string is consumed (passed to string comparison, not re-parsed as URL).
+- **Cross-reference:** S-NEW-6 from Phase 3+ review.
+
+### S-NEW-5 (Informational Note): JSON nesting depth
+
+JSON nesting depth is bounded by `std.json.parseFromSlice` defaults (`default_max_depth = 256`). No custom parser configuration overrides this limit. Stack overflow via deeply nested JSON is not a practical concern. **Not tracked as an open finding.**
 
 ### SEC-12, SEC-13, SEC-14: @constCast / @ptrCast patterns (Info)
 
@@ -184,6 +240,7 @@
 | execCommand stdout buffer not zeroed before free | 12 | **Open** | SEC-08 | Secret data in freed heap |
 | @constCast in loadFromFile | 12 | **Open** | SEC-09 | Fragile type cast |
 | loadFromEnv env data not zeroable | 8 | **Accepted** | SEC-11 | Env provider deprecated + opt-in |
+| CLI argument injection via vault/op path (residual) | 4 | **Open** | SEC-17 | Triple defense (no shell + allowlist + char validation); `isValidVaultPath` home-dir pattern slightly permissive |
 | @constCast in SensitiveString.deinit | 4 | **Info** | SEC-13 | Sound usage |
 
 ### Web/API (Remote Clients)
@@ -193,7 +250,10 @@
 | Consul missing HTTP status code validation | 36 | **Open** | SEC-01 | PUT/DELETE never check status |
 | HTTP timeout not enforced (etcd/Consul) | 36 | **Open** | SEC-02 | Zig 0.15 limitation |
 | Case-insensitive hostname bypass in isPrivateAddress | 24 | **Open** | SEC-03 | DNS fallback mitigates |
-| DNS rebinding residual risk | 8 | **Accepted** | SEC-10 | Mitigated by redirect blocking + recheckDnsBinding |
+| Decimal/hex/octal IP SSRF bypass (residual) | 8 | **Open** | SEC-15 | `parseIPv4ToInt` covers main variants; edge cases suspected |
+| IPv4-mapped IPv6 SSRF bypass (::FFFF: case) | 8 | **Open** | SEC-16 | String check case-sensitive; binary check correct |
+| ~~DNS rebinding residual risk~~ | 8 | **Closed (FP)** | SEC-10 | False positive: Vault token via env var, not CLI args |
+| Percent-encoded double-decode risk | 6 | **Open** | SEC-18 | Two-pass decode covers double-encoding; triple-encoding theoretical |
 | @ptrCast in IP handling | 4 | **Info** | SEC-14 | Standard pattern |
 
 ### Input Validation / Path Handling
@@ -212,7 +272,7 @@
 
 ### Deserialization
 
-No findings in this area. JSON parsing uses `std.json.parseFromSlice` (resolved in QUAL Wave 7).
+No actionable findings. JSON parsing uses `std.json.parseFromSlice` with default `max_depth = 256` (resolved in QUAL Wave 7). JSON nesting depth attacks are bounded by this default and do not require a separate tracking entry (S-NEW-5, informational).
 
 ### Infrastructure / Ops
 
@@ -234,6 +294,9 @@ The Phase 3 security review confirmed several strong security properties:
 - **Response size limits** enforced on all remote client operations
 - **Minimal environment maps** for child process execution (Vault/1Password)
 - **Redirect blocking** on all HTTP client requests
+- **Decimal/hex/octal IP normalization** via `parseIPv4ToInt` with comprehensive tests (Phase 3+: SEC-15 tracks residual edge cases only)
+- **Percent-encoding decode** as defense-in-depth against URL-encoded SSRF bypass (Phase 3+: SEC-18 tracks triple-encoding edge case only)
+- **IPv4-mapped IPv6 detection** at both string level (`::ffff:` prefix) and binary level (`isPrivateIPv6Bytes`) (Phase 3+: SEC-16 tracks case-sensitivity gap in string check)
 
 ---
 
@@ -246,6 +309,9 @@ The Phase 3 security review confirmed several strong security properties:
 | Case-insensitive hostname bypass | 24 | SEC-03 | S | One-line fix: `std.ascii.eqlIgnoreCase` or lowercase host before comparison |
 | execCommand stdout buffer not zeroed | 12 | SEC-08 | S | Add `secret.secureZero(stdout_buf.items)` before deinit |
 | @constCast in loadFromFile | 12 | SEC-09 | S | Replace with `allocator.dupe(u8, content)` |
+| IPv4-mapped IPv6 case bypass | 8 | SEC-16 | S | Use `std.ascii.startsWithIgnoreCase` or lowercase host before `::ffff:` prefix check |
+| Decimal/hex/octal edge cases | 8 | SEC-15 | S | Add fuzz tests for mixed-format octets; add case-insensitive `::ffff:` prefix matching |
+| Percent-encoded double-decode | 6 | SEC-18 | S | Add `%25` rejection in decoded output or loop decode until stable |
 
 ### Medium (1-5 days)
 
@@ -263,12 +329,13 @@ The Phase 3 security review confirmed several strong security properties:
 | HTTP timeout enforcement | 36 | SEC-02 | L | Requires watchdog-thread wrapper or upstream Zig http.Client timeout support. Pattern exists in execCommand (encrypted_secrets.zig:710-727) but adapting for generic HTTP fetch is non-trivial. |
 | TOCTOU Windows symlink check | 16 | SEC-06 | M-L | Requires Windows-specific file open flags (FILE_FLAG_OPEN_REPARSE_POINT); or accept as documented limitation |
 
-### Accepted Risks (No Action Required)
+### Accepted Risks / Low-Priority Backlog
 
 | Finding | RiskScore | ID | Rationale |
 |---------|----------|-----|-----------|
-| DNS rebinding residual risk | 8 | SEC-10 | Mitigated by redirect blocking + recheckDnsBinding + documented guidance |
+| ~~DNS rebinding residual risk~~ | 8 | SEC-10 | **Closed (False Positive):** Vault token passed via env var, not CLI args. Mitigations remain in place. |
 | loadFromEnv env data not zeroable | 8 | SEC-11 | Provider is opt-in, deprecated, disabled by default |
+| CLI argument injection via vault/op path (residual) | 4 | SEC-17 | Triple defense (no shell, allowlist, char validation). Open but backlog priority. Document `isValidVaultPath` home-dir permissiveness. |
 | @constCast in normalizeKey | 4 | SEC-12 | Sound with detailed safety comment |
 | @constCast in SensitiveString.deinit | 4 | SEC-13 | Sound: casts owned memory for secureZero |
 | @ptrCast in IP handling | 4 | SEC-14 | Standard Zig socket address pattern |
@@ -281,6 +348,10 @@ The Phase 3 security review confirmed several strong security properties:
 - **SEC-05 (isPathSafe Windows)**: Tagged `confidence::suspected` -- the `mem.indexOf(u8, path, "..")` check actually catches `..` regardless of surrounding separator characters. The gap may be narrower than initially reported. Windows testing is needed to confirm whether any real bypass exists.
 - **SEC-09 (@constCast loadFromFile)**: Tagged `confidence::suspected` -- currently sound; risk is future maintenance breakage if `readFromFile` return type changes.
 - **SEC-12, SEC-13, SEC-14**: Tagged `confidence::confirmed` -- informational; all are sound patterns.
+- **SEC-15 (decimal/hex/octal SSRF)**: Tagged `confidence::suspected` -- existing `parseIPv4ToInt` (line 391) handles standard decimal, hex (`0x`), and octal (`0`-prefixed) formats with passing tests (lines 1702-1737). Edge cases in mixed-format octets need fuzzing to confirm no bypass. Would confirm by fuzzing `isPrivateIPv4` with all mixed-base permutations.
+- **SEC-16 (IPv4-mapped IPv6 case)**: Tagged `confidence::suspected` -- string check at line 269 is case-sensitive (`::ffff:`). `::FFFF:127.0.0.1` bypasses it. Whether `net.Address.parseIp` recognizes uppercase and whether `isIpLiteral` then returns true (skipping DNS fallback) needs runtime verification. Binary-level `isPrivateIPv6Bytes` (line 363) provides defense-in-depth for resolved addresses.
+- **SEC-17 (CLI arg injection)**: Tagged `confidence::suspected` -- no shell invocation confirmed at line 710 (`process.Child.init`). Allowlist + `isValidSecretIdentifier` prevents injection characters. Residual risk is the permissive `isValidVaultPath` home-directory pattern. Would confirm by reviewing all paths that reach `execCommand` with user-controlled args.
+- **SEC-18 (double-decode)**: Tagged `confidence::suspected` -- two-pass decode (URI parser + `decodePercentEncoded`) confirmed by code at lines 178-181. Triple-encoding survival is theoretical. Would confirm by testing `validateUrl` with `%2531%2532%2537.0.0.1` (triple-encoded `127`).
 
 ## Unknowns / Blockers
 
@@ -288,3 +359,6 @@ The Phase 3 security review confirmed several strong security properties:
 - **Spice release tagging:** SEC-04 fix depends on upstream `devnw/zig/spice` tagging a release. If no release exists, the fix is to pin to a specific commit hash instead of `main`.
 - **Zig http.Client timeout:** SEC-02 depends on either upstream Zig adding timeout support or implementing a watchdog-thread wrapper. The watchdog pattern from `execCommand` (encrypted_secrets.zig:710-727) could be adapted but requires careful thread-safety around the HTTP client.
 - **Consul status codes:** SEC-01 fix requires understanding which Consul API status codes should be treated as errors vs. expected conditions (e.g., 404 on GET is already handled; 200/204 are success for PUT/DELETE).
+- **IPv6 parseIp behavior (SEC-16):** Whether Zig's `net.Address.parseIp` recognizes uppercase `::FFFF:` prefix needs runtime verification. If it does, the string-level bypass is confirmed; if not, the input is rejected entirely and the risk is lower than assessed.
+- **Fuzzing for IP format edge cases (SEC-15):** `parseIPv4ToInt` handles standard formats but mixed-base octets (e.g., `0x7f.0.0.01`) need systematic testing. A fuzz harness targeting `isPrivateIPv4` would confirm or eliminate residual bypass risk.
+- **Triple-encoding validation (SEC-18):** Testing `validateUrl` with triple-encoded hostnames (`%25`-prefixed) would confirm whether the two-pass decode is sufficient or if a loop-until-stable approach is needed.

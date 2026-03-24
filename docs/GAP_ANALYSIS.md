@@ -1,6 +1,6 @@
 # GAP Analysis
 
-Last updated: 2026-03-24 (Wave 9 closure)
+Last updated: 2026-03-24 (Wave 9 closure + GAP-0059..0061 additions)
 Review commit: 65f3c93 (HEAD of main) + working tree
 Reviewed by: Security Code Review Agent (adversarial)
 
@@ -12,11 +12,11 @@ Reviewed by: Security Code Review Agent (adversarial)
 |----------|-------|------|--------|---------|-------------|
 | Critical | 0 | 0 | 0 | 0 | No critical vulnerabilities found |
 | High | 1 | 0 | 1 | 0 | Local code execution / high-impact secrets risk |
-| Medium | 12 | 0 | 11 | 1 | Auth gaps, DoS risks, symlink race conditions, SSRF edge cases |
-| Low | 9 | 0 | 7 | 2 | Hardening and policy alignment |
-| **Total** | **22** | **0** | **19** | **3** | |
+| Medium | 14 | 2 | 11 | 1 | Auth gaps, DoS risks, symlink race conditions, SSRF edge cases, loader/remote integration, sub-config views |
+| Low | 10 | 1 | 7 | 2 | Hardening, policy alignment, INI/Properties serialization |
+| **Total** | **25** | **3** | **19** | **3** | |
 
-All 14 original security findings have been resolved. 8 additional findings from Wave 9 review: 5 closed (SEC-01, SEC-03, SEC-07, SEC-08, SEC-09), 3 blocked (SEC-02, SEC-04, SEC-05/SEC-06). Resolution evidence is tracked in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
+All 14 original security findings have been resolved. 8 additional findings from Wave 9 review: 5 closed (SEC-01, SEC-03, SEC-07, SEC-08, SEC-09), 3 blocked (SEC-02, SEC-04, SEC-05/SEC-06). SEC-10 closed as false positive. 3 new feature/integration gaps (GAP-0059, GAP-0060, GAP-0061) remain open. Resolution evidence is tracked in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
 
 ### Top 5 Risks (all resolved)
 
@@ -45,6 +45,59 @@ All 14 original security findings have been resolved. 8 additional findings from
 | 13 | Low | 16 | ~~Pre-commit config malformed; hooks may not run~~ | dev workflow | CWE-693 | .pre-commit-config.yaml | [#83](https://gitlab.com/devnw/zig/config/-/issues/83) | Fixed YAML indentation; hooks properly configured | benjiv | 2026-07-29 | **Closed** |
 | 14 | Low | 16 | ~~File watcher TOCTOU race condition~~ | watch | CWE-367 | src/watch.zig:205+ | [#52](https://gitlab.com/devnw/zig/config/-/issues/52) | TOCTOU limitation documented in module comments; inherent to filesystem watching | benjiv | 2026-07-29 | **Closed** |
 
+## Open Gaps
+
+### GAP-0059: Loader-Remote Integration
+- **Issue:** TBD (skip-issues mode)
+- **Category:** Feature
+- **Severity:** Medium
+- **Requirement source:** Viper `ReadRemoteConfig` / `WatchRemoteConfig` API parity
+- **Current state (evidence):**
+  - `src/loader.zig` -- no imports or references to `remote.zig`; loader reads only from files, env, and CLI flags
+  - `src/remote.zig` -- exposes Etcd/Consul clients but requires manual instantiation and fetch by the caller
+- **Why this is a gap:** Users must manually fetch configuration from etcd/Consul via `remote.zig` and then feed results into the loader. Viper's `ReadRemoteConfig` integrates both steps transparently.
+- **Impact/Risk:** Higher friction for users migrating from Viper; manual wiring is error-prone and prevents automatic remote config reload.
+- **Recommended fix:** Add a `RemoteProvider` interface to `loader.zig` that accepts an Etcd or Consul client and calls `get`/`watch` internally, similar to Viper's `AddRemoteProvider` + `ReadRemoteConfig`.
+- **Acceptance criteria:**
+  - loader.zig can accept a remote provider and fetch config from etcd/Consul without manual wiring
+  - Existing file/env/CLI loading is unaffected
+  - Integration test demonstrates end-to-end remote config loading via the loader API
+
+### GAP-0060: INI/Properties Serialization
+- **Issue:** TBD (skip-issues mode)
+- **Category:** Feature
+- **Severity:** Low
+- **Requirement source:** Format parity -- serialize.zig supports JSON, YAML, TOML, env output
+- **Current state (evidence):**
+  - `src/serialize.zig` -- serialization output paths exist for JSON, YAML, TOML, and env formats
+  - INI and Properties formats can be parsed (read path) but have no write/serialize path
+- **Why this is a gap:** Asymmetric format support -- users who load INI or Properties config cannot round-trip (write back) in the same format.
+- **Impact/Risk:** Low. INI/Properties are less common in new projects, but the asymmetry may surprise users who expect read/write parity.
+- **Recommended fix:** Implement `serializeIni()` and `serializeProperties()` in serialize.zig, following the same pattern as existing serializers.
+- **Acceptance criteria:**
+  - serialize.zig can output INI format from the internal config tree
+  - serialize.zig can output Properties format from the internal config tree
+  - Round-trip test: parse INI -> serialize INI -> parse again -> compare
+
+### GAP-0061: Sub/Nested Config Views
+- **Issue:** TBD (skip-issues mode)
+- **Category:** Feature
+- **Severity:** Medium
+- **Requirement source:** Viper `Sub()` API parity
+- **Current state (evidence):**
+  - No `sub()` or equivalent method on the config struct that returns a scoped view of a nested key prefix
+  - Users must manually navigate the config tree to extract sub-sections
+- **Why this is a gap:** Viper's `Sub()` returns a new Viper instance scoped to a config sub-tree (e.g., `v.Sub("database")` returns only database-related keys). This is missing.
+- **Impact/Risk:** Medium. Sub-config views are commonly used in Go projects to pass scoped config to subsystems. Lack of this feature increases boilerplate and coupling.
+- **Recommended fix:** Add a `sub(prefix: []const u8) -> Config` method that returns a new Config instance rooted at the given key prefix, with all nested keys accessible as if they were top-level.
+- **Acceptance criteria:**
+  - Config struct exposes a `sub()` method that returns a scoped config view
+  - Nested keys under the prefix are accessible without the prefix in the returned view
+  - Changes to the parent config are reflected in the sub-view (or documented as snapshot behavior)
+  - Unit tests cover single-level and multi-level sub-tree extraction
+
+---
+
 ## Findings by Area
 
 ### App/API
@@ -55,6 +108,8 @@ All 14 original security findings have been resolved. 8 additional findings from
 | ~~Predictable temp file names in safeWriteConfig~~ | **Closed** | [#61](https://gitlab.com/devnw/zig/config/-/issues/61) | Crypto random temp names + O_EXCL |
 | ~~Serialize writes use default permissions~~ | **Closed** | [#75](https://gitlab.com/devnw/zig/config/-/issues/75) | 0o600 permissions on all file writes |
 | ~~File watcher TOCTOU race condition~~ | **Closed** | [#52](https://gitlab.com/devnw/zig/config/-/issues/52) | Documented; inherent to FS watching |
+| GAP-0060: INI/Properties Serialization | **Open** | TBD | INI/Properties can be parsed but not serialized; asymmetric format support |
+| GAP-0061: Sub/Nested Config Views | **Open** | TBD | Viper `Sub()` equivalent missing; no scoped config view API |
 
 ### Auth/Secrets
 
@@ -73,6 +128,7 @@ All 14 original security findings have been resolved. 8 additional findings from
 | ~~Remote client timeout_ms unused (DoS risk)~~ | **Closed** | [#80](https://gitlab.com/devnw/zig/config/-/issues/80) | applyRequestTimeouts wired in; Zig 0.15 limitation documented |
 | ~~Etcd username/password options ignored~~ | **Closed** | [#81](https://gitlab.com/devnw/zig/config/-/issues/81) | buildBasicAuthHeader implements HTTP Basic Auth |
 | ~~DNS rebinding attack surface in SSRF protection~~ | **Closed** | [#68](https://gitlab.com/devnw/zig/config/-/issues/68) | recheckDnsBinding validates post-connection IP |
+| GAP-0059: Loader-Remote Integration | **Open** | TBD | loader.zig has no integration with remote.zig; Viper ReadRemoteConfig not replicated |
 
 ### CI/CD
 
@@ -95,19 +151,22 @@ None identified beyond CI/CD and dev workflow items above.
 
 ## Quick wins / Medium / Strategic
 
-All items resolved. See [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md) for resolution details.
+Previous security items all resolved. See [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md) for resolution details. 3 new feature gaps remain open.
 
-### Quick wins (days) -- all resolved
+### Quick wins (days)
 - ~~Fix `.pre-commit-config.yaml` indentation and validate config in CI (#83).~~ **Closed**
 - ~~Add restrictive permissions (0o600) to serialize write helpers (#75).~~ **Closed**
 - ~~Remove or gate `env://` provider and align docs (#84).~~ **Closed**
+- GAP-0060: Implement INI/Properties serialization in serialize.zig. **Open**
 
-### Medium-term (weeks) -- all resolved
+### Medium-term (weeks)
 - ~~Apply Vault/1Password config fields to CLI execution or move to direct APIs (#76).~~ **Closed**
 - ~~Enforce timeouts and drain stderr for external secret commands (#79).~~ **Closed**
 - ~~Enforce HTTP timeouts for remote clients (#80).~~ **Closed** (limitation documented; Zig 0.15 constraint)
 - ~~Fix symlink handling with no-follow/exclusive opens and randomized temp files (#69, #61).~~ **Closed**
 - ~~Implement or explicitly reject etcd username/password options (#81).~~ **Closed**
+- GAP-0059: Integrate loader.zig with remote.zig for transparent remote config loading. **Open**
+- GAP-0061: Implement `sub()` method for scoped config views. **Open**
 
 ### Strategic (quarter) -- all resolved
 - ~~Replace CLI-based secret providers with direct SDK/API integrations for stronger auth/TLS controls (#76, #77, #79).~~ **Closed** (PATH allowlist + env map + timeout watchdog)
@@ -127,6 +186,7 @@ All items resolved. See [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md) for
 | SEC-07 | Low | ~~isValidOpPath too permissive~~ | encrypted_secrets.zig | Tightened to reject null bytes, control chars, shell metacharacters | **Closed** |
 | SEC-08 | Low | ~~stdout/stderr not secureZero'd~~ | encrypted_secrets.zig | `secureZero` on stdout/stderr buffers before free in `execCommand` | **Closed** |
 | SEC-09 | Low | ~~@constCast in encrypted_secrets~~ | encrypted_secrets.zig | Replaced with proper mutable allocation | **Closed** |
+| SEC-10 | Low | ~~DNS rebinding residual risk~~ | remote.zig | False positive: Vault token passed via VAULT_TOKEN env var, not CLI args (encrypted_secrets.zig:663) | **Closed (False Positive)** |
 
 ### Blocked
 

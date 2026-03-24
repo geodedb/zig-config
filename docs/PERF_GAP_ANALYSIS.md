@@ -1,6 +1,6 @@
 # Performance Gap Analysis -- zigconfig
 
-Last updated: 2026-03-24 (Wave 9 closure)
+Last updated: 2026-03-24 (Phase 5 review)
 
 ## Summary
 
@@ -8,14 +8,16 @@ Last updated: 2026-03-24 (Wave 9 closure)
 |-------------|-------|--------|----------|----------|------|
 | P1          | 5     | 4      | 1        | 0        | 0    |
 | P2          | 11    | 9      | 1        | 0        | 1    |
-| P3          | 14    | 14     | 0        | 0        | 0    |
-| Info        | 15    | 15     | 0        | 0        | 0    |
-| **Total**   | **45** | **42** | **2** | **0** | **1** |
+| P3          | 15    | 14     | 0        | 0        | 1    |
+| Info        | 19    | 15     | 4        | 0        | 0    |
+| **Total**   | **50** | **42** | **6** | **0** | **2** |
 
 4 legacy Info items superseded by higher-severity Phase 4 findings and excluded from counts above:
 PERF-22 superseded by PERF-28, PERF-23 superseded by PERF-32, PERF-20i superseded by PERF-37, PERF-21 superseded by PERF-38.
 
 Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re-opened 2 incompletely fixed items. Added 21 new findings from Phase 4 review.
+
+Phase 5 review applied 2026-03-24. Added 5 new findings from Phase 5 code-level review. 1 actionable (PERF-54), 4 informational/won't-do.
 
 ### Status corrections from Phase 4 verification
 - **PERF-14 (#126)**: Reopened Phase 4 -> **Closed** Wave 7. All three env functions now share a single `std.process.EnvMap` snapshot from `load()`.
@@ -103,6 +105,21 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | 4 | PERF-52 | Info | 12 | ~~Missing memory fence in initPool~~ | parallel.zig | `src/parallel.zig` -- `@fence(.seq_cst)` after `pool_allocator` write | Prevents data race between initPool and getPool across threads | -- | Added @fence(.seq_cst) for cross-thread visibility | benjiv | As capacity | **Closed** (Wave 9) |
 | 5 | PERF-53 | Info | 8 | ~~addFile lacks runtime guard in async.zig~~ | async.zig | `src/async.zig` -- `addFile` checks `self.result.state == .running` under mutex | Prevents programming error of adding files to running loader | -- | Added AlreadyRunning guard in addFile | benjiv | As capacity | **Closed** (Wave 9) |
 
+### Phase 5 New Findings
+
+| Rank | ID | PerfSeverity | PerfScore | Finding | Component | Evidence | Measurement | Issue | Fix Summary | Owner | SLA | Status |
+|------|-----|-------------|-----------|---------|-----------|----------|-------------|-------|-------------|-------|-----|--------|
+| 1 | PERF-54 | P3 | 12 | HashMap no capacity hint in diff `merge()` and `compareWithOptions()` | diff.zig | `src/diff.zig:124,146,434` -- `StringHashMap.init()` with no `ensureTotalCapacity`; input sizes known from `.count()` | Avoids O(log n) rehashes during map population; saves ~3-5 realloc+rehash cycles for 50+ key configs | -- | Add `ensureTotalCapacity(base.count() + overlay.count())` to `merge()` result map; add hints to `new_lower_index` and `seen_keys` in `compareWithOptions()` | benjiv | Backlog | **Open** |
+| 2 | PERF-55 | Info | 4 | HTTP connection reuse already works via std.http.Client pool | remote.zig | `src/remote.zig:655,1045` -- `http.Client{ .allocator = allocator }` manages connection pooling internally via `client.fetch()` | No action needed; connection pooling confirmed in PERF-7 (Closed Wave 4) | -- | No action -- already works. Duplicate of PERF-7 validation. | benjiv | As capacity | **Won't Do** (confirmed working) |
+| 3 | PERF-56 | Info | 4 | allocPrint in INI section loop negligible for realistic configs | loader.zig | `src/loader.zig:828,891` -- `allocPrint` for section.key construction; typical configs have < 20 sections x < 10 keys = < 200 allocs | Negligible: < 200 small allocs total; already mitigated in JSON/TOML paths by PERF-28 (Wave 7) | -- | No action -- cost is negligible for realistic config sizes; INI path retained for simplicity | benjiv | As capacity | **Won't Do** (negligible impact) |
+| 4 | PERF-57 | Info | 4 | Repeated toLower in merge path | merge.zig | `src/merge.zig` -- no `toLower`/`allocLowerString` calls found; merge.zig operates on exact keys only | No toLower calls exist in merge.zig; finding does not apply to current codebase | -- | No action -- merge.zig uses exact key matching; case-insensitive lowering is in diff.zig only (already optimized by PERF-25) | benjiv | As capacity | **Won't Do** (not applicable) |
+| 5 | PERF-58 | Info | 8 | Provenance tracker unbounded growth | provenance.zig | `src/provenance.zig:73,81` -- `StringHashMap(TrackedValue)` grows with each `set()` call; no explicit capacity bound | Bounded in practice by config struct field count (typically < 100 fields); memory is arena-managed and freed on `Loader.deinit()` | -- | Document: growth is bounded by number of unique config keys (struct fields); no fix needed | benjiv | As capacity | **Won't Do** (bounded by design) |
+
+Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming parse) were evaluated and rejected as non-findings:
+- P-NEW-5: `detectFormatFromContent` at `src/loader.zig:1144` is O(1) -- a few byte comparisons on the first characters. Not a performance concern.
+- P-NEW-6: Streaming parse is a design decision. File sizes are bounded by `limits.zig` (1MB max). Full buffering is appropriate for config files of this size.
+- P-NEW-7 (response storage duplication in remote): Standard allocate-parse-free pattern in `makeRequest()` at `src/remote.zig:904-936`. No duplication -- response is allocated once and freed after parsing.
+
 ---
 
 ## Findings by Area
@@ -145,6 +162,10 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | PERF-53 | 8 | ~~addFile lacks runtime guard~~ | Info | -- | **Closed** (Wave 9) |
 | PERF-22 | 4 | INI section.key allocPrint (see PERF-28) | Info | -- | Superseded by PERF-28 |
 | PERF-23 | 4 | Redundant prefix_with_dot (see PERF-32) | Info | -- | Superseded by PERF-32 |
+| PERF-54 | 12 | HashMap no capacity hint in diff `merge()`/`compareWithOptions()` | P3 | -- | **Open** |
+| PERF-56 | 4 | allocPrint in INI section loop negligible | Info | -- | **Won't Do** (negligible) |
+| PERF-57 | 4 | Repeated toLower in merge (not applicable) | Info | -- | **Won't Do** (N/A) |
+| PERF-58 | 8 | Provenance tracker unbounded growth (bounded by design) | Info | -- | **Won't Do** (bounded) |
 
 ### Infra (remote.zig -- Etcd/Consul networking)
 
@@ -162,6 +183,7 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | PERF-19 | 12 | ~~Base64 encode allocates per request~~ | Info | -- | **Closed** (Wave 8) |
 | PERF-20i | 12 | URI re-parsed on every request (see PERF-37) | Info | -- | Superseded by PERF-37 |
 | PERF-21 | 8 | No timeout config (see PERF-38) | Info | -- | Superseded by PERF-38 |
+| PERF-55 | 4 | HTTP connection reuse already works (duplicate of PERF-7) | Info | -- | **Won't Do** (confirmed working) |
 
 ### CI (build.zig, .gitlab-ci.yml)
 
@@ -189,6 +211,7 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | ~~Double getEnvMap~~ | PERF-39 | 28 | ~1 hour | ~~Single getEnvMap snapshot in load() passed to all env functions~~ **Closed** (Wave 7) |
 | ~~Double allocLowerString~~ | PERF-25 | 16 | ~30 min | ~~Reuse lowered key for both lookup and seen_keys insertion~~ **Closed** |
 | ~~prefix_with_dot~~ | PERF-32 | 12 | ~15 min | ~~Stack buffer bufPrint (256B) in sub/hasSub~~ **Closed** (Wave 8) |
+| HashMap capacity hints in diff | PERF-54 | 12 | ~30 min | Add `ensureTotalCapacity` to `merge()` result map and `compareWithOptions()` helper maps |
 
 ### Medium (1-5 days)
 
@@ -285,6 +308,11 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | PERF-25 (double allocLower) | `confidence::confirmed` | **Closed**: Refactored seen_keys to store lowered keys; O(1) lookup replaces O(n) containsKeyInsensitive |
 | PERF-41 (pool_mutex) | `confidence::confirmed` | **Closed** (Wave 8): Replaced with `std.once` for lock-free reads |
 | PERF-40 (page_allocator waste) | `confidence::confirmed` | **Closed** (Wave 8): Added `initPool()` with caller allocator + docs |
+| PERF-54 (HashMap capacity in diff) | `confidence::confirmed` | `StringHashMap.init()` at `diff.zig:124,146,434` with no `ensureTotalCapacity`; input sizes available via `.count()` |
+| PERF-55 (HTTP connection reuse) | `confidence::confirmed` | `http.Client` at `remote.zig:655,1045` manages pooling internally; validated by PERF-7 |
+| PERF-56 (INI allocPrint) | `confidence::confirmed` | `allocPrint` at `loader.zig:828,891`; < 200 allocs for realistic configs |
+| PERF-57 (toLower in merge) | `confidence::confirmed` | No `toLower`/`allocLowerString` in `merge.zig`; finding does not apply |
+| PERF-58 (provenance growth) | `confidence::confirmed` | `StringHashMap(TrackedValue)` at `provenance.zig:73`; bounded by struct field count |
 
 ### Top 5 Recommended Fixes
 
@@ -305,15 +333,20 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
    - Validation: `zig build bench` runs successfully; results are reproducible within 10% variance
    - Rollout risk: None -- additive, no production code changes
 
-5. ~~**PERF-36 -- Defer arena alloc in setFieldInner** (PerfScore 36, ~30 min)~~ **Closed** (already resolved)
-   - Verified: `setField` already dupes inside the match branch in current code
+5. **PERF-54 -- Add ensureTotalCapacity to diff.zig HashMaps** (PerfScore 12, ~30 min)
+   - Add `ensureTotalCapacity(base.count() + overlay.count())` to `merge()` result map at `diff.zig:434`
+   - Add `ensureTotalCapacity(new_config.count())` to `new_lower_index` at `diff.zig:124` and `seen_keys` at `diff.zig:146`
+   - Expected: Eliminates O(log n) rehashes during map population; ~3-5 fewer realloc cycles for 50+ key configs
+   - Validation: `zig build test` passes; no functional change
+   - Rollout risk: None -- purely additive capacity hint; no behavioral change
 
 ---
 
 ## Next Steps
 
-Only **1 item remains open** out of 45 total findings:
+**2 items remain open** out of 50 total findings:
 
-- **PERF-44** (P2, PerfScore 40): Build benchmark suite (`zig build bench`). Estimated effort: 3-5 days. This is the sole remaining performance gap. All P1, P3, and Info items are closed.
+- **PERF-44** (P2, PerfScore 40): Build benchmark suite (`zig build bench`). Estimated effort: 3-5 days. This is the highest-priority remaining performance gap. CI infrastructure is ready.
+- **PERF-54** (P3, PerfScore 12): Add `ensureTotalCapacity` to diff.zig `merge()` and `compareWithOptions()` HashMaps. Estimated effort: ~30 min. Quick win -- input sizes are known at call time.
 
-All other performance findings (42 closed, 2 won't do) have been resolved across Waves 1-9.
+All other performance findings (42 closed, 6 won't do) have been resolved across Waves 1-9 and Phase 5 review.

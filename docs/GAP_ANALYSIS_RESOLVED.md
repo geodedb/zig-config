@@ -1415,3 +1415,14 @@ The following gaps were closed in Wave 9 of implementation. 656 tests pass (328 
 - **Evidence:**
   - `src/loader.zig` -- `loadDotEnv` delegates to `dotenv.zig`
 - **Resolved date:** 2026-03-24 (Wave 9, verified)
+
+### SEC-10: DNS rebinding residual risk [RESOLVED -- FALSE POSITIVE]
+
+- **ID:** SEC-10
+- **Category:** Security (CWE-918)
+- **Resolution:** Closed as false positive. The original concern about credential exposure via DNS rebinding is not applicable -- the Vault token is passed via the `VAULT_TOKEN` environment variable to the child process, not via CLI arguments or network requests susceptible to rebinding. The DNS rebinding mitigations (redirect blocking + `recheckDnsBinding`) in remote.zig remain in place for actual network requests.
+- **Evidence:**
+  - `src/encrypted_secrets.zig:663` -- `env_map.put("VAULT_TOKEN", token.expose())` confirms token is passed via env var, not CLI args
+  - `src/encrypted_secrets.zig:560-575` -- `buildVaultEnvMap()` constructs environment-only credential passing
+  - `src/remote.zig:147-154` -- `recheckDnsBinding` mitigations remain active for remote HTTP clients
+- **Resolved date:** 2026-03-24 (False Positive)
