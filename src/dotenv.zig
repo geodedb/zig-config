@@ -10,7 +10,9 @@ const std = @import("std");
 const mem = std.mem;
 const fs = std.fs;
 const Allocator = mem.Allocator;
+const environ = @import("environ.zig");
 const secret = @import("secret.zig");
+const limits = @import("limits.zig");
 
 // Security: Import helpers for symlink and path traversal protection (CWE-59, CWE-22, #72, #74)
 const isPathSafe = secret.isPathSafe;
@@ -37,7 +39,7 @@ pub fn load(path: []const u8, allocator: Allocator) ![]EnvEntry {
     };
     defer file.close();
 
-    const content = file.readToEndAlloc(allocator, 1024 * 1024) catch {
+    const content = file.readToEndAlloc(allocator, limits.MAX_DOTENV_FILE_SIZE) catch {
         return entries.toOwnedSlice(allocator);
     };
     defer allocator.free(content);
@@ -68,10 +70,10 @@ pub fn load(path: []const u8, allocator: Allocator) ![]EnvEntry {
             }
         }
 
-        entries.append(allocator, .{
+        try entries.append(allocator, .{
             .key = key,
             .value = value,
-        }) catch {};
+        });
     }
 
     return entries.toOwnedSlice(allocator);
@@ -113,7 +115,7 @@ pub const EnvMap = struct {
         if (self.entries.get(key)) |value| {
             return value;
         }
-        return std.posix.getenv(key);
+        return environ.getenv(key);
     }
 
     /// Check if a key exists
@@ -149,7 +151,7 @@ pub fn loadAndApply(path: []const u8, allocator: Allocator) !EnvMap {
     };
     defer file.close();
 
-    const content = try file.readToEndAlloc(allocator, 1024 * 1024);
+    const content = try file.readToEndAlloc(allocator, limits.MAX_DOTENV_FILE_SIZE);
     defer allocator.free(content);
 
     try applyContent(&map, content);
@@ -236,10 +238,10 @@ pub fn parseContent(content: []const u8, allocator: Allocator) ![]EnvEntry {
             }
         }
 
-        entries.append(allocator, .{
+        try entries.append(allocator, .{
             .key = key,
             .value = value,
-        }) catch {};
+        });
     }
 
     return entries.toOwnedSlice(allocator);
@@ -458,4 +460,20 @@ test "dotenv: EnvMap getOrEnv falls back to environment" {
     if (map.getOrEnv("PATH")) |_| {
         // PATH exists in environment, test passed
     }
+}
+
+test "dotenv: load and parseContent propagate OutOfMemory" {
+    // Verify that the error sets of load and parseContent include OutOfMemory.
+    // Before the fix, append errors were silently swallowed via `catch {}`.
+    // We confirm by checking that error.OutOfMemory can be cast into each
+    // function's error set, which is only valid if OutOfMemory is a member.
+    const LoadReturnType = @typeInfo(@TypeOf(load)).@"fn".return_type.?;
+    const LoadErrorSet = @typeInfo(LoadReturnType).error_union.error_set;
+    const load_oom: LoadErrorSet = error.OutOfMemory;
+    try std.testing.expect(load_oom == error.OutOfMemory);
+
+    const ParseReturnType = @typeInfo(@TypeOf(parseContent)).@"fn".return_type.?;
+    const ParseErrorSet = @typeInfo(ParseReturnType).error_union.error_set;
+    const parse_oom: ParseErrorSet = error.OutOfMemory;
+    try std.testing.expect(parse_oom == error.OutOfMemory);
 }

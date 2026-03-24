@@ -10,6 +10,7 @@ const builtin = @import("builtin");
 const mem = std.mem;
 const fs = std.fs;
 const Allocator = mem.Allocator;
+const environ = @import("environ.zig");
 
 /// Secret loading errors
 pub const SecretError = error{
@@ -55,6 +56,28 @@ pub fn isPathSafe(path: []const u8) bool {
 
     // Check for null bytes (path truncation attack)
     if (mem.indexOf(u8, path, "\x00") != null) {
+        return false;
+    }
+
+    return true;
+}
+
+/// Strict path safety check that also rejects absolute paths.
+/// Returns true only if the path has no traversal sequences, no null bytes,
+/// and is not an absolute path.
+/// Security: Prevents CWE-22 path traversal and restricts to relative paths only.
+pub fn isPathSafeStrict(path: []const u8) bool {
+    if (!isPathSafe(path)) {
+        return false;
+    }
+
+    // Reject absolute paths (Unix-style leading '/' or Windows-style like C:\)
+    if (path.len > 0 and path[0] == '/') {
+        return false;
+    }
+
+    // Reject Windows-style absolute paths (e.g., "C:\", "D:/")
+    if (path.len >= 3 and std.ascii.isAlphabetic(path[0]) and path[1] == ':' and (path[2] == '\\' or path[2] == '/')) {
         return false;
     }
 
@@ -147,8 +170,22 @@ pub fn readFromFileWithOptions(path: []const u8, allocator: Allocator, options: 
         return SecretError.ReadError;
     };
 
-    // Trim trailing newlines
-    return mem.trim(u8, content, "\n\r");
+    // Trim trailing newlines -- mem.trim returns a sub-slice of the original,
+    // so we must dupe the trimmed result and free the original to avoid a
+    // pointer-mismatch leak (the caller cannot free the original allocation
+    // through the trimmed sub-slice).
+    const trimmed = mem.trim(u8, content, "\n\r");
+    const result = allocator.dupe(u8, trimmed) catch {
+        allocator.free(content);
+        return SecretError.ReadError;
+    };
+
+    // Security: zero out the original buffer before freeing to prevent
+    // secret data from lingering in freed memory.
+    secureZero(content);
+    allocator.free(content);
+
+    return result;
 }
 
 /// Read a secret from stdin
@@ -165,14 +202,37 @@ pub fn readFromStdin(allocator: Allocator) SecretError![]const u8 {
             return SecretError.StdinNotAvailable;
         };
 
-        return content;
+        // Security: Same trim-dupe-zero pattern as the pipe path.
+        // Zero the original buffer to prevent secret data lingering in freed memory.
+        const trimmed = mem.trim(u8, content, "\n\r");
+        const result = allocator.dupe(u8, trimmed) catch {
+            secureZero(content);
+            allocator.free(content);
+            return SecretError.StdinNotAvailable;
+        };
+
+        secureZero(content);
+        allocator.free(content);
+
+        return result;
     } else {
         // Pipe mode - read all
         const content = stdin.readToEndAlloc(allocator, 64 * 1024) catch {
             return SecretError.StdinNotAvailable;
         };
 
-        return mem.trim(u8, content, "\n\r");
+        // Same mem.trim fix as readFromFileWithOptions: dupe the trimmed
+        // result and free the original to avoid pointer-mismatch leak.
+        const trimmed = mem.trim(u8, content, "\n\r");
+        const result = allocator.dupe(u8, trimmed) catch {
+            allocator.free(content);
+            return SecretError.StdinNotAvailable;
+        };
+
+        secureZero(content);
+        allocator.free(content);
+
+        return result;
     }
 }
 
@@ -182,7 +242,7 @@ pub fn validateNotInFlagOrEnv(flag_value: ?[]const u8, env_name: []const u8) Sec
         return SecretError.SecretInFlagOrEnv;
     }
 
-    if (std.posix.getenv(env_name) != null) {
+    if (environ.getenv(env_name) != null) {
         return SecretError.SecretInFlagOrEnv;
     }
 }
@@ -217,6 +277,32 @@ test "secureZero clears buffer" {
     for (buffer) |byte| {
         try std.testing.expectEqual(@as(u8, 0), byte);
     }
+}
+
+test "secureZero clears heap-allocated buffer (readFromStdin pattern)" {
+    // Validates the same trim-dupe-zero pattern used in readFromStdin
+    // for both interactive and pipe paths: allocate, dupe trimmed result,
+    // secureZero original, then free original.
+    const allocator = std.testing.allocator;
+    const original = try allocator.dupe(u8, "my-secret\n\r");
+
+    // Simulate the trim-dupe-zero pattern from readFromStdin
+    const trimmed = mem.trim(u8, original, "\n\r");
+    const result = try allocator.dupe(u8, trimmed);
+    defer allocator.free(result);
+
+    // Zero original before freeing (the security-critical step)
+    secureZero(original);
+
+    // Verify every byte of the original is zeroed before freeing
+    for (original) |byte| {
+        try std.testing.expectEqual(@as(u8, 0), byte);
+    }
+
+    allocator.free(original);
+
+    // Verify the duped result still holds the trimmed secret
+    try std.testing.expectEqualStrings("my-secret", result);
 }
 
 test "isPathSafe rejects path traversal" {
@@ -256,4 +342,78 @@ test "isSymlink detects regular files as non-symlinks" {
 test "isSymlink returns false for non-existent files" {
     const result = isSymlink("/nonexistent/path/that/does/not/exist");
     try std.testing.expect(!result);
+}
+
+test "readFromFile returned slice can be freed without leak (mem.trim fix)" {
+    // Create a temporary file with trailing newlines
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const content_with_newlines = "my-secret-value\n\r\n";
+    const file = try tmp_dir.dir.createFile("secret.txt", .{});
+    try file.writeAll(content_with_newlines);
+    file.close();
+
+    // Use the real path so readFromFileWithOptions can open it
+    const path = try tmp_dir.dir.realpathAlloc(std.testing.allocator, "secret.txt");
+    defer std.testing.allocator.free(path);
+
+    // Read the secret -- std.testing.allocator will detect leaks if the
+    // original readToEndAlloc buffer is not properly freed.
+    const secret = try readFromFileWithOptions(path, std.testing.allocator, .{
+        .skip_traversal_check = true,
+        .follow_symlinks = true,
+    });
+    defer std.testing.allocator.free(secret);
+
+    // The trimmed result should not contain trailing newlines
+    try std.testing.expectEqualStrings("my-secret-value", secret);
+}
+
+test "readFromFile trims and returns correct content for file without trailing newlines" {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const content_no_newlines = "exact-secret";
+    const file = try tmp_dir.dir.createFile("secret2.txt", .{});
+    try file.writeAll(content_no_newlines);
+    file.close();
+
+    const path = try tmp_dir.dir.realpathAlloc(std.testing.allocator, "secret2.txt");
+    defer std.testing.allocator.free(path);
+
+    const secret = try readFromFileWithOptions(path, std.testing.allocator, .{
+        .skip_traversal_check = true,
+        .follow_symlinks = true,
+    });
+    defer std.testing.allocator.free(secret);
+
+    try std.testing.expectEqualStrings("exact-secret", secret);
+}
+
+test "isPathSafe allows absolute paths (backward compatibility)" {
+    // isPathSafe should still allow absolute paths for backward compatibility
+    try std.testing.expect(isPathSafe("/etc/passwd"));
+    try std.testing.expect(isPathSafe("/run/secrets/token"));
+    try std.testing.expect(isPathSafe("/home/user/.config/secret"));
+}
+
+test "isPathSafeStrict rejects absolute paths" {
+    // Unix-style absolute paths
+    try std.testing.expect(!isPathSafeStrict("/etc/passwd"));
+    try std.testing.expect(!isPathSafeStrict("/run/secrets/token"));
+    try std.testing.expect(!isPathSafeStrict("/home/user/.config/secret"));
+
+    // Windows-style absolute paths
+    try std.testing.expect(!isPathSafeStrict("C:\\Windows\\System32"));
+    try std.testing.expect(!isPathSafeStrict("D:/data/config"));
+
+    // Should still reject traversal and null bytes
+    try std.testing.expect(!isPathSafeStrict("../etc/passwd"));
+    try std.testing.expect(!isPathSafeStrict("foo\x00bar"));
+
+    // Should allow safe relative paths
+    try std.testing.expect(isPathSafeStrict("secrets/password.txt"));
+    try std.testing.expect(isPathSafeStrict("./config.toml"));
+    try std.testing.expect(isPathSafeStrict("data/secret.key"));
 }

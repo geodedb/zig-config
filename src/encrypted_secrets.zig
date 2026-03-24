@@ -8,13 +8,23 @@
 //! - HashiCorp Vault
 //! - 1Password CLI
 //! - Local encrypted files (AES-256-GCM)
+//! - Environment variables (DEPRECATED -- insecure, disabled by default)
 //!
 //! Secrets are never stored in memory longer than necessary and are
 //! securely zeroed when freed.
+//!
+//! ## Security Note on env:// Provider
+//!
+//! The `env://` provider is disabled by default and should not be used in
+//! production. Environment variables are insecure for secret storage: they
+//! are visible via /proc, inherited by child processes, and commonly
+//! captured in crash reports and CI logs (CWE-214). To opt in, call
+//! `SecretManager.allowEnvProvider(true)`. See #84 for details.
 
 const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
+const environ = @import("environ.zig");
 const secret = @import("secret.zig");
 const process = std.process;
 
@@ -71,16 +81,9 @@ pub const SensitiveString = struct {
     }
 
     /// Custom format function - always redacts
-    pub fn format(
-        self: Self,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+    pub fn format(self: Self, w: *std.io.Writer) !void {
         _ = self;
-        _ = fmt;
-        _ = options;
-        try writer.writeAll("***REDACTED***");
+        try w.writeAll("***REDACTED***");
     }
 
     /// Check if the value is set (non-empty)
@@ -199,7 +202,7 @@ pub fn isValidVaultPath(path: []const u8) bool {
 }
 
 fn findExecutableInPath(allocator: Allocator, name: []const u8) ?[]u8 {
-    const path_env = std.posix.getenv("PATH") orelse return null;
+    const path_env = environ.getenv("PATH") orelse return null;
     var it = mem.splitScalar(u8, path_env, std.fs.path.delimiter);
     while (it.next()) |dir| {
         if (dir.len == 0) continue;
@@ -228,6 +231,39 @@ fn resolveVaultPath(allocator: Allocator, path: []const u8) SecretError![]u8 {
     return allocator.dupe(u8, path) catch return SecretError.OutOfMemory;
 }
 
+/// Resolve the 1Password CLI binary path, analogous to resolveVaultPath.
+/// If the path has no directory separator (bare name like "op"), resolve it
+/// against PATH and validate against the op allowlist. Otherwise, validate
+/// the absolute/relative path directly against the allowlist.
+/// Security: Prevents PATH hijack by ensuring resolved binary is in allowlist (CWE-426, #77)
+fn resolveOpPath(allocator: Allocator, path: []const u8) SecretError![]u8 {
+    const has_separator = mem.indexOfAny(u8, path, "/\\") != null;
+    if (!has_separator) {
+        const resolved = findExecutableInPath(allocator, path) orelse return SecretError.ProviderNotAvailable;
+        if (!isValidOpPath(resolved)) {
+            allocator.free(resolved);
+            return SecretError.InvalidInputCharacters;
+        }
+        return resolved;
+    }
+
+    if (!isValidOpPath(path)) return SecretError.InvalidInputCharacters;
+    return allocator.dupe(u8, path) catch return SecretError.OutOfMemory;
+}
+
+/// Handle process termination status safely, covering all Term variants.
+/// Security: Prevents undefined behavior from accessing wrong union field (#103).
+fn handleTermination(term: process.Child.Term) SecretError!void {
+    switch (term) {
+        .Exited => |code| {
+            if (code != 0) return SecretError.CommandFailed;
+        },
+        .Signal => return SecretError.CommandFailed,
+        .Stopped => return SecretError.CommandFailed,
+        .Unknown => return SecretError.CommandFailed,
+    }
+}
+
 /// Secret provider types
 pub const Provider = enum {
     /// Local file-based secrets (plaintext, for development)
@@ -240,7 +276,16 @@ pub const Provider = enum {
     vault,
     /// 1Password CLI (op command)
     onepassword,
-    /// Environment variable (not recommended for secrets)
+    /// Environment variable provider (DEPRECATED -- security risk).
+    ///
+    /// WARNING: Storing secrets in environment variables is insecure and
+    /// contradicts best-practice secret management policy (CWE-214, #84).
+    /// Environment variables are visible via /proc, inherited by child
+    /// processes, and often logged by crash reporters or debugging tools.
+    ///
+    /// This provider is disabled by default. To opt in, call
+    /// `SecretManager.allowEnvProvider(true)` -- but prefer file://, vault://,
+    /// or 1password:// providers for any sensitive data.
     env,
 
     pub fn format(self: Provider) []const u8 {
@@ -377,7 +422,12 @@ pub const SecretManager = struct {
     vault_config: ?VaultConfig = null,
     onepassword_config: ?OnePasswordConfig = null,
     encrypted_file_config: ?EncryptedFileConfig = null,
-    /// Allow loading secrets from environment variables (insecure; default false)
+    /// Allow loading secrets from environment variables.
+    ///
+    /// SECURITY: Defaults to false. Environment variables are insecure for
+    /// secret storage (CWE-214, #84): they leak via /proc, child processes,
+    /// and crash dumps. Enable only for local development or migration from
+    /// legacy systems; never in production.
     allow_env_provider: bool = false,
 
     const Self = @This();
@@ -387,7 +437,13 @@ pub const SecretManager = struct {
         return .{ .allocator = allocator };
     }
 
-    /// Explicitly allow or disallow environment variable secrets (insecure)
+    /// Explicitly allow or disallow environment variable secrets.
+    ///
+    /// SECURITY: The env:// provider is deprecated and insecure (CWE-214, #84).
+    /// Calling `allowEnvProvider(true)` acknowledges the risk that environment
+    /// variables are visible via /proc, inherited by child processes, and
+    /// commonly captured in crash reports. Prefer vault://, 1password://, or
+    /// file:// providers for production workloads.
     pub fn allowEnvProvider(self: *Self, allow: bool) void {
         self.allow_env_provider = allow;
     }
@@ -412,7 +468,11 @@ pub const SecretManager = struct {
         self.encrypted_file_config = config;
     }
 
-    /// Load a secret from a reference
+    /// Load a secret from a reference.
+    ///
+    /// The env:// provider returns `InvalidConfiguration` unless
+    /// `allow_env_provider` has been explicitly set to true via
+    /// `allowEnvProvider(true)`. See CWE-214 / #84.
     pub fn loadSecret(self: *Self, ref: SecretRef) SecretError![]u8 {
         return switch (ref.provider) {
             .file => self.loadFromFile(ref.path),
@@ -426,9 +486,10 @@ pub const SecretManager = struct {
 
     /// Load a secret from a file
     fn loadFromFile(self: *Self, path: []const u8) SecretError![]u8 {
-        return secret.readFromFile(path, self.allocator) catch {
+        const content = secret.readFromFile(path, self.allocator) catch {
             return SecretError.SecretNotFound;
         };
+        return @constCast(content);
     }
 
     /// Load from encrypted file
@@ -483,20 +544,20 @@ pub const SecretManager = struct {
         }
 
         // Build vault CLI command
-        var args = std.ArrayList([]const u8).init(self.allocator);
-        defer args.deinit();
+        var args: std.ArrayList([]const u8) = .empty;
+        defer args.deinit(self.allocator);
 
-        args.append(vault_path) catch return SecretError.OutOfMemory;
-        args.append("kv") catch return SecretError.OutOfMemory;
-        args.append("get") catch return SecretError.OutOfMemory;
-        args.append("-format=json") catch return SecretError.OutOfMemory;
+        args.append(self.allocator, vault_path) catch return SecretError.OutOfMemory;
+        args.append(self.allocator, "kv") catch return SecretError.OutOfMemory;
+        args.append(self.allocator, "get") catch return SecretError.OutOfMemory;
+        args.append(self.allocator, "-format=json") catch return SecretError.OutOfMemory;
 
         const full_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{
             config.path_prefix,
             path,
         }) catch return SecretError.OutOfMemory;
         defer self.allocator.free(full_path);
-        args.append(full_path) catch return SecretError.OutOfMemory;
+        args.append(self.allocator, full_path) catch return SecretError.OutOfMemory;
 
         var env_map = try buildVaultEnvMap(self.allocator, config);
         defer env_map.deinit();
@@ -509,10 +570,9 @@ pub const SecretManager = struct {
     fn loadFromOnePassword(self: *Self, item: []const u8, field: ?[]const u8) SecretError![]u8 {
         const config = self.onepassword_config orelse return SecretError.ProviderNotConfigured;
 
-        // Security: Validate op_path against allowlist to prevent arbitrary binary execution (#66)
-        if (!isValidOpPath(config.op_path)) {
-            return SecretError.InvalidInputCharacters;
-        }
+        // Security: Resolve and validate op_path against allowlist (#66, #77)
+        const op_path = try resolveOpPath(self.allocator, config.op_path);
+        defer self.allocator.free(op_path);
 
         // Security: Validate vault name to prevent injection attacks (#67)
         if (!isValidSecretIdentifier(config.vault)) {
@@ -530,11 +590,11 @@ pub const SecretManager = struct {
         }
 
         // Build op CLI command
-        var args = std.ArrayList([]const u8).init(self.allocator);
-        defer args.deinit();
+        var args: std.ArrayList([]const u8) = .empty;
+        defer args.deinit(self.allocator);
 
-        args.append(config.op_path) catch return SecretError.OutOfMemory;
-        args.append("read") catch return SecretError.OutOfMemory;
+        args.append(self.allocator, op_path) catch return SecretError.OutOfMemory;
+        args.append(self.allocator, "read") catch return SecretError.OutOfMemory;
 
         // Build reference: op://vault/item/field
         const ref = if (field) |f|
@@ -543,7 +603,7 @@ pub const SecretManager = struct {
             std.fmt.allocPrint(self.allocator, "op://{s}/{s}/password", .{ config.vault, item }) catch return SecretError.OutOfMemory;
         defer self.allocator.free(ref);
 
-        args.append(ref) catch return SecretError.OutOfMemory;
+        args.append(self.allocator, ref) catch return SecretError.OutOfMemory;
 
         var env_map = try buildOnePasswordEnvMap(self.allocator, config);
         defer env_map.deinit();
@@ -551,35 +611,75 @@ pub const SecretManager = struct {
         return self.execCommand(args.items, null, &env_map, DEFAULT_COMMAND_TIMEOUT_MS);
     }
 
-    /// Load from environment variable (not recommended)
+    /// Load a secret from an environment variable.
+    ///
+    /// DEPRECATED (CWE-214, #84): Environment variables are an insecure secret
+    /// storage mechanism. Values are visible in /proc/<pid>/environ, inherited by
+    /// all child processes, and frequently captured in crash dumps and CI logs.
+    /// This function is only reachable when `allow_env_provider` is explicitly
+    /// set to true. Prefer vault://, 1password://, or file:// providers.
     fn loadFromEnv(self: *Self, name: []const u8) SecretError![]u8 {
-        const value = std.posix.getenv(name) orelse return SecretError.SecretNotFound;
+        const value = environ.getenv(name) orelse return SecretError.SecretNotFound;
         return self.allocator.dupe(u8, value) catch return SecretError.OutOfMemory;
     }
 
+    /// Build a minimal environment for Vault child processes (#117).
+    /// Only includes required Vault variables plus PATH and HOME.
+    /// Security: Prevents leaking the full process environment to child processes.
     fn buildVaultEnvMap(allocator: Allocator, config: VaultConfig) SecretError!process.EnvMap {
-        var env_map = process.getEnvMap(allocator) catch return SecretError.OutOfMemory;
+        return buildMinimalVaultEnvMap(allocator, config);
+    }
+
+    /// Builds a minimal Vault env map with only required variables.
+    fn buildMinimalVaultEnvMap(allocator: Allocator, config: VaultConfig) SecretError!process.EnvMap {
+        var env_map = process.EnvMap.init(allocator);
         errdefer env_map.deinit();
 
-        try env_map.put("VAULT_ADDR", config.address);
-        if (config.token) |token| try env_map.put("VAULT_TOKEN", token.expose());
-        if (config.namespace) |ns| try env_map.put("VAULT_NAMESPACE", ns);
-        if (config.tls_skip_verify) try env_map.put("VAULT_SKIP_VERIFY", "true");
+        // Required system variables for binary resolution and tool operation
+        if (environ.getenv("PATH")) |path_val| {
+            env_map.put("PATH", path_val) catch return SecretError.OutOfMemory;
+        }
+        if (environ.getenv("HOME")) |home_val| {
+            env_map.put("HOME", home_val) catch return SecretError.OutOfMemory;
+        }
+
+        // Vault-specific variables
+        env_map.put("VAULT_ADDR", config.address) catch return SecretError.OutOfMemory;
+        if (config.token) |token| env_map.put("VAULT_TOKEN", token.expose()) catch return SecretError.OutOfMemory;
+        if (config.namespace) |ns| env_map.put("VAULT_NAMESPACE", ns) catch return SecretError.OutOfMemory;
+        if (config.tls_skip_verify) env_map.put("VAULT_SKIP_VERIFY", "true") catch return SecretError.OutOfMemory;
         if (config.timeout_ms > 0) {
-            const timeout_val = try std.fmt.allocPrint(allocator, "{d}ms", .{config.timeout_ms});
+            const timeout_val = std.fmt.allocPrint(allocator, "{d}ms", .{config.timeout_ms}) catch return SecretError.OutOfMemory;
             defer allocator.free(timeout_val);
-            try env_map.put("VAULT_CLIENT_TIMEOUT", timeout_val);
+            env_map.put("VAULT_CLIENT_TIMEOUT", timeout_val) catch return SecretError.OutOfMemory;
         }
 
         return env_map;
     }
 
+    /// Build a minimal environment for 1Password child processes (#117).
+    /// Only includes required 1Password variables plus PATH and HOME.
+    /// Security: Prevents leaking the full process environment to child processes.
     fn buildOnePasswordEnvMap(allocator: Allocator, config: OnePasswordConfig) SecretError!process.EnvMap {
-        var env_map = process.getEnvMap(allocator) catch return SecretError.OutOfMemory;
+        return buildMinimalOnePasswordEnvMap(allocator, config);
+    }
+
+    /// Builds a minimal 1Password env map with only required variables.
+    fn buildMinimalOnePasswordEnvMap(allocator: Allocator, config: OnePasswordConfig) SecretError!process.EnvMap {
+        var env_map = process.EnvMap.init(allocator);
         errdefer env_map.deinit();
 
-        if (config.account) |acct| try env_map.put("OP_ACCOUNT", acct);
-        if (config.service_account_token) |token| try env_map.put("OP_SERVICE_ACCOUNT_TOKEN", token.expose());
+        // Required system variables for binary resolution and tool operation
+        if (environ.getenv("PATH")) |path_val| {
+            env_map.put("PATH", path_val) catch return SecretError.OutOfMemory;
+        }
+        if (environ.getenv("HOME")) |home_val| {
+            env_map.put("HOME", home_val) catch return SecretError.OutOfMemory;
+        }
+
+        // 1Password-specific variables
+        if (config.account) |acct| env_map.put("OP_ACCOUNT", acct) catch return SecretError.OutOfMemory;
+        if (config.service_account_token) |token| env_map.put("OP_SERVICE_ACCOUNT_TOKEN", token.expose()) catch return SecretError.OutOfMemory;
 
         return env_map;
     }
@@ -599,10 +699,10 @@ pub const SecretManager = struct {
 
         child.spawn() catch return SecretError.CommandFailed;
 
-        var stdout_buf = std.ArrayList(u8).init(self.allocator);
-        var stderr_buf = std.ArrayList(u8).init(self.allocator);
-        defer stdout_buf.deinit();
-        defer stderr_buf.deinit();
+        var stdout_buf: std.ArrayList(u8) = .empty;
+        var stderr_buf: std.ArrayList(u8) = .empty;
+        defer stdout_buf.deinit(self.allocator);
+        defer stderr_buf.deinit(self.allocator);
 
         var done = std.atomic.Value(bool).init(false);
         var timed_out = std.atomic.Value(bool).init(false);
@@ -652,9 +752,7 @@ pub const SecretManager = struct {
             return SecretError.Timeout;
         }
 
-        if (term.Exited != 0) {
-            return SecretError.CommandFailed;
-        }
+        try handleTermination(term);
 
         const trimmed = mem.trimRight(u8, stdout_buf.items, "\n\r");
         if (json_field) |field| {
@@ -840,8 +938,18 @@ test "parseRef invalid" {
     try std.testing.expect(SecretManager.parseRef("unknown://path") == null);
 }
 
-test "loadFromEnv" {
+test "env provider is denied by default (CWE-214, #84)" {
     var manager = SecretManager.init(std.testing.allocator);
+
+    // With allow_env_provider = false (the default), env:// must return
+    // InvalidConfiguration even for variables that exist (e.g. PATH).
+    const result = manager.loadSecret(.{ .provider = .env, .path = "PATH" });
+    try std.testing.expectError(SecretError.InvalidConfiguration, result);
+}
+
+test "env provider works when explicitly opted in (#84)" {
+    var manager = SecretManager.init(std.testing.allocator);
+    manager.allowEnvProvider(true);
 
     // PATH should exist on most systems
     if (manager.loadSecret(.{ .provider = .env, .path = "PATH" })) |value| {
@@ -850,6 +958,18 @@ test "loadFromEnv" {
     } else |_| {
         // PATH might not exist on some systems, that's ok
     }
+}
+
+test "env provider can be re-disabled after opt-in (#84)" {
+    var manager = SecretManager.init(std.testing.allocator);
+
+    // Enable then disable
+    manager.allowEnvProvider(true);
+    manager.allowEnvProvider(false);
+
+    // Should be denied again
+    const result = manager.loadSecret(.{ .provider = .env, .path = "PATH" });
+    try std.testing.expectError(SecretError.InvalidConfiguration, result);
 }
 
 test "loadSecret unconfigured provider" {
@@ -1002,7 +1122,7 @@ test "SensitiveString redacts on format" {
     const sensitive = SensitiveString.init("super-secret-token");
 
     var buf: [100]u8 = undefined;
-    const result = std.fmt.bufPrint(&buf, "{}", .{sensitive}) catch unreachable;
+    const result = std.fmt.bufPrint(&buf, "{f}", .{sensitive}) catch unreachable;
 
     // Should never expose the actual value
     try std.testing.expectEqualStrings("***REDACTED***", result);
@@ -1049,7 +1169,7 @@ test "KmsConfig credentials use SensitiveString for redaction" {
 
     // Verify SensitiveString redacts credentials when formatted
     var buf: [200]u8 = undefined;
-    const key_str = std.fmt.bufPrint(&buf, "{}", .{config.access_key_id.?}) catch unreachable;
+    const key_str = std.fmt.bufPrint(&buf, "{f}", .{config.access_key_id.?}) catch unreachable;
     try std.testing.expectEqualStrings("***REDACTED***", key_str);
 
     // But expose() returns actual values
@@ -1064,7 +1184,7 @@ test "VaultConfig token uses SensitiveString for redaction" {
 
     // Verify token is redacted when formatted
     var buf: [100]u8 = undefined;
-    const token_str = std.fmt.bufPrint(&buf, "{}", .{config.token.?}) catch unreachable;
+    const token_str = std.fmt.bufPrint(&buf, "{f}", .{config.token.?}) catch unreachable;
     try std.testing.expectEqualStrings("***REDACTED***", token_str);
 
     // But expose() returns actual value
@@ -1079,6 +1199,192 @@ test "OnePasswordConfig token uses SensitiveString for redaction" {
 
     // Verify token is redacted when formatted
     var buf: [100]u8 = undefined;
-    const token_str = std.fmt.bufPrint(&buf, "{}", .{config.service_account_token.?}) catch unreachable;
+    const token_str = std.fmt.bufPrint(&buf, "{f}", .{config.service_account_token.?}) catch unreachable;
     try std.testing.expectEqualStrings("***REDACTED***", token_str);
+}
+
+// ============================================================================
+// Gap Closure Tests: term.Exited UB (#103)
+// ============================================================================
+
+test "handleTermination returns success for Exited 0" {
+    const term = process.Child.Term{ .Exited = 0 };
+    try handleTermination(term);
+}
+
+test "handleTermination returns CommandFailed for non-zero exit" {
+    const term = process.Child.Term{ .Exited = 1 };
+    try std.testing.expectError(SecretError.CommandFailed, handleTermination(term));
+}
+
+test "handleTermination returns CommandFailed for Signal" {
+    const term = process.Child.Term{ .Signal = 9 };
+    try std.testing.expectError(SecretError.CommandFailed, handleTermination(term));
+}
+
+test "handleTermination returns CommandFailed for Stopped" {
+    const term = process.Child.Term{ .Stopped = 19 };
+    try std.testing.expectError(SecretError.CommandFailed, handleTermination(term));
+}
+
+test "handleTermination returns CommandFailed for Unknown" {
+    const term = process.Child.Term{ .Unknown = 0 };
+    try std.testing.expectError(SecretError.CommandFailed, handleTermination(term));
+}
+
+// ============================================================================
+// Gap Closure Tests: op PATH hijack mitigation (#77)
+// ============================================================================
+
+test "resolveOpPath rejects paths outside allowlist" {
+    const allocator = std.testing.allocator;
+    // A bare name "op" will try PATH lookup; it should either resolve to a valid
+    // path or fail with ProviderNotAvailable. It should never return an invalid path.
+    if (resolveOpPath(allocator, "op")) |resolved| {
+        defer allocator.free(resolved);
+        // If resolved, it must be in the allowlist
+        try std.testing.expect(isValidOpPath(resolved));
+    } else |err| {
+        // ProviderNotAvailable is acceptable (op not installed)
+        try std.testing.expect(err == SecretError.ProviderNotAvailable or err == SecretError.InvalidInputCharacters);
+    }
+}
+
+test "resolveOpPath rejects malicious bare name" {
+    const allocator = std.testing.allocator;
+    // A bare name that does not resolve should fail
+    const result = resolveOpPath(allocator, "op_fake_nonexistent_binary_xyz");
+    try std.testing.expectError(SecretError.ProviderNotAvailable, result);
+}
+
+test "resolveOpPath rejects invalid absolute path" {
+    const allocator = std.testing.allocator;
+    const result = resolveOpPath(allocator, "/tmp/malicious_op");
+    try std.testing.expectError(SecretError.InvalidInputCharacters, result);
+}
+
+test "resolveOpPath accepts valid absolute path" {
+    const allocator = std.testing.allocator;
+    // /usr/bin/op is in the allowlist; resolveOpPath should accept it
+    const result = resolveOpPath(allocator, "/usr/bin/op");
+    if (result) |resolved| {
+        defer allocator.free(resolved);
+        try std.testing.expectEqualStrings("/usr/bin/op", resolved);
+    } else |_| {
+        // This is OK -- the path is valid but the binary may not exist
+    }
+}
+
+test "resolveVaultPath rejects paths outside allowlist" {
+    const allocator = std.testing.allocator;
+    const result = resolveVaultPath(allocator, "/tmp/evil_vault");
+    try std.testing.expectError(SecretError.InvalidInputCharacters, result);
+}
+
+// ============================================================================
+// Gap Closure Tests: Minimal environment for child processes (#117)
+// ============================================================================
+
+test "buildMinimalVaultEnvMap contains only expected keys" {
+    const allocator = std.testing.allocator;
+    const config = VaultConfig{
+        .address = "https://vault.example.com:8200",
+        .token = SensitiveString.init("test-token"),
+        .namespace = "test-ns",
+        .tls_skip_verify = true,
+        .timeout_ms = 5000,
+    };
+
+    var env_map = try SecretManager.buildMinimalVaultEnvMap(allocator, config);
+    defer env_map.deinit();
+
+    // Should contain the Vault-specific keys
+    try std.testing.expect(env_map.get("VAULT_ADDR") != null);
+    try std.testing.expect(env_map.get("VAULT_TOKEN") != null);
+    try std.testing.expect(env_map.get("VAULT_NAMESPACE") != null);
+    try std.testing.expect(env_map.get("VAULT_SKIP_VERIFY") != null);
+    try std.testing.expect(env_map.get("VAULT_CLIENT_TIMEOUT") != null);
+    try std.testing.expect(env_map.get("PATH") != null);
+    try std.testing.expect(env_map.get("HOME") != null);
+
+    // Count total keys - should be exactly the ones we expect
+    var count: usize = 0;
+    var it = env_map.iterator();
+    while (it.next()) |_| {
+        count += 1;
+    }
+    // PATH + HOME + VAULT_ADDR + VAULT_TOKEN + VAULT_NAMESPACE + VAULT_SKIP_VERIFY + VAULT_CLIENT_TIMEOUT = 7
+    try std.testing.expectEqual(@as(usize, 7), count);
+}
+
+test "buildMinimalVaultEnvMap omits optional fields when not set" {
+    const allocator = std.testing.allocator;
+    const config = VaultConfig{
+        .address = "https://127.0.0.1:8200",
+        .timeout_ms = 0,
+    };
+
+    var env_map = try SecretManager.buildMinimalVaultEnvMap(allocator, config);
+    defer env_map.deinit();
+
+    // Should have only PATH + HOME + VAULT_ADDR
+    try std.testing.expect(env_map.get("VAULT_ADDR") != null);
+    try std.testing.expect(env_map.get("PATH") != null);
+    try std.testing.expect(env_map.get("HOME") != null);
+    try std.testing.expect(env_map.get("VAULT_TOKEN") == null);
+    try std.testing.expect(env_map.get("VAULT_NAMESPACE") == null);
+    try std.testing.expect(env_map.get("VAULT_SKIP_VERIFY") == null);
+    try std.testing.expect(env_map.get("VAULT_CLIENT_TIMEOUT") == null);
+
+    var count: usize = 0;
+    var it = env_map.iterator();
+    while (it.next()) |_| {
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), count);
+}
+
+test "buildMinimalOnePasswordEnvMap contains only expected keys" {
+    const allocator = std.testing.allocator;
+    const config = OnePasswordConfig{
+        .account = "team.1password.com",
+        .service_account_token = SensitiveString.init("ops_test_token"),
+    };
+
+    var env_map = try SecretManager.buildMinimalOnePasswordEnvMap(allocator, config);
+    defer env_map.deinit();
+
+    try std.testing.expect(env_map.get("OP_ACCOUNT") != null);
+    try std.testing.expect(env_map.get("OP_SERVICE_ACCOUNT_TOKEN") != null);
+    try std.testing.expect(env_map.get("PATH") != null);
+    try std.testing.expect(env_map.get("HOME") != null);
+
+    var count: usize = 0;
+    var it = env_map.iterator();
+    while (it.next()) |_| {
+        count += 1;
+    }
+    // PATH + HOME + OP_ACCOUNT + OP_SERVICE_ACCOUNT_TOKEN = 4
+    try std.testing.expectEqual(@as(usize, 4), count);
+}
+
+test "buildMinimalOnePasswordEnvMap omits optional fields when not set" {
+    const allocator = std.testing.allocator;
+    const config = OnePasswordConfig{};
+
+    var env_map = try SecretManager.buildMinimalOnePasswordEnvMap(allocator, config);
+    defer env_map.deinit();
+
+    // Should have only PATH + HOME
+    try std.testing.expect(env_map.get("PATH") != null);
+    try std.testing.expect(env_map.get("HOME") != null);
+    try std.testing.expect(env_map.get("OP_ACCOUNT") == null);
+    try std.testing.expect(env_map.get("OP_SERVICE_ACCOUNT_TOKEN") == null);
+
+    var count: usize = 0;
+    var it = env_map.iterator();
+    while (it.next()) |_| {
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), count);
 }

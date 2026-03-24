@@ -27,6 +27,7 @@ const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
 const secret = @import("secret.zig");
+const limits = @import("limits.zig");
 
 // Security: Import helpers for symlink and path traversal protection (CWE-59, CWE-22, #72, #74)
 const isPathSafe = secret.isPathSafe;
@@ -203,7 +204,7 @@ pub fn parseFile(allocator: Allocator, path: []const u8) !IniDocument {
     };
     defer file.close();
 
-    const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    const content = try file.readToEndAlloc(allocator, limits.MAX_CONFIG_FILE_SIZE);
     defer allocator.free(content);
 
     return parse(allocator, content);

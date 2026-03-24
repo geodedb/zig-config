@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const config = @import("config");
-const validate = config.validate;
+const validate = config.validation;
 
 const ServerConfig = struct {
     host: []const u8,

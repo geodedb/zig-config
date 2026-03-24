@@ -38,6 +38,7 @@ const Allocator = mem.Allocator;
 const loader_mod = @import("loader.zig");
 const Format = loader_mod.Format;
 const secret = @import("secret.zig");
+const limits = @import("limits.zig");
 
 // Security: Import helpers for symlink and path traversal protection (CWE-59, CWE-22, #72, #74)
 const isSymlink = secret.isSymlink;
@@ -235,12 +236,15 @@ pub fn AsyncLoader(comptime T: type) type {
             };
             defer file.close();
 
-            const content = try file.readToEndAlloc(loader.allocator, 10 * 1024 * 1024);
+            const content = try file.readToEndAlloc(loader.allocator, limits.MAX_CONFIG_FILE_SIZE);
             defer loader.allocator.free(content);
 
             // Parse and apply to loader
             const detected_format = Format.fromExtension(path);
-            loader.parseContent(content, detected_format, .project, path) catch {};
+            loader.parseContent(content, detected_format, .project, path) catch |err| switch (err) {
+                error.OutOfMemory => return, // Cannot propagate from thread; bail
+                else => {}, // Parse errors on optional sources are non-critical
+            };
         }
     };
 }
@@ -309,6 +313,11 @@ pub fn AsyncLoaderWithCallback(comptime T: type) type {
     };
 }
 
+/// Maximum number of threads for parallel loading (#106).
+/// Prevents resource exhaustion when many paths are provided.
+/// 16 is a reasonable upper bound for config file I/O concurrency.
+pub const MAX_PARALLEL_THREADS: usize = 16;
+
 /// Load multiple config files in parallel
 pub fn loadParallel(comptime T: type, allocator: Allocator, paths: []const []const u8) !T {
     const ThreadContext = struct {
@@ -321,7 +330,9 @@ pub fn loadParallel(comptime T: type, allocator: Allocator, paths: []const []con
     var contexts = try allocator.alloc(ThreadContext, paths.len);
     defer allocator.free(contexts);
 
-    var threads = try allocator.alloc(?Thread, paths.len);
+    // Cap active threads to prevent unbounded spawning (#106)
+    const max_threads = @min(paths.len, MAX_PARALLEL_THREADS);
+    var threads = try allocator.alloc(?Thread, max_threads);
     defer allocator.free(threads);
 
     // Initialize contexts
@@ -334,35 +345,43 @@ pub fn loadParallel(comptime T: type, allocator: Allocator, paths: []const []con
         };
     }
 
-    // Spawn threads
-    for (contexts, 0..) |*ctx, i| {
-        threads[i] = Thread.spawn(.{}, struct {
-            fn load(c: *ThreadContext) void {
-                // Security: Validate path does not contain traversal sequences (CWE-22, #74)
-                if (!isPathSafe(c.path)) {
-                    c.err = error.PathTraversalDetected;
-                    return;
+    // Process in batches of max_threads to bound concurrency (#106)
+    var processed: usize = 0;
+    while (processed < paths.len) {
+        const batch_size = @min(max_threads, paths.len - processed);
+
+        // Spawn a batch of threads
+        for (0..batch_size) |j| {
+            threads[j] = Thread.spawn(.{}, struct {
+                fn load(c: *ThreadContext) void {
+                    // Security: Validate path does not contain traversal sequences (CWE-22, #74)
+                    if (!isPathSafe(c.path)) {
+                        c.err = error.PathTraversalDetected;
+                        return;
+                    }
+
+                    const file = openFileReadNoFollow(c.path) catch |e| {
+                        c.err = e;
+                        return;
+                    };
+                    defer file.close();
+
+                    c.result = file.readToEndAlloc(c.allocator, limits.MAX_CONFIG_FILE_SIZE) catch |e| {
+                        c.err = e;
+                        return;
+                    };
                 }
-
-                const file = openFileReadNoFollow(c.path) catch |e| {
-                    c.err = e;
-                    return;
-                };
-                defer file.close();
-
-                c.result = file.readToEndAlloc(c.allocator, 10 * 1024 * 1024) catch |e| {
-                    c.err = e;
-                    return;
-                };
-            }
-        }.load, .{ctx}) catch null;
-    }
-
-    // Wait for all threads
-    for (threads) |maybe_thread| {
-        if (maybe_thread) |thread| {
-            thread.join();
+            }.load, .{&contexts[processed + j]}) catch null;
         }
+
+        // Wait for the batch to complete
+        for (0..batch_size) |j| {
+            if (threads[j]) |thread| {
+                thread.join();
+            }
+        }
+
+        processed += batch_size;
     }
 
     // Merge results into loader
@@ -373,7 +392,10 @@ pub fn loadParallel(comptime T: type, allocator: Allocator, paths: []const []con
         if (ctx.result) |content| {
             defer allocator.free(content);
             const format = Format.fromExtension(paths[i]);
-            loader.parseContent(content, format, .project, paths[i]) catch {};
+            loader.parseContent(content, format, .project, paths[i]) catch |err| switch (err) {
+                error.OutOfMemory => break, // Stop processing on OOM
+                else => {}, // Parse errors on optional sources are non-critical
+            };
         }
     }
 
@@ -449,4 +471,20 @@ test "AsyncLoaderWithCallback set callback" {
 
     loader.setCallback(TestCallback.callback, null);
     try std.testing.expect(loader.callback != null);
+}
+
+test "MAX_PARALLEL_THREADS bounds thread count" {
+    // Verify the constant is a reasonable value that prevents unbounded spawning (#106)
+    try std.testing.expect(MAX_PARALLEL_THREADS > 0);
+    try std.testing.expect(MAX_PARALLEL_THREADS <= 16);
+
+    // Verify @min correctly caps thread count when paths exceed limit
+    const many_paths: usize = 100;
+    const capped = @min(many_paths, MAX_PARALLEL_THREADS);
+    try std.testing.expectEqual(@as(usize, 16), capped);
+
+    // Verify @min passes through when paths are fewer than limit
+    const few_paths: usize = 3;
+    const uncapped = @min(few_paths, MAX_PARALLEL_THREADS);
+    try std.testing.expectEqual(@as(usize, 3), uncapped);
 }

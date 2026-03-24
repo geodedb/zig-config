@@ -271,7 +271,7 @@ test "integration: flag parser with loader" {
 
     try parser.parse(&.{ "--host", "flag-host", "--port", "9999", "--debug" });
 
-    loader.applyFlags(&parser);
+    try loader.applyFlags(&parser);
 
     const cfg = try loader.load(.{
         .app_name = "test",

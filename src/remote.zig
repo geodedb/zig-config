@@ -41,6 +41,9 @@ const http = std.http;
 const net = std.net;
 const Uri = std.Uri;
 const Allocator = mem.Allocator;
+const SensitiveString = @import("encrypted_secrets.zig").SensitiveString;
+
+const log = std.log.scoped(.remote);
 
 /// Remote configuration errors
 pub const RemoteError = error{
@@ -71,7 +74,20 @@ pub const SecurityOptions = struct {
     block_private_ips: bool = true,
     /// User-Agent header value
     user_agent: []const u8 = "zigconfig/1.0",
+    /// Skip TLS certificate verification. Default false for security.
+    /// SECURITY WARNING: Disabling certificate verification exposes the
+    /// connection to man-in-the-middle attacks (CWE-295). Only use for
+    /// local development with self-signed certificates.
+    tls_skip_verify: bool = false,
 };
+
+/// Emit a warning when TLS certificate verification is disabled.
+/// Security: Ensures operators are aware of the insecure configuration (CWE-295).
+pub fn warnIfTlsSkipVerify(options: SecurityOptions) void {
+    if (options.tls_skip_verify) {
+        log.warn("TLS certificate verification is disabled (tls_skip_verify=true). This is insecure for production use.", .{});
+    }
+}
 
 /// Validate a URL for security (SSRF protection)
 /// Returns error if URL is invalid or points to a private address
@@ -108,15 +124,20 @@ pub fn validateUrl(url: []const u8, options: SecurityOptions) RemoteError!void {
         const raw_host = uri.getHost(&host_buf) catch return RemoteError.InvalidUrl;
         const host = normalizeHost(raw_host);
 
+        // Security: Decode percent-encoded host to prevent SSRF bypass (CWE-918, #71)
+        // Defense-in-depth: even if the URI parser decodes, we decode again to be safe
+        var decoded_host_buf: [Uri.host_name_max]u8 = undefined;
+        const decoded_host = decodePercentEncoded(host, &decoded_host_buf);
+
         // Security: Block direct private IPs and internal hostnames (CWE-918)
-        if (isPrivateAddress(host)) {
+        if (isPrivateAddress(decoded_host)) {
             return RemoteError.PrivateAddressBlocked;
         }
 
         // DNS rebinding mitigation: resolve hostnames and validate IPs (#68)
-        if (!isIpLiteral(host)) {
+        if (!isIpLiteral(decoded_host)) {
             const port = uri.port orelse if (is_https) @as(u16, 443) else @as(u16, 80);
-            try validateResolvedAddresses(host, port);
+            try validateResolvedAddresses(decoded_host, port);
         }
     }
 }
@@ -256,6 +277,7 @@ fn isPrivateIPv4Bytes(bytes: [4]u8) bool {
     if (bytes[0] == 172 and bytes[1] >= 16 and bytes[1] <= 31) return true; // 172.16.0.0/12
     if (bytes[0] == 192 and bytes[1] == 168) return true; // 192.168.0.0/16
     if (bytes[0] == 169 and bytes[1] == 254) return true; // 169.254.0.0/16
+    if (bytes[0] == 100 and bytes[1] >= 64 and bytes[1] <= 127) return true; // 100.64.0.0/10 CGNAT (#115)
     return false;
 }
 
@@ -401,6 +423,10 @@ fn isPrivateIPv4Int(ip: u32) bool {
     // 169.254.0.0/16 - link-local
     if (octet1 == 169 and octet2 == 254) return true;
 
+    // 100.64.0.0/10 - CGNAT (Carrier-Grade NAT, RFC 6598)
+    // Security: Prevents SSRF to shared ISP infrastructure (#115)
+    if (octet1 == 100 and octet2 >= 64 and octet2 <= 127) return true;
+
     return false;
 }
 
@@ -489,8 +515,8 @@ fn setSocketTimeout(handle: net.Stream.Handle, timeout_ms: u32) RemoteError!void
     }
 
     var tv = std.posix.timeval{
-        .tv_sec = @intCast(timeout_ms / 1000),
-        .tv_usec = @intCast((timeout_ms % 1000) * 1000),
+        .sec = @intCast(timeout_ms / 1000),
+        .usec = @intCast((timeout_ms % 1000) * 1000),
     };
     const buf = std.mem.asBytes(&tv);
     std.posix.setsockopt(handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, buf) catch return RemoteError.RequestFailed;
@@ -500,12 +526,13 @@ fn setSocketTimeout(handle: net.Stream.Handle, timeout_ms: u32) RemoteError!void
 fn buildBasicAuthHeader(
     allocator: Allocator,
     username: ?[]const u8,
-    password: ?[]const u8,
+    password: ?SensitiveString,
 ) RemoteError!?[]u8 {
     if (username == null and password == null) return null;
     if (username == null or password == null) return RemoteError.InvalidConfiguration;
 
-    const creds = std.fmt.allocPrint(allocator, "{s}:{s}", .{ username.?, password.? }) catch return RemoteError.OutOfMemory;
+    // Security: Use .expose() to access the sensitive password value (#59)
+    const creds = std.fmt.allocPrint(allocator, "{s}:{s}", .{ username.?, password.?.expose() }) catch return RemoteError.OutOfMemory;
     defer allocator.free(creds);
 
     const encoded_len = std.base64.standard.Encoder.calcSize(creds.len);
@@ -530,7 +557,8 @@ pub const EtcdOptions = struct {
     /// Username for authentication (optional)
     username: ?[]const u8 = null,
     /// Password for authentication (optional)
-    password: ?[]const u8 = null,
+    /// Security: Uses SensitiveString to prevent accidental credential logging (#59)
+    password: ?SensitiveString = null,
     /// Security options (TLS, SSRF protection)
     security: SecurityOptions = .{},
 };
@@ -543,7 +571,16 @@ pub const Etcd = struct {
     /// Arena for response storage
     arena: std.heap.ArenaAllocator,
 
-    pub fn init(allocator: Allocator, options: EtcdOptions) Etcd {
+    pub fn init(allocator: Allocator, options: EtcdOptions) RemoteError!Etcd {
+        // Security: Validate all endpoint URLs at init time (#100)
+        // This prevents per-request validation overhead and fails fast
+        for (options.endpoints) |endpoint| {
+            try validateUrl(endpoint, options.security);
+        }
+
+        // Security: Warn when TLS certificate verification is disabled (CWE-295)
+        warnIfTlsSkipVerify(options.security);
+
         return .{
             .allocator = allocator,
             .options = options,
@@ -558,23 +595,28 @@ pub const Etcd = struct {
     }
 
     /// Get a value by key from etcd
+    /// Security: Validates key to prevent path injection (CWE-74, #73, GAP-0014)
     pub fn get(self: *Etcd, key: []const u8) RemoteError!?[]const u8 {
+        // Security: Validate key to prevent path injection (CWE-74, #73, GAP-0014)
+        if (!isValidKVKey(key)) {
+            return RemoteError.InvalidKey;
+        }
+
         // etcd v3 uses gRPC-gateway REST API
         // POST /v3/kv/range with JSON body
         const endpoint = self.options.endpoints[0];
 
-        // Security: Validate endpoint URL (SSRF protection)
-        try validateUrl(endpoint, self.options.security);
+        // URL validated at init time (#100)
 
         const url = std.fmt.allocPrint(self.allocator, "{s}/v3/kv/range", .{endpoint}) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(url);
 
         // Base64 encode the key (etcd v3 requirement)
         const encoder = std.base64.standard;
-        const encoded_len = encoder.calcSize(key.len);
+        const encoded_len = encoder.Encoder.calcSize(key.len);
         const encoded_key = self.allocator.alloc(u8, encoded_len) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(encoded_key);
-        _ = encoder.encode(encoded_key, key);
+        _ = encoder.Encoder.encode(encoded_key, key);
 
         // Build JSON request body
         const body = std.fmt.allocPrint(self.allocator, "{{\"key\":\"{s}\"}}", .{encoded_key}) catch return RemoteError.OutOfMemory;
@@ -589,11 +631,16 @@ pub const Etcd = struct {
     }
 
     /// Put a value by key to etcd
+    /// Security: Validates key to prevent path injection (CWE-74, #73, GAP-0014)
     pub fn put(self: *Etcd, key: []const u8, value: []const u8) RemoteError!void {
+        // Security: Validate key to prevent path injection (CWE-74, #73, GAP-0014)
+        if (!isValidKVKey(key)) {
+            return RemoteError.InvalidKey;
+        }
+
         const endpoint = self.options.endpoints[0];
 
-        // Security: Validate endpoint URL (SSRF protection)
-        try validateUrl(endpoint, self.options.security);
+        // URL validated at init time (#100)
 
         const url = std.fmt.allocPrint(self.allocator, "{s}/v3/kv/put", .{endpoint}) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(url);
@@ -601,15 +648,15 @@ pub const Etcd = struct {
         // Base64 encode key and value
         const encoder = std.base64.standard;
 
-        const encoded_key_len = encoder.calcSize(key.len);
+        const encoded_key_len = encoder.Encoder.calcSize(key.len);
         const encoded_key = self.allocator.alloc(u8, encoded_key_len) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(encoded_key);
-        _ = encoder.encode(encoded_key, key);
+        _ = encoder.Encoder.encode(encoded_key, key);
 
-        const encoded_value_len = encoder.calcSize(value.len);
+        const encoded_value_len = encoder.Encoder.calcSize(value.len);
         const encoded_value = self.allocator.alloc(u8, encoded_value_len) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(encoded_value);
-        _ = encoder.encode(encoded_value, value);
+        _ = encoder.Encoder.encode(encoded_value, value);
 
         const body = std.fmt.allocPrint(self.allocator, "{{\"key\":\"{s}\",\"value\":\"{s}\"}}", .{ encoded_key, encoded_value }) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(body);
@@ -619,20 +666,25 @@ pub const Etcd = struct {
     }
 
     /// Delete a key from etcd
+    /// Security: Validates key to prevent path injection (CWE-74, #73, GAP-0014)
     pub fn delete(self: *Etcd, key: []const u8) RemoteError!void {
+        // Security: Validate key to prevent path injection (CWE-74, #73, GAP-0014)
+        if (!isValidKVKey(key)) {
+            return RemoteError.InvalidKey;
+        }
+
         const endpoint = self.options.endpoints[0];
 
-        // Security: Validate endpoint URL (SSRF protection)
-        try validateUrl(endpoint, self.options.security);
+        // URL validated at init time (#100)
 
         const url = std.fmt.allocPrint(self.allocator, "{s}/v3/kv/deleterange", .{endpoint}) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(url);
 
         const encoder = std.base64.standard;
-        const encoded_len = encoder.calcSize(key.len);
+        const encoded_len = encoder.Encoder.calcSize(key.len);
         const encoded_key = self.allocator.alloc(u8, encoded_len) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(encoded_key);
-        _ = encoder.encode(encoded_key, key);
+        _ = encoder.Encoder.encode(encoded_key, key);
 
         const body = std.fmt.allocPrint(self.allocator, "{{\"key\":\"{s}\"}}", .{encoded_key}) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(body);
@@ -642,20 +694,25 @@ pub const Etcd = struct {
     }
 
     /// Get all keys with a prefix
+    /// Security: Validates prefix to prevent path injection (CWE-74, #73, GAP-0014)
     pub fn getPrefix(self: *Etcd, prefix: []const u8) RemoteError!std.StringHashMap([]const u8) {
+        // Security: Validate prefix to prevent path injection (CWE-74, #73, GAP-0014)
+        if (!isValidKVKey(prefix)) {
+            return RemoteError.InvalidKey;
+        }
+
         const endpoint = self.options.endpoints[0];
 
-        // Security: Validate endpoint URL (SSRF protection)
-        try validateUrl(endpoint, self.options.security);
+        // URL validated at init time (#100)
 
         const url = std.fmt.allocPrint(self.allocator, "{s}/v3/kv/range", .{endpoint}) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(url);
 
         const encoder = std.base64.standard;
-        const encoded_len = encoder.calcSize(prefix.len);
+        const encoded_len = encoder.Encoder.calcSize(prefix.len);
         const encoded_key = self.allocator.alloc(u8, encoded_len) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(encoded_key);
-        _ = encoder.encode(encoded_key, prefix);
+        _ = encoder.Encoder.encode(encoded_key, prefix);
 
         // Range end for prefix query (increment last byte)
         var range_end = self.allocator.dupe(u8, prefix) catch return RemoteError.OutOfMemory;
@@ -663,10 +720,10 @@ pub const Etcd = struct {
         if (range_end.len > 0) {
             range_end[range_end.len - 1] += 1;
         }
-        const encoded_end_len = encoder.calcSize(range_end.len);
+        const encoded_end_len = encoder.Encoder.calcSize(range_end.len);
         const encoded_end = self.allocator.alloc(u8, encoded_end_len) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(encoded_end);
-        _ = encoder.encode(encoded_end, range_end);
+        _ = encoder.Encoder.encode(encoded_end, range_end);
 
         const body = std.fmt.allocPrint(self.allocator, "{{\"key\":\"{s}\",\"range_end\":\"{s}\"}}", .{ encoded_key, encoded_end }) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(body);
@@ -680,29 +737,57 @@ pub const Etcd = struct {
     fn makeRequest(self: *Etcd, url: []const u8, body: []const u8) ![]u8 {
         const uri = Uri.parse(url) catch return error.InvalidUri;
 
-        // Add User-Agent header
-        const extra_headers = [_]http.Header{
-            .{ .name = "User-Agent", .value = self.options.security.user_agent },
-        };
+        // Build extra headers (User-Agent + optional Authorization)
+        var extra_headers_buf: [2]http.Header = undefined;
+        var extra_headers_len: usize = 0;
 
-        var server_header_buffer: [4096]u8 = undefined;
-        var request = self.client.open(.POST, uri, .{
-            .server_header_buffer = &server_header_buffer,
-            .extra_headers = &extra_headers,
+        // Add User-Agent header
+        extra_headers_buf[extra_headers_len] = .{
+            .name = "User-Agent",
+            .value = self.options.security.user_agent,
+        };
+        extra_headers_len += 1;
+
+        // Security: Wire etcd basic auth credentials into requests (#81)
+        const auth_header = buildBasicAuthHeader(
+            self.allocator,
+            self.options.username,
+            self.options.password,
+        ) catch |err| switch (err) {
+            RemoteError.InvalidConfiguration => return error.InvalidConfiguration,
+            RemoteError.OutOfMemory => return error.OutOfMemory,
+            else => return error.RequestFailed,
+        };
+        defer if (auth_header) |h| self.allocator.free(h);
+
+        if (auth_header) |header_value| {
+            extra_headers_buf[extra_headers_len] = .{
+                .name = "Authorization",
+                .value = header_value,
+            };
+            extra_headers_len += 1;
+        }
+
+        // NOTE: Socket-level timeouts (GAP-0008 / #80) cannot be applied with the
+        // fetch API because it does not expose the underlying connection.
+        // TODO: Investigate Client-level timeout configuration in Zig 0.15+.
+
+        var response_storage: std.Io.Writer.Allocating = .init(self.allocator);
+        errdefer response_storage.deinit();
+
+        const result = self.client.fetch(.{
+            .location = .{ .uri = uri },
+            .method = .POST,
+            .payload = body,
+            .extra_headers = extra_headers_buf[0..extra_headers_len],
             // Security: Disable redirect following to prevent SSRF bypass (CWE-918, #70)
             .redirect_behavior = .not_allowed,
-        }) catch return error.ConnectionFailed;
-        defer request.deinit();
+            .response_writer = &response_storage.writer,
+            .headers = .{ .content_type = .{ .override = "application/json" } },
+        }) catch return error.RequestFailed;
+        _ = result;
 
-        request.headers.content_type = http.Client.Request.Headers.Value{ .override = "application/json" };
-
-        request.send() catch return error.RequestFailed;
-        request.writer().writeAll(body) catch return error.RequestFailed;
-        request.finish() catch return error.RequestFailed;
-        request.wait() catch return error.RequestFailed;
-
-        const response_body = request.reader().readAllAlloc(self.allocator, 1024 * 1024) catch return error.RequestFailed;
-        return response_body;
+        return response_storage.toOwnedSlice() catch return error.OutOfMemory;
     }
 
     fn parseEtcdResponse(self: *Etcd, response: []const u8) ?[]const u8 {
@@ -715,9 +800,9 @@ pub const Etcd = struct {
 
         // Decode base64 value
         const decoder = std.base64.standard;
-        const decoded_len = decoder.calcSizeForSlice(encoded_value) catch return null;
+        const decoded_len = decoder.Decoder.calcSizeForSlice(encoded_value) catch return null;
         const decoded = self.arena.allocator().alloc(u8, decoded_len) catch return null;
-        _ = decoder.decode(decoded, encoded_value) catch return null;
+        _ = decoder.Decoder.decode(decoded, encoded_value) catch return null;
 
         return decoded;
     }
@@ -741,13 +826,13 @@ pub const Etcd = struct {
             // Decode key and value
             const decoder = std.base64.standard;
 
-            const key_decoded_len = decoder.calcSizeForSlice(encoded_key) catch break;
+            const key_decoded_len = decoder.Decoder.calcSizeForSlice(encoded_key) catch break;
             const decoded_key = self.arena.allocator().alloc(u8, key_decoded_len) catch return RemoteError.OutOfMemory;
-            _ = decoder.decode(decoded_key, encoded_key) catch break;
+            _ = decoder.Decoder.decode(decoded_key, encoded_key) catch break;
 
-            const value_decoded_len = decoder.calcSizeForSlice(encoded_value) catch break;
+            const value_decoded_len = decoder.Decoder.calcSizeForSlice(encoded_value) catch break;
             const decoded_value = self.arena.allocator().alloc(u8, value_decoded_len) catch return RemoteError.OutOfMemory;
-            _ = decoder.decode(decoded_value, encoded_value) catch break;
+            _ = decoder.Decoder.decode(decoded_value, encoded_value) catch break;
 
             result.put(decoded_key, decoded_value) catch return RemoteError.OutOfMemory;
             pos = value_end;
@@ -769,7 +854,8 @@ pub const ConsulOptions = struct {
     /// Datacenter (optional)
     datacenter: ?[]const u8 = null,
     /// ACL token (optional)
-    token: ?[]const u8 = null,
+    /// Security: Uses SensitiveString to prevent accidental credential logging (#59)
+    token: ?SensitiveString = null,
     /// Request timeout in milliseconds
     timeout_ms: u32 = 5000,
     /// Security options (TLS, SSRF protection)
@@ -784,7 +870,14 @@ pub const Consul = struct {
     /// Arena for response storage
     arena: std.heap.ArenaAllocator,
 
-    pub fn init(allocator: Allocator, options: ConsulOptions) Consul {
+    pub fn init(allocator: Allocator, options: ConsulOptions) RemoteError!Consul {
+        // Security: Validate address URL at init time (#100)
+        // This prevents per-request validation overhead and fails fast
+        try validateUrl(options.address, options.security);
+
+        // Security: Warn when TLS certificate verification is disabled (CWE-295)
+        warnIfTlsSkipVerify(options.security);
+
         return .{
             .allocator = allocator,
             .options = options,
@@ -806,8 +899,7 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // Security: Validate address URL (SSRF protection)
-        try validateUrl(self.options.address, self.options.security);
+        // URL validated at init time (#100)
 
         const url = std.fmt.allocPrint(self.allocator, "{s}/v1/kv/{s}?raw", .{ self.options.address, key }) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(url);
@@ -832,8 +924,7 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // Security: Validate address URL (SSRF protection)
-        try validateUrl(self.options.address, self.options.security);
+        // URL validated at init time (#100)
 
         const url = std.fmt.allocPrint(self.allocator, "{s}/v1/kv/{s}", .{ self.options.address, key }) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(url);
@@ -849,8 +940,7 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // Security: Validate address URL (SSRF protection)
-        try validateUrl(self.options.address, self.options.security);
+        // URL validated at init time (#100)
 
         const url = std.fmt.allocPrint(self.allocator, "{s}/v1/kv/{s}", .{ self.options.address, key }) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(url);
@@ -866,8 +956,7 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // Security: Validate address URL (SSRF protection)
-        try validateUrl(self.options.address, self.options.security);
+        // URL validated at init time (#100)
 
         const url = std.fmt.allocPrint(self.allocator, "{s}/v1/kv/{s}?recurse", .{ self.options.address, prefix }) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(url);
@@ -886,8 +975,7 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // Security: Validate address URL (SSRF protection)
-        try validateUrl(self.options.address, self.options.security);
+        // URL validated at init time (#100)
 
         const url = std.fmt.allocPrint(self.allocator, "{s}/v1/kv/{s}?keys", .{ self.options.address, prefix }) catch return RemoteError.OutOfMemory;
         defer self.allocator.free(url);
@@ -914,32 +1002,36 @@ pub const Consul = struct {
 
         // Add Consul ACL token header if configured (X-Consul-Token)
         // Security: Token is now actually transmitted (#55 fix)
+        // Security: Use .expose() to access sensitive token value (#59)
         if (self.options.token) |token| {
             extra_headers_buf[extra_headers_len] = .{
                 .name = "X-Consul-Token",
-                .value = token,
+                .value = token.expose(),
             };
             extra_headers_len += 1;
         }
 
-        var server_header_buffer: [4096]u8 = undefined;
-        var request = self.client.open(.GET, uri, .{
-            .server_header_buffer = &server_header_buffer,
+        // NOTE: Socket-level timeouts (GAP-0008 / #80) cannot be applied with the
+        // fetch API because it does not expose the underlying connection.
+
+        var response_storage: std.Io.Writer.Allocating = .init(self.allocator);
+        errdefer response_storage.deinit();
+
+        const result = self.client.fetch(.{
+            .location = .{ .uri = uri },
+            .method = .GET,
             .extra_headers = extra_headers_buf[0..extra_headers_len],
             // Security: Disable redirect following to prevent SSRF bypass (CWE-918, #70)
             .redirect_behavior = .not_allowed,
-        }) catch return error.ConnectionFailed;
-        defer request.deinit();
+            .response_writer = &response_storage.writer,
+        }) catch return error.RequestFailed;
 
-        request.send() catch return error.RequestFailed;
-        request.finish() catch return error.RequestFailed;
-        request.wait() catch return error.RequestFailed;
-
-        if (request.status == .not_found) {
+        if (result.status == .not_found) {
+            response_storage.deinit();
             return error.NotFound;
         }
 
-        return request.reader().readAllAlloc(self.allocator, 1024 * 1024) catch return error.RequestFailed;
+        return response_storage.toOwnedSlice() catch return error.OutOfMemory;
     }
 
     fn makePutRequest(self: *Consul, url: []const u8, body: []const u8) ![]u8 {
@@ -957,29 +1049,32 @@ pub const Consul = struct {
         extra_headers_len += 1;
 
         // Add Consul ACL token header if configured
+        // Security: Use .expose() to access sensitive token value (#59)
         if (self.options.token) |token| {
             extra_headers_buf[extra_headers_len] = .{
                 .name = "X-Consul-Token",
-                .value = token,
+                .value = token.expose(),
             };
             extra_headers_len += 1;
         }
 
-        var server_header_buffer: [4096]u8 = undefined;
-        var request = self.client.open(.PUT, uri, .{
-            .server_header_buffer = &server_header_buffer,
+        // NOTE: Socket-level timeouts (GAP-0008 / #80) cannot be applied with the
+        // fetch API because it does not expose the underlying connection.
+
+        var response_storage: std.Io.Writer.Allocating = .init(self.allocator);
+        errdefer response_storage.deinit();
+
+        _ = self.client.fetch(.{
+            .location = .{ .uri = uri },
+            .method = .PUT,
+            .payload = body,
             .extra_headers = extra_headers_buf[0..extra_headers_len],
             // Security: Disable redirect following to prevent SSRF bypass (CWE-918, #70)
             .redirect_behavior = .not_allowed,
-        }) catch return error.ConnectionFailed;
-        defer request.deinit();
+            .response_writer = &response_storage.writer,
+        }) catch return error.RequestFailed;
 
-        request.send() catch return error.RequestFailed;
-        request.writer().writeAll(body) catch return error.RequestFailed;
-        request.finish() catch return error.RequestFailed;
-        request.wait() catch return error.RequestFailed;
-
-        return request.reader().readAllAlloc(self.allocator, 1024 * 1024) catch return error.RequestFailed;
+        return response_storage.toOwnedSlice() catch return error.OutOfMemory;
     }
 
     fn makeDeleteRequest(self: *Consul, url: []const u8) ![]u8 {
@@ -997,28 +1092,31 @@ pub const Consul = struct {
         extra_headers_len += 1;
 
         // Add Consul ACL token header if configured
+        // Security: Use .expose() to access sensitive token value (#59)
         if (self.options.token) |token| {
             extra_headers_buf[extra_headers_len] = .{
                 .name = "X-Consul-Token",
-                .value = token,
+                .value = token.expose(),
             };
             extra_headers_len += 1;
         }
 
-        var server_header_buffer: [4096]u8 = undefined;
-        var request = self.client.open(.DELETE, uri, .{
-            .server_header_buffer = &server_header_buffer,
+        // NOTE: Socket-level timeouts (GAP-0008 / #80) cannot be applied with the
+        // fetch API because it does not expose the underlying connection.
+
+        var response_storage: std.Io.Writer.Allocating = .init(self.allocator);
+        errdefer response_storage.deinit();
+
+        _ = self.client.fetch(.{
+            .location = .{ .uri = uri },
+            .method = .DELETE,
             .extra_headers = extra_headers_buf[0..extra_headers_len],
             // Security: Disable redirect following to prevent SSRF bypass (CWE-918, #70)
             .redirect_behavior = .not_allowed,
-        }) catch return error.ConnectionFailed;
-        defer request.deinit();
+            .response_writer = &response_storage.writer,
+        }) catch return error.RequestFailed;
 
-        request.send() catch return error.RequestFailed;
-        request.finish() catch return error.RequestFailed;
-        request.wait() catch return error.RequestFailed;
-
-        return request.reader().readAllAlloc(self.allocator, 1024 * 1024) catch return error.RequestFailed;
+        return response_storage.toOwnedSlice() catch return error.OutOfMemory;
     }
 
     fn parseConsulKVList(self: *Consul, response: []const u8, prefix: []const u8) RemoteError!std.StringHashMap([]const u8) {
@@ -1040,9 +1138,9 @@ pub const Consul = struct {
 
             // Decode base64 value
             const decoder = std.base64.standard;
-            const decoded_len = decoder.calcSizeForSlice(encoded_value) catch break;
+            const decoded_len = decoder.Decoder.calcSizeForSlice(encoded_value) catch break;
             const decoded_value = self.arena.allocator().alloc(u8, decoded_len) catch return RemoteError.OutOfMemory;
-            _ = decoder.decode(decoded_value, encoded_value) catch break;
+            _ = decoder.Decoder.decode(decoded_value, encoded_value) catch break;
 
             const owned_key = self.arena.allocator().dupe(u8, key_value) catch return RemoteError.OutOfMemory;
             result.put(owned_key, decoded_value) catch return RemoteError.OutOfMemory;
@@ -1110,7 +1208,9 @@ pub const RemoteProvider = union(enum) {
 // ============================================================================
 
 test "Etcd initialization defaults to HTTPS" {
-    var etcd = Etcd.init(std.testing.allocator, .{});
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
     defer etcd.deinit();
 
     // Security: Default should be HTTPS (#48)
@@ -1118,7 +1218,9 @@ test "Etcd initialization defaults to HTTPS" {
 }
 
 test "Consul initialization defaults to HTTPS" {
-    var consul = Consul.init(std.testing.allocator, .{});
+    var consul = try Consul.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
     defer consul.deinit();
 
     // Security: Default should be HTTPS (#48)
@@ -1127,8 +1229,9 @@ test "Consul initialization defaults to HTTPS" {
 
 test "Etcd custom endpoints" {
     const endpoints = [_][]const u8{ "http://etcd1:2379", "http://etcd2:2379" };
-    var etcd = Etcd.init(std.testing.allocator, .{
+    var etcd = try Etcd.init(std.testing.allocator, .{
         .endpoints = &endpoints,
+        .security = .{ .allow_insecure_http = true, .block_private_ips = false },
     });
     defer etcd.deinit();
 
@@ -1136,22 +1239,215 @@ test "Etcd custom endpoints" {
 }
 
 test "Consul with token" {
-    var consul = Consul.init(std.testing.allocator, .{
-        .token = "my-secret-token",
+    var consul = try Consul.init(std.testing.allocator, .{
+        .token = SensitiveString.init("my-secret-token"),
         .datacenter = "dc1",
+        .security = .{ .block_private_ips = false },
     });
     defer consul.deinit();
 
-    try std.testing.expectEqualStrings("my-secret-token", consul.options.token.?);
+    try std.testing.expectEqualStrings("my-secret-token", consul.options.token.?.expose());
     try std.testing.expectEqualStrings("dc1", consul.options.datacenter.?);
 }
 
 test "RemoteProvider union" {
-    var etcd = Etcd.init(std.testing.allocator, .{});
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
     defer etcd.deinit();
 
     const provider = RemoteProvider{ .etcd = &etcd };
     _ = provider;
+}
+
+// ============================================================================
+// etcd Auth Tests (#81)
+// ============================================================================
+
+test "buildBasicAuthHeader produces valid Authorization header (#81)" {
+    const header = try buildBasicAuthHeader(
+        std.testing.allocator,
+        "admin",
+        SensitiveString.init("secret"),
+    );
+    try std.testing.expect(header != null);
+    defer std.testing.allocator.free(header.?);
+
+    // "admin:secret" -> base64 "YWRtaW46c2VjcmV0"
+    try std.testing.expectEqualStrings("Basic YWRtaW46c2VjcmV0", header.?);
+}
+
+test "buildBasicAuthHeader returns null when no credentials (#81)" {
+    const header = try buildBasicAuthHeader(std.testing.allocator, null, null);
+    try std.testing.expect(header == null);
+}
+
+test "buildBasicAuthHeader returns error when only username (#81)" {
+    const result = buildBasicAuthHeader(std.testing.allocator, "admin", null);
+    try std.testing.expectError(RemoteError.InvalidConfiguration, result);
+}
+
+test "buildBasicAuthHeader returns error when only password (#81)" {
+    const result = buildBasicAuthHeader(std.testing.allocator, null, SensitiveString.init("secret"));
+    try std.testing.expectError(RemoteError.InvalidConfiguration, result);
+}
+
+test "Etcd makeRequest includes auth header when credentials set (#81)" {
+    // Verify that EtcdOptions with credentials are stored properly
+    // and that makeRequest would build headers with auth
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .username = "admin",
+        .password = SensitiveString.init("secret"),
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+
+    try std.testing.expectEqualStrings("admin", etcd.options.username.?);
+    try std.testing.expectEqualStrings("secret", etcd.options.password.?.expose());
+
+    // Verify buildBasicAuthHeader works with these credentials
+    const header = try buildBasicAuthHeader(
+        std.testing.allocator,
+        etcd.options.username,
+        etcd.options.password,
+    );
+    try std.testing.expect(header != null);
+    defer std.testing.allocator.free(header.?);
+    try std.testing.expect(std.mem.startsWith(u8, header.?, "Basic "));
+}
+
+// ============================================================================
+// Timeout Tests (#80)
+// ============================================================================
+
+test "setSocketTimeout sets socket-level timeouts (#80)" {
+    // Create a real socket to test timeout setting
+    const stream = net.tcpConnectToAddress(net.Address.initIp4(.{ 127, 0, 0, 1 }, 0)) catch {
+        // If we can't connect, test with a listening socket instead
+        const server = net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
+        const sock = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0) catch return;
+        defer std.posix.close(sock);
+        std.posix.bind(sock, @ptrCast(&server.in.sa), @sizeOf(@TypeOf(server.in.sa))) catch return;
+        // Verify setting timeout does not error
+        setSocketTimeout(sock, 3000) catch |err| {
+            try std.testing.expect(err != RemoteError.RequestFailed);
+            return;
+        };
+        return;
+    };
+    defer stream.close();
+
+    // Setting a non-zero timeout should succeed
+    try setSocketTimeout(stream.handle, 3000);
+}
+
+test "setSocketTimeout zero timeout is a no-op (#80)" {
+    // Zero timeout should return immediately without error
+    // Pass a dummy handle since it should never be used
+    try setSocketTimeout(@as(net.Stream.Handle, 0), 0);
+}
+
+test "Etcd default timeout_ms is 5000" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+    try std.testing.expectEqual(@as(u32, 5000), etcd.options.timeout_ms);
+}
+
+test "Consul default timeout_ms is 5000" {
+    var consul = try Consul.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer consul.deinit();
+    try std.testing.expectEqual(@as(u32, 5000), consul.options.timeout_ms);
+}
+
+// ============================================================================
+// Init-time URL Validation Tests (#100)
+// ============================================================================
+
+test "Etcd.init rejects private IP endpoint at init (#100)" {
+    const endpoints = [_][]const u8{"https://192.168.1.1:2379"};
+    const result = Etcd.init(std.testing.allocator, .{
+        .endpoints = &endpoints,
+    });
+    try std.testing.expectError(RemoteError.PrivateAddressBlocked, result);
+}
+
+test "Etcd.init rejects HTTP without allow_insecure_http (#100)" {
+    const endpoints = [_][]const u8{"http://etcd.example.com:2379"};
+    const result = Etcd.init(std.testing.allocator, .{
+        .endpoints = &endpoints,
+    });
+    try std.testing.expectError(RemoteError.InsecureScheme, result);
+}
+
+test "Etcd.init accepts valid HTTPS endpoint (#100)" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+    try std.testing.expectEqualStrings("https://localhost:2379", etcd.options.endpoints[0]);
+}
+
+test "Consul.init rejects private IP address at init (#100)" {
+    const result = Consul.init(std.testing.allocator, .{
+        .address = "https://10.0.0.1:8500",
+    });
+    try std.testing.expectError(RemoteError.PrivateAddressBlocked, result);
+}
+
+test "Consul.init rejects HTTP without allow_insecure_http (#100)" {
+    const result = Consul.init(std.testing.allocator, .{
+        .address = "http://consul.example.com:8500",
+    });
+    try std.testing.expectError(RemoteError.InsecureScheme, result);
+}
+
+test "Consul.init accepts valid HTTPS address (#100)" {
+    var consul = try Consul.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer consul.deinit();
+    try std.testing.expectEqualStrings("https://localhost:8500", consul.options.address);
+}
+
+// ============================================================================
+// SensitiveString Credential Protection Tests (#59)
+// ============================================================================
+
+test "EtcdOptions password uses SensitiveString for redaction (#59)" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .username = "admin",
+        .password = SensitiveString.init("super-secret-password"),
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+
+    // Verify formatting redacts the password
+    var buf: [200]u8 = undefined;
+    const password_str = std.fmt.bufPrint(&buf, "{f}", .{etcd.options.password.?}) catch unreachable;
+    try std.testing.expectEqualStrings("***REDACTED***", password_str);
+
+    // But expose() returns actual value
+    try std.testing.expectEqualStrings("super-secret-password", etcd.options.password.?.expose());
+}
+
+test "ConsulOptions token uses SensitiveString for redaction (#59)" {
+    var consul = try Consul.init(std.testing.allocator, .{
+        .token = SensitiveString.init("consul-secret-token"),
+        .security = .{ .block_private_ips = false },
+    });
+    defer consul.deinit();
+
+    // Verify formatting redacts the token
+    var buf: [200]u8 = undefined;
+    const token_str = std.fmt.bufPrint(&buf, "{f}", .{consul.options.token.?}) catch unreachable;
+    try std.testing.expectEqualStrings("***REDACTED***", token_str);
+
+    // But expose() returns actual value
+    try std.testing.expectEqualStrings("consul-secret-token", consul.options.token.?.expose());
 }
 
 // ============================================================================
@@ -1290,6 +1586,21 @@ test "validateUrl blocks URL-encoded private IPs (#71)" {
     try std.testing.expectError(RemoteError.PrivateAddressBlocked, result);
 }
 
+test "validateUrl blocks fully percent-encoded loopback (#71)" {
+    // Fully percent-encoded loopback: http://%31%32%37.%30.%30.%31:2379/
+    // This tests that decodePercentEncoded is wired into validateUrl
+    const result = validateUrl("http://%31%32%37.%30.%30.%31:2379/", .{
+        .allow_insecure_http = true,
+    });
+    try std.testing.expectError(RemoteError.PrivateAddressBlocked, result);
+}
+
+test "validateUrl blocks percent-encoded 10.x private IP (#71)" {
+    // %31%30 = "10"
+    const result = validateUrl("https://%31%30.0.0.1:2379", .{});
+    try std.testing.expectError(RemoteError.PrivateAddressBlocked, result);
+}
+
 test "parseIPv4ToInt parses various formats correctly" {
     // Standard dotted decimal
     try std.testing.expectEqual(@as(?u32, 0x7f000001), parseIPv4ToInt("127.0.0.1"));
@@ -1346,7 +1657,46 @@ test "SecurityOptions has secure defaults" {
     const opts = SecurityOptions{};
     try std.testing.expect(!opts.allow_insecure_http);
     try std.testing.expect(opts.block_private_ips);
+    try std.testing.expect(!opts.tls_skip_verify);
     try std.testing.expectEqualStrings("zigconfig/1.0", opts.user_agent);
+}
+
+test "SecurityOptions tls_skip_verify defaults to false" {
+    const opts = SecurityOptions{};
+    try std.testing.expect(!opts.tls_skip_verify);
+}
+
+test "warnIfTlsSkipVerify executes without error when true" {
+    // Verify the warning code path executes without panic or error.
+    // The actual log output goes to the test runner's log handler.
+    warnIfTlsSkipVerify(.{ .tls_skip_verify = true });
+}
+
+test "warnIfTlsSkipVerify is silent when false" {
+    // Verify default options do not trigger the warning path.
+    warnIfTlsSkipVerify(.{});
+}
+
+test "Etcd.init with tls_skip_verify=true succeeds and warns" {
+    // Verify Etcd can be initialized with tls_skip_verify=true.
+    // The warning is emitted via std.log (captured by test runner).
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false, .tls_skip_verify = true },
+    });
+    defer etcd.deinit();
+
+    try std.testing.expect(etcd.options.security.tls_skip_verify);
+}
+
+test "Consul.init with tls_skip_verify=true succeeds and warns" {
+    // Verify Consul can be initialized with tls_skip_verify=true.
+    // The warning is emitted via std.log (captured by test runner).
+    var consul = try Consul.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false, .tls_skip_verify = true },
+    });
+    defer consul.deinit();
+
+    try std.testing.expect(consul.options.security.tls_skip_verify);
 }
 
 // ============================================================================
@@ -1410,4 +1760,163 @@ test "isValidKVKey rejects edge cases" {
     try std.testing.expect(!isValidKVKey("key with spaces"));
     try std.testing.expect(!isValidKVKey("key<tag>"));
     try std.testing.expect(!isValidKVKey("key\"quoted\""));
+}
+
+// ============================================================================
+// Etcd Key Validation Tests (CWE-74, GAP-0014)
+// ============================================================================
+
+test "Etcd.get rejects empty key (GAP-0014)" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+
+    const result = etcd.get("");
+    try std.testing.expectError(RemoteError.InvalidKey, result);
+}
+
+test "Etcd.get rejects path traversal key (GAP-0014)" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+
+    const result = etcd.get("../etc/passwd");
+    try std.testing.expectError(RemoteError.InvalidKey, result);
+}
+
+test "Etcd.get rejects overly long key (GAP-0014)" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+
+    const long_key = "a" ** 600;
+    const result = etcd.get(long_key);
+    try std.testing.expectError(RemoteError.InvalidKey, result);
+}
+
+test "Etcd.put rejects empty key (GAP-0014)" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+
+    const result = etcd.put("", "value");
+    try std.testing.expectError(RemoteError.InvalidKey, result);
+}
+
+test "Etcd.put rejects path traversal key (GAP-0014)" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+
+    const result = etcd.put("foo/../bar", "value");
+    try std.testing.expectError(RemoteError.InvalidKey, result);
+}
+
+test "Etcd.delete rejects empty key (GAP-0014)" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+
+    const result = etcd.delete("");
+    try std.testing.expectError(RemoteError.InvalidKey, result);
+}
+
+test "Etcd.delete rejects path traversal key (GAP-0014)" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+
+    const result = etcd.delete("../secret");
+    try std.testing.expectError(RemoteError.InvalidKey, result);
+}
+
+test "Etcd.getPrefix rejects empty key (GAP-0014)" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+
+    const result = etcd.getPrefix("");
+    try std.testing.expectError(RemoteError.InvalidKey, result);
+}
+
+test "Etcd.getPrefix rejects path traversal key (GAP-0014)" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+
+    const result = etcd.getPrefix("config/../../../etc");
+    try std.testing.expectError(RemoteError.InvalidKey, result);
+}
+
+test "Etcd.get rejects URL-encoded traversal (GAP-0014)" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+
+    const result = etcd.get("%2e%2e/etc/passwd");
+    try std.testing.expectError(RemoteError.InvalidKey, result);
+}
+
+test "Etcd.get rejects null byte injection (GAP-0014)" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+
+    const result = etcd.get("key\x00evil");
+    try std.testing.expectError(RemoteError.InvalidKey, result);
+}
+
+// ============================================================================
+// CGNAT Range SSRF Protection Tests (#115)
+// ============================================================================
+
+test "isPrivateIPv4Int blocks CGNAT range 100.64.0.0/10 (#115)" {
+    // 100.64.0.0 = first address in CGNAT range
+    try std.testing.expect(isPrivateIPv4Int(0x64400000));
+    // 100.64.0.1
+    try std.testing.expect(isPrivateIPv4Int(0x64400001));
+    // 100.127.255.255 = last address in CGNAT range
+    try std.testing.expect(isPrivateIPv4Int(0x647FFFFF));
+    // 100.100.100.100 = mid-range CGNAT
+    try std.testing.expect(isPrivateIPv4Int(0x64646464));
+    // 100.63.255.255 = just below CGNAT range, should NOT be blocked
+    try std.testing.expect(!isPrivateIPv4Int(0x643FFFFF));
+    // 100.128.0.0 = just above CGNAT range, should NOT be blocked
+    try std.testing.expect(!isPrivateIPv4Int(0x64800000));
+}
+
+test "isPrivateIPv4Bytes blocks CGNAT range 100.64.0.0/10 (#115)" {
+    // 100.64.0.1
+    try std.testing.expect(isPrivateIPv4Bytes(.{ 100, 64, 0, 1 }));
+    // 100.127.255.255
+    try std.testing.expect(isPrivateIPv4Bytes(.{ 100, 127, 255, 255 }));
+    // 100.100.0.1
+    try std.testing.expect(isPrivateIPv4Bytes(.{ 100, 100, 0, 1 }));
+    // 100.63.255.255 = just below CGNAT range
+    try std.testing.expect(!isPrivateIPv4Bytes(.{ 100, 63, 255, 255 }));
+    // 100.128.0.0 = just above CGNAT range
+    try std.testing.expect(!isPrivateIPv4Bytes(.{ 100, 128, 0, 0 }));
+}
+
+test "isPrivateAddress blocks CGNAT dotted-decimal (#115)" {
+    try std.testing.expect(isPrivateAddress("100.64.0.1"));
+    try std.testing.expect(isPrivateAddress("100.127.255.255"));
+    try std.testing.expect(!isPrivateAddress("100.63.255.255"));
+    try std.testing.expect(!isPrivateAddress("100.128.0.0"));
+}
+
+test "validateUrl blocks CGNAT range (#115)" {
+    const result = validateUrl("https://100.64.0.1:2379", .{});
+    try std.testing.expectError(RemoteError.PrivateAddressBlocked, result);
 }

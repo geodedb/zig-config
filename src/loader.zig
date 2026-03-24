@@ -16,7 +16,7 @@
 //! **Parser Limits (CWE-400):** This module imposes the following limits to
 //! prevent resource exhaustion from malicious configuration files:
 //!
-//! - **File size limit:** 10 MB maximum per configuration file
+//! - **File size limit:** 1 MB maximum per configuration file
 //! - **Nesting depth:** Limited by underlying parser (JSON/TOML/YAML)
 //! - **String length:** No explicit limit; bounded by file size limit
 //! - **Array elements:** No explicit limit; bounded by memory allocation
@@ -36,11 +36,13 @@ const fs = std.fs;
 const Allocator = mem.Allocator;
 
 const xdg = @import("xdg.zig");
+const environ = @import("environ.zig");
 const provenance = @import("provenance.zig");
 const flags_mod = @import("flags.zig");
 const ini_mod = @import("ini.zig");
 const properties_mod = @import("properties.zig");
 const secret = @import("secret.zig");
+const limits = @import("limits.zig");
 
 // Security: Import no-follow open helper for symlink attack prevention (CWE-59, #69)
 const openFileReadNoFollow = secret.openFileReadNoFollow;
@@ -78,7 +80,7 @@ pub const Format = enum {
         if (mem.endsWith(u8, path, ".yaml") or mem.endsWith(u8, path, ".yml")) return .yaml;
         if (mem.endsWith(u8, path, ".ini")) return .ini;
         if (mem.endsWith(u8, path, ".properties")) return .properties;
-        return .toml; // Default to TOML
+        return .auto; // Unknown extension: use auto-detection rather than silent .toml default
     }
 };
 
@@ -486,9 +488,12 @@ pub fn Loader(comptime T: type) type {
 
         /// Apply parsed flags to configuration
         /// Flags have second-highest precedence (after override/set)
-        pub fn applyFlags(self: *Self, parser: *const FlagParser) void {
+        pub fn applyFlags(self: *Self, parser: *const FlagParser) LoadError!void {
             for (parser.getValues()) |fv| {
-                self.setField(fv.key, fv.value, .flag, fv.from_flag) catch {};
+                self.setField(fv.key, fv.value, .flag, fv.from_flag) catch |err| switch (err) {
+                    LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                    else => {}, // Non-matching fields or parse errors are expected for flags
+                };
             }
         }
 
@@ -514,34 +519,42 @@ pub fn Loader(comptime T: type) type {
         // Key Normalization and Alias Resolution
         // =====================================================================
 
-        /// Normalize a key based on case sensitivity setting
+        /// Normalize a key based on case sensitivity setting.
+        /// When case_insensitive is true, converts the key to lowercase
+        /// using the arena allocator so the normalized key outlives the call.
+        /// Returns the original key unchanged when case_insensitive is false.
         fn normalizeKey(self: *const Self, key: []const u8) []const u8 {
             if (!self.case_insensitive) {
                 return key;
             }
-            // For case-insensitive, we'd convert to lowercase
-            // Since we can't allocate here easily, we rely on the caller
-            // to use normalized keys consistently
-            return key;
+
+            // Check if the key is already lowercase to avoid unnecessary allocation
+            var needs_lower = false;
+            for (key) |c| {
+                if (c >= 'A' and c <= 'Z') {
+                    needs_lower = true;
+                    break;
+                }
+            }
+            if (!needs_lower) {
+                return key;
+            }
+
+            // Allocate a lowercase copy on the arena.
+            // Safety: The Loader is always created as `var`, so the arena is
+            // inherently mutable. The *const Self is just a calling-convention
+            // restriction for read-only methods, not a true const object.
+            const arena_ptr = @constCast(&self.arena);
+            const lower = arena_ptr.allocator().alloc(u8, key.len) catch return key;
+            for (key, 0..) |c, i| {
+                lower[i] = std.ascii.toLower(c);
+            }
+            return lower;
         }
 
         /// Resolve an alias to its canonical key
         fn resolveAlias(self: *const Self, key: []const u8) []const u8 {
             return self.aliases.get(key) orelse key;
-        }
-
-        /// Transform a config key to an environment variable name
-        fn keyToEnvVar(self: *const Self, prefix: []const u8, key: []const u8) []const u8 {
-            // If we have a replacer, apply transformations
-            if (self.env_key_replacer) |replacer| {
-                _ = replacer;
-                // Would apply replacements here
-                // For now, simple upper-case conversion
-            }
-
-            // Simple implementation: PREFIX_KEY in uppercase
-            _ = prefix;
-            return key; // Simplified - would build PREFIX_KEY
         }
 
         // =====================================================================
@@ -553,56 +566,68 @@ pub fn Loader(comptime T: type) type {
             self.case_insensitive = options.case_insensitive;
 
             // 1. Apply runtime defaults first (lowest precedence)
-            self.applyRuntimeDefaults();
+            try self.applyRuntimeDefaults();
 
             // 2. Apply struct defaults
-            self.applyDefaults();
+            try self.applyDefaults();
 
             // 3. Load from system config (/etc/APP)
             if (options.use_xdg) {
-                const system_path = std.fmt.allocPrint(self.allocator, "/etc/{s}/{s}", .{ options.app_name, options.filename }) catch null;
-                if (system_path) |path| {
-                    defer self.allocator.free(path);
-                    self.loadFromPath(path, .system) catch {};
-                }
+                const system_path = std.fmt.allocPrint(self.allocator, "/etc/{s}/{s}", .{ options.app_name, options.filename }) catch return LoadError.OutOfMemory;
+                defer self.allocator.free(system_path);
+                self.loadFromPath(system_path, .system) catch |err| switch (err) {
+                    LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                    else => {}, // File not found or parse errors are expected for optional system config
+                };
             }
 
             // 4. Load from user config (~/.config/APP)
             if (options.use_xdg) {
-                const user_config = xdg.getConfigDir(self.allocator, options.app_name) catch null;
-                if (user_config) |dir| {
+                if (xdg.getConfigDir(self.allocator, options.app_name)) |dir| {
                     defer self.allocator.free(dir);
-                    const path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ dir, options.filename }) catch null;
-                    if (path) |p| {
-                        defer self.allocator.free(p);
-                        self.loadFromPath(p, .user) catch {};
-                    }
+                    const path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ dir, options.filename }) catch return LoadError.OutOfMemory;
+                    defer self.allocator.free(path);
+                    self.loadFromPath(path, .user) catch |err| switch (err) {
+                        LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                        else => {}, // File not found or parse errors are expected for optional user config
+                    };
+                } else |_| {
+                    // XDG config dir not available (e.g., HOME not set) -- not an error
                 }
             }
 
             // 5. Load from configured search paths (AddConfigPath)
             if (self.search_paths.items.len > 0) {
                 if (self.findConfigFile(options.filename)) |found_path| {
-                    self.loadFromPath(found_path, .project) catch {};
+                    self.loadFromPath(found_path, .project) catch |err| switch (err) {
+                        LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                        else => {}, // Parse errors are non-fatal for optional project config
+                    };
                 }
             } else {
                 // 5b. Fallback to project config (CWD) if no search paths configured
-                self.loadFromPath(options.filename, .project) catch {};
+                self.loadFromPath(options.filename, .project) catch |err| switch (err) {
+                    LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                    else => {}, // File not found is expected when CWD has no config
+                };
             }
 
             // 6. Load .env file (non-secret values only)
-            self.loadDotEnv(".env", .project) catch {};
+            self.loadDotEnv(".env", .project) catch |err| switch (err) {
+                LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                else => {}, // .env file is optional
+            };
 
             // 7. Apply bound environment variables
-            self.applyBoundEnvVars();
+            try self.applyBoundEnvVars();
 
             // 8. Apply automatic environment variables
             if (self.automatic_env_enabled) {
-                self.applyAutomaticEnv(self.automatic_env_prefix);
+                try self.applyAutomaticEnv(self.automatic_env_prefix);
             }
 
             // 9. Apply prefix-based environment variables
-            self.applyEnv(options.env_prefix);
+            try self.applyEnv(options.env_prefix);
 
             // 10. Apply specific config path if provided
             if (options.config_path) |path| {
@@ -610,19 +635,22 @@ pub fn Loader(comptime T: type) type {
             }
 
             // 11. Apply runtime overrides (highest precedence)
-            self.applyOverrides();
+            try self.applyOverrides();
 
             return self.config;
         }
 
-        fn applyRuntimeDefaults(self: *Self) void {
+        fn applyRuntimeDefaults(self: *Self) LoadError!void {
             var iter = self.runtime_defaults.iterator();
             while (iter.next()) |entry| {
-                self.setField(entry.key_ptr.*, entry.value_ptr.*, .runtime_default, "setDefault()") catch {};
+                self.setField(entry.key_ptr.*, entry.value_ptr.*, .runtime_default, "setDefault()") catch |err| switch (err) {
+                    LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                    else => {}, // Non-matching keys or invalid values are expected for runtime defaults
+                };
             }
         }
 
-        fn applyDefaults(self: *Self) void {
+        fn applyDefaults(self: *Self) LoadError!void {
             const info = @typeInfo(T);
             inline for (info.@"struct".fields) |field| {
                 if (field.default_value_ptr != null) {
@@ -632,20 +660,23 @@ pub fn Loader(comptime T: type) type {
                         "(default)",
                         .default,
                         null,
-                    ) catch {};
+                    ) catch return LoadError.OutOfMemory;
                 }
             }
         }
 
-        fn applyOverrides(self: *Self) void {
+        fn applyOverrides(self: *Self) LoadError!void {
             var iter = self.overrides.iterator();
             while (iter.next()) |entry| {
                 // Force set with override source (highest precedence)
-                self.setFieldForce(entry.key_ptr.*, entry.value_ptr.*, .override, "set()") catch {};
+                self.setFieldForce(entry.key_ptr.*, entry.value_ptr.*, .override, "set()") catch |err| switch (err) {
+                    LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                    else => {}, // Non-matching keys are silently ignored for overrides
+                };
             }
         }
 
-        fn applyBoundEnvVars(self: *Self) void {
+        fn applyBoundEnvVars(self: *Self) LoadError!void {
             var iter = self.env_bindings.iterator();
             while (iter.next()) |entry| {
                 const key = entry.key_ptr.*;
@@ -653,15 +684,18 @@ pub fn Loader(comptime T: type) type {
 
                 // Try each bound env var in order
                 for (env_vars) |env_var| {
-                    if (std.posix.getenv(env_var)) |value| {
-                        self.setField(key, value, .env, env_var) catch {};
+                    if (environ.getenv(env_var)) |value| {
+                        self.setField(key, value, .env, env_var) catch |err| switch (err) {
+                            LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                            else => {}, // Value type mismatch or unknown key is non-fatal
+                        };
                         break;
                     }
                 }
             }
         }
 
-        fn applyAutomaticEnv(self: *Self, prefix: []const u8) void {
+        fn applyAutomaticEnv(self: *Self, prefix: []const u8) LoadError!void {
             // Get all environment variables and find ones with our prefix
             const info = @typeInfo(T);
             inline for (info.@"struct".fields) |field| {
@@ -669,19 +703,25 @@ pub fn Loader(comptime T: type) type {
                 var env_name_buf: [256]u8 = undefined;
                 const env_name = buildEnvVarName(&env_name_buf, prefix, field.name, self.env_key_replacer);
 
-                if (std.posix.getenv(env_name)) |value| {
-                    self.setField(field.name, value, .env, env_name) catch {};
+                if (environ.getenv(env_name)) |value| {
+                    self.setField(field.name, value, .env, env_name) catch |err| switch (err) {
+                        LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                        else => {}, // Value type mismatch is non-fatal for env vars
+                    };
                 }
             }
         }
 
         fn loadFromPath(self: *Self, path: []const u8, source: Source) LoadError!void {
+            // Security: Validate path does not contain traversal sequences (CWE-22, #107)
+            if (!secret.isPathSafe(path)) return LoadError.FileNotFound;
+
             const file = openFileReadNoFollow(path) catch {
                 return LoadError.FileNotFound;
             };
             defer file.close();
 
-            const content = file.readToEndAlloc(self.allocator, 10 * 1024 * 1024) catch {
+            const content = file.readToEndAlloc(self.allocator, limits.MAX_CONFIG_FILE_SIZE) catch {
                 return LoadError.IoError;
             };
             defer self.allocator.free(content);
@@ -707,38 +747,50 @@ pub fn Loader(comptime T: type) type {
             };
             defer parsed.deinit();
 
-            self.applyJsonValue("", parsed.value, source, path);
+            try self.applyJsonValue("", parsed.value, source, path);
         }
 
-        fn applyJsonValue(self: *Self, prefix: []const u8, value: std.json.Value, source: Source, path: []const u8) void {
+        fn applyJsonValue(self: *Self, prefix: []const u8, value: std.json.Value, source: Source, path: []const u8) LoadError!void {
             switch (value) {
                 .object => |obj| {
                     var iter = obj.iterator();
                     while (iter.next()) |entry| {
                         const full_key = if (prefix.len > 0)
-                            std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ prefix, entry.key_ptr.* }) catch continue
+                            std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ prefix, entry.key_ptr.* }) catch return LoadError.OutOfMemory
                         else
-                            self.allocator.dupe(u8, entry.key_ptr.*) catch continue;
+                            self.allocator.dupe(u8, entry.key_ptr.*) catch return LoadError.OutOfMemory;
                         defer self.allocator.free(full_key);
 
-                        self.applyJsonValue(full_key, entry.value_ptr.*, source, path);
+                        try self.applyJsonValue(full_key, entry.value_ptr.*, source, path);
                     }
                 },
                 .string => |s| {
-                    self.setField(prefix, s, source, path) catch {};
+                    self.setField(prefix, s, source, path) catch |err| switch (err) {
+                        LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                        else => {}, // Unknown key or type mismatch is non-fatal during parsing
+                    };
                 },
                 .integer => |i| {
                     var buf: [32]u8 = undefined;
                     const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch return;
-                    self.setField(prefix, str, source, path) catch {};
+                    self.setField(prefix, str, source, path) catch |err| switch (err) {
+                        LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                        else => {}, // Unknown key or type mismatch is non-fatal during parsing
+                    };
                 },
                 .float => |f| {
                     var buf: [64]u8 = undefined;
                     const str = std.fmt.bufPrint(&buf, "{d}", .{f}) catch return;
-                    self.setField(prefix, str, source, path) catch {};
+                    self.setField(prefix, str, source, path) catch |err| switch (err) {
+                        LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                        else => {}, // Unknown key or type mismatch is non-fatal during parsing
+                    };
                 },
                 .bool => |b| {
-                    self.setField(prefix, if (b) "true" else "false", source, path) catch {};
+                    self.setField(prefix, if (b) "true" else "false", source, path) catch |err| switch (err) {
+                        LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                        else => {}, // Unknown key or type mismatch is non-fatal during parsing
+                    };
                 },
                 else => {},
             }
@@ -769,7 +821,7 @@ pub fn Loader(comptime T: type) type {
                     }
 
                     const full_key = if (current_section) |section|
-                        std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ section, key }) catch key
+                        std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ section, key }) catch return LoadError.OutOfMemory
                     else
                         key;
 
@@ -777,7 +829,10 @@ pub fn Loader(comptime T: type) type {
                         defer self.allocator.free(full_key);
                     }
 
-                    self.setField(full_key, value, source, path) catch {};
+                    self.setField(full_key, value, source, path) catch |err| switch (err) {
+                        LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                        else => {}, // Unknown key or type mismatch is non-fatal during TOML parsing
+                    };
                 }
             }
         }
@@ -800,7 +855,10 @@ pub fn Loader(comptime T: type) type {
                         }
                     }
 
-                    self.setField(key, value, source, path) catch {};
+                    self.setField(key, value, source, path) catch |err| switch (err) {
+                        LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                        else => {}, // Unknown key or type mismatch is non-fatal during YAML parsing
+                    };
                 }
             }
         }
@@ -814,7 +872,10 @@ pub fn Loader(comptime T: type) type {
             // Apply global values
             var global_iter = doc.global.iterator();
             while (global_iter.next()) |entry| {
-                self.setField(entry.key_ptr.*, entry.value_ptr.*, source, path) catch {};
+                self.setField(entry.key_ptr.*, entry.value_ptr.*, source, path) catch |err| switch (err) {
+                    LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                    else => {}, // Unknown key or type mismatch is non-fatal during INI parsing
+                };
             }
 
             // Apply section values with "section.key" format
@@ -823,9 +884,12 @@ pub fn Loader(comptime T: type) type {
                 const section_name = section_entry.key_ptr.*;
                 var value_iter = section_entry.value_ptr.values.iterator();
                 while (value_iter.next()) |value_entry| {
-                    const full_key = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ section_name, value_entry.key_ptr.* }) catch continue;
+                    const full_key = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ section_name, value_entry.key_ptr.* }) catch return LoadError.OutOfMemory;
                     defer self.allocator.free(full_key);
-                    self.setField(full_key, value_entry.value_ptr.*, source, path) catch {};
+                    self.setField(full_key, value_entry.value_ptr.*, source, path) catch |err| switch (err) {
+                        LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                        else => {}, // Unknown key or type mismatch is non-fatal during INI parsing
+                    };
                 }
             }
         }
@@ -839,17 +903,24 @@ pub fn Loader(comptime T: type) type {
             // Apply all properties
             var iter = props.values.iterator();
             while (iter.next()) |entry| {
-                self.setField(entry.key_ptr.*, entry.value_ptr.*, source, path) catch {};
+                self.setField(entry.key_ptr.*, entry.value_ptr.*, source, path) catch |err| switch (err) {
+                    LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                    else => {}, // Unknown key or type mismatch is non-fatal during properties parsing
+                };
             }
         }
 
         fn loadDotEnv(self: *Self, path: []const u8, source: Source) LoadError!void {
-            const file = fs.cwd().openFile(path, .{}) catch {
+            // Security: Validate path does not contain traversal sequences (CWE-22, #108)
+            if (!secret.isPathSafe(path)) return;
+
+            // Security: Use openFileReadNoFollow to prevent symlink attacks (CWE-59, #108)
+            const file = openFileReadNoFollow(path) catch {
                 return LoadError.FileNotFound;
             };
             defer file.close();
 
-            const content = file.readToEndAlloc(self.allocator, 1024 * 1024) catch {
+            const content = file.readToEndAlloc(self.allocator, limits.MAX_DOTENV_FILE_SIZE) catch {
                 return LoadError.IoError;
             };
             defer self.allocator.free(content);
@@ -862,19 +933,25 @@ pub fn Loader(comptime T: type) type {
                 if (mem.indexOf(u8, trimmed, "=")) |eq_pos| {
                     const key = trimmed[0..eq_pos];
                     const value = trimmed[eq_pos + 1 ..];
-                    self.setFieldFromEnvKey(key, value, source, path) catch {};
+                    self.setFieldFromEnvKey(key, value, source, path) catch |err| switch (err) {
+                        LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                        else => {}, // Unknown key or type mismatch is non-fatal for .env entries
+                    };
                 }
             }
         }
 
-        fn applyEnv(self: *Self, prefix: []const u8) void {
+        fn applyEnv(self: *Self, prefix: []const u8) LoadError!void {
             const info = @typeInfo(T);
             inline for (info.@"struct".fields) |field| {
                 var env_name_buf: [256]u8 = undefined;
                 const env_name = buildEnvVarName(&env_name_buf, prefix, field.name, self.env_key_replacer);
 
-                if (std.posix.getenv(env_name)) |value| {
-                    self.setField(field.name, value, .env, env_name) catch {};
+                if (environ.getenv(env_name)) |value| {
+                    self.setField(field.name, value, .env, env_name) catch |err| switch (err) {
+                        LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                        else => {}, // Value type mismatch is non-fatal for env vars
+                    };
                 }
             }
         }
@@ -886,9 +963,9 @@ pub fn Loader(comptime T: type) type {
                 if (matchFieldName(field.name, resolved_name, self.case_insensitive)) {
                     try self.setFieldValue(field.type, field.name, value);
                     // Copy value and path for provenance tracking
-                    const owned_value_for_tracker = self.arena.allocator().dupe(u8, value) catch return;
-                    const owned_path = self.arena.allocator().dupe(u8, path) catch return;
-                    self.tracker.set(resolved_name, owned_value_for_tracker, source, owned_path) catch {};
+                    const owned_value_for_tracker = self.arena.allocator().dupe(u8, value) catch return LoadError.OutOfMemory;
+                    const owned_path = self.arena.allocator().dupe(u8, path) catch return LoadError.OutOfMemory;
+                    self.tracker.set(resolved_name, owned_value_for_tracker, source, owned_path) catch return LoadError.OutOfMemory;
                     return;
                 }
             }
@@ -948,15 +1025,15 @@ pub fn Loader(comptime T: type) type {
                     try self.setFieldValue(field.type, field.name, value);
                     // Force update tracker by removing existing and re-adding
                     // Copy strings into arena for long-term storage
-                    const owned_value_for_tracker = self.arena.allocator().dupe(u8, value) catch return;
-                    const owned_path = self.arena.allocator().dupe(u8, path) catch return;
+                    const owned_value_for_tracker = self.arena.allocator().dupe(u8, value) catch return LoadError.OutOfMemory;
+                    const owned_path = self.arena.allocator().dupe(u8, path) catch return LoadError.OutOfMemory;
                     _ = self.tracker.values.remove(resolved_name);
                     self.tracker.values.put(resolved_name, .{
                         .key = resolved_name,
                         .value = owned_value_for_tracker,
                         .source = source,
                         .source_path = owned_path,
-                    }) catch {};
+                    }) catch return LoadError.OutOfMemory;
                     return;
                 }
             }
@@ -1606,4 +1683,306 @@ test "LoadOptions allow_extensionless" {
         .allow_extensionless = true,
     };
     try std.testing.expect(opts.allow_extensionless);
+}
+
+// ============================================================================
+// Gap closure tests (Batch 2a)
+// ============================================================================
+
+test "loadFromPath rejects path traversal (GAP: isPathSafe #107)" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+    };
+
+    var loader = Loader(Config).init(std.testing.allocator);
+    defer loader.deinit();
+
+    // Paths with ".." traversal must return FileNotFound
+    try std.testing.expectError(LoadError.FileNotFound, loader.loadFromPath("../../etc/passwd", .project));
+    try std.testing.expectError(LoadError.FileNotFound, loader.loadFromPath("../secret.toml", .project));
+    try std.testing.expectError(LoadError.FileNotFound, loader.loadFromPath("foo/../../../etc/shadow", .system));
+}
+
+test "loadDotEnv rejects path traversal (GAP: isPathSafe + openFileReadNoFollow #108)" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+    };
+
+    var loader = Loader(Config).init(std.testing.allocator);
+    defer loader.deinit();
+
+    // loadDotEnv with ".." paths should silently return (not crash or load)
+    // After the fix it returns early due to isPathSafe check
+    try loader.loadDotEnv("../../.env", .project);
+    try loader.loadDotEnv("../.env", .project);
+
+    // Verify no values were loaded from traversal paths
+    try std.testing.expect(!loader.isSet("host"));
+}
+
+// ============================================================================
+// Gap closure tests (GAP-113: normalizeKey case-insensitive)
+// ============================================================================
+
+test "normalizeKey returns original key when case_insensitive is false" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+    // case_insensitive defaults to false
+
+    const result = ldr.normalizeKey("MyKey");
+    try std.testing.expectEqualStrings("MyKey", result);
+}
+
+test "normalizeKey lowercases key when case_insensitive is true" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+    ldr.case_insensitive = true;
+
+    const result = ldr.normalizeKey("MyKey");
+    try std.testing.expectEqualStrings("mykey", result);
+}
+
+test "normalizeKey returns original key when already lowercase in case_insensitive mode" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+    ldr.case_insensitive = true;
+
+    const original = "alreadylower";
+    const result = ldr.normalizeKey(original);
+    // Should return the exact same pointer (no allocation)
+    try std.testing.expectEqual(@intFromPtr(original.ptr), @intFromPtr(result.ptr));
+    try std.testing.expectEqualStrings("alreadylower", result);
+}
+
+test "case-insensitive set and get round-trip" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+        port: u16 = 8080,
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+    ldr.case_insensitive = true;
+
+    // Set with mixed case
+    try ldr.set("HOST", "example.com");
+
+    // Get with different case variations
+    try std.testing.expectEqualStrings("example.com", ldr.get("HOST").?);
+    try std.testing.expectEqualStrings("example.com", ldr.get("host").?);
+    try std.testing.expectEqualStrings("example.com", ldr.get("Host").?);
+}
+
+test "case-insensitive isSet works across cases" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+    ldr.case_insensitive = true;
+
+    try ldr.set("HOST", "example.com");
+
+    try std.testing.expect(ldr.isSet("HOST"));
+    try std.testing.expect(ldr.isSet("host"));
+    try std.testing.expect(ldr.isSet("Host"));
+}
+
+test "case-insensitive alias resolution" {
+    const Config = struct {
+        verbose: bool = false,
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+    ldr.case_insensitive = true;
+
+    try ldr.registerAlias("LOUD", "verbose");
+
+    // Alias should resolve regardless of case
+    try std.testing.expectEqualStrings("verbose", ldr.resolveAlias("loud"));
+}
+
+test "Format.fromExtension returns .auto for unknown extension (GAP: silent .toml default)" {
+    // Unknown extensions must not silently default to .toml
+    try std.testing.expectEqual(Format.auto, Format.fromExtension("config.cfg"));
+    try std.testing.expectEqual(Format.auto, Format.fromExtension("config.xml"));
+    try std.testing.expectEqual(Format.auto, Format.fromExtension("config.unknown"));
+    try std.testing.expectEqual(Format.auto, Format.fromExtension("noextension"));
+
+    // Known extensions still work
+    try std.testing.expectEqual(Format.json, Format.fromExtension("config.json"));
+    try std.testing.expectEqual(Format.toml, Format.fromExtension("config.toml"));
+    try std.testing.expectEqual(Format.yaml, Format.fromExtension("config.yaml"));
+    try std.testing.expectEqual(Format.yaml, Format.fromExtension("config.yml"));
+    try std.testing.expectEqual(Format.ini, Format.fromExtension("config.ini"));
+    try std.testing.expectEqual(Format.properties, Format.fromExtension("config.properties"));
+}
+
+// ============================================================================
+// GAP-0010: Unified .auto format handling
+// ============================================================================
+
+test "Loader.parseContent with .auto uses content detection, not hardcoded TOML" {
+    // GAP-0010: When .auto is specified, the Loader should detect format from
+    // content rather than defaulting to TOML. A JSON string should parse
+    // correctly even when format is .auto.
+    const Config = struct {
+        host: []const u8 = "localhost",
+        port: u16 = 8080,
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+
+    // This is valid JSON, not TOML. With .auto, it should be detected as JSON.
+    const json_content =
+        \\{"host": "json-host.example.com", "port": "3000"}
+    ;
+
+    // If .auto blindly defaults to TOML, this will either fail to parse
+    // or produce incorrect results.
+    try ldr.parseContent(json_content, .auto, .project, "config");
+
+    try std.testing.expectEqualStrings("json-host.example.com", ldr.config.host);
+    try std.testing.expectEqual(@as(u16, 3000), ldr.config.port);
+}
+
+test "Loader.parseContent with .auto detects YAML content" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+        debug: bool = false,
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+
+    // YAML content with colon-space separator
+    const yaml_content =
+        \\host: yaml-host.example.com
+        \\debug: true
+    ;
+
+    try ldr.parseContent(yaml_content, .auto, .project, "config");
+
+    try std.testing.expectEqualStrings("yaml-host.example.com", ldr.config.host);
+    try std.testing.expect(ldr.config.debug);
+}
+
+// ============================================================================
+// GAP-0026: Normalize dotenv keys in case-insensitive mode
+// ============================================================================
+
+test "loadDotEnv normalizes keys when case_insensitive is true (GAP-0026)" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+        port: u16 = 8080,
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+    ldr.case_insensitive = true;
+
+    // Simulate dotenv content with mixed-case keys. When case_insensitive
+    // is true, keys should be normalized so that "HOST" matches field "host".
+    // The dotenv parser should delegate to dotenv.zig, which handles
+    // export prefixes and quoted values properly.
+    const content =
+        \\HOST=dotenv-host.example.com
+        \\PORT=9090
+    ;
+
+    // We cannot call loadDotEnv directly with content, so we test through
+    // setFieldFromEnvKey which loadDotEnv delegates to, and verify
+    // the normalized keys in the tracker.
+    // Actually, we test by writing a temp file and calling loadDotEnv.
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    tmp_dir.dir.writeFile(.{ .sub_path = ".env", .data = content }) catch return;
+
+    const tmp_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, ".env") catch return;
+    defer std.testing.allocator.free(tmp_path);
+
+    try ldr.loadDotEnv(tmp_path, .project);
+
+    // The key should be accessible through case-insensitive lookup
+    try std.testing.expectEqualStrings("dotenv-host.example.com", ldr.config.host);
+    try std.testing.expectEqual(@as(u16, 9090), ldr.config.port);
+}
+
+// ============================================================================
+// QUAL-12: Deduplicate dotenv parsing (loader delegates to dotenv)
+// ============================================================================
+
+test "loadDotEnv handles export prefix via dotenv delegation (QUAL-12)" {
+    // QUAL-12: loader.loadDotEnv should handle 'export' prefix and quoted
+    // values because it delegates to dotenv.zig's canonical parser.
+    const Config = struct {
+        host: []const u8 = "localhost",
+        name: []const u8 = "default",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+
+    const content =
+        \\export HOST=exported-host.example.com
+        \\NAME="quoted name"
+    ;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    tmp_dir.dir.writeFile(.{ .sub_path = ".env", .data = content }) catch return;
+
+    const tmp_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, ".env") catch return;
+    defer std.testing.allocator.free(tmp_path);
+
+    try ldr.loadDotEnv(tmp_path, .project);
+
+    // If loader has its own parser (which doesn't handle export/quotes),
+    // these will fail. With dotenv delegation, they should pass.
+    try std.testing.expectEqualStrings("exported-host.example.com", ldr.config.host);
+    try std.testing.expectEqualStrings("quoted name", ldr.config.name);
+}
+
+test "loadDotEnv handles whitespace around equals via dotenv delegation (QUAL-12)" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+
+    const content =
+        \\HOST = spaced-host.example.com
+    ;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    tmp_dir.dir.writeFile(.{ .sub_path = ".env", .data = content }) catch return;
+
+    const tmp_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, ".env") catch return;
+    defer std.testing.allocator.free(tmp_path);
+
+    try ldr.loadDotEnv(tmp_path, .project);
+
+    // The old inline parser didn't trim whitespace around keys/values.
+    // dotenv.zig's parser does.
+    try std.testing.expectEqualStrings("spaced-host.example.com", ldr.config.host);
 }

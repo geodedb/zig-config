@@ -19,6 +19,7 @@
 const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
+const environ = @import("environ.zig");
 
 /// Expansion options
 pub const ExpandOptions = struct {
@@ -151,7 +152,7 @@ fn expandVariable(expr: []const u8, allocator: Allocator, options: ExpandOptions
         const var_name = expr[0..idx];
         const default_value = expr[idx + 2 ..];
 
-        if (std.posix.getenv(var_name)) |value| {
+        if (environ.getenv(var_name)) |value| {
             if (value.len > 0) {
                 return allocator.dupe(u8, value) catch return ExpandError.OutOfMemory;
             }
@@ -162,7 +163,7 @@ fn expandVariable(expr: []const u8, allocator: Allocator, options: ExpandOptions
         const var_name = expr[0..idx];
         const alternate_value = expr[idx + 2 ..];
 
-        if (std.posix.getenv(var_name)) |value| {
+        if (environ.getenv(var_name)) |value| {
             if (value.len > 0) {
                 return allocator.dupe(u8, alternate_value) catch return ExpandError.OutOfMemory;
             }
@@ -173,7 +174,7 @@ fn expandVariable(expr: []const u8, allocator: Allocator, options: ExpandOptions
         const var_name = expr[0..idx];
         const default_value = expr[idx + 1 ..];
 
-        if (std.posix.getenv(var_name)) |value| {
+        if (environ.getenv(var_name)) |value| {
             return allocator.dupe(u8, value) catch return ExpandError.OutOfMemory;
         }
         return allocator.dupe(u8, default_value) catch return ExpandError.OutOfMemory;
@@ -182,14 +183,14 @@ fn expandVariable(expr: []const u8, allocator: Allocator, options: ExpandOptions
         const var_name = expr[0..idx];
         const alternate_value = expr[idx + 1 ..];
 
-        if (std.posix.getenv(var_name)) |_| {
+        if (environ.getenv(var_name)) |_| {
             return allocator.dupe(u8, alternate_value) catch return ExpandError.OutOfMemory;
         }
         return allocator.dupe(u8, "") catch return ExpandError.OutOfMemory;
     } else {
         // Simple ${VAR}
         const value = getEnvValue(expr, options);
-        if (options.strict and std.posix.getenv(expr) == null) {
+        if (options.strict and environ.getenv(expr) == null) {
             return ExpandError.UndefinedVariable;
         }
         return allocator.dupe(u8, value) catch return ExpandError.OutOfMemory;
@@ -198,7 +199,7 @@ fn expandVariable(expr: []const u8, allocator: Allocator, options: ExpandOptions
 
 /// Get environment variable value with fallback
 fn getEnvValue(name: []const u8, options: ExpandOptions) []const u8 {
-    return std.posix.getenv(name) orelse options.undefined_value;
+    return environ.getenv(name) orelse options.undefined_value;
 }
 
 /// Expand environment variables in all string fields of a struct
@@ -250,7 +251,7 @@ pub fn containsVariables(input: []const u8) bool {
 
 test "expand simple variable" {
     // PATH should exist on most systems
-    if (std.posix.getenv("PATH")) |_| {
+    if (environ.getenv("PATH")) |_| {
         const result = try expand("$PATH", std.testing.allocator);
         defer std.testing.allocator.free(result);
         try std.testing.expect(result.len > 0);
@@ -258,7 +259,7 @@ test "expand simple variable" {
 }
 
 test "expand ${VAR} syntax" {
-    if (std.posix.getenv("HOME")) |home| {
+    if (environ.getenv("HOME")) |home| {
         const result = try expand("${HOME}/config", std.testing.allocator);
         defer std.testing.allocator.free(result);
 
@@ -281,7 +282,7 @@ test "expand with default value" {
 
 test "expand with existing default" {
     // PATH exists so default should not be used
-    if (std.posix.getenv("PATH")) |path| {
+    if (environ.getenv("PATH")) |path| {
         const result = try expand("${PATH:-unused}", std.testing.allocator);
         defer std.testing.allocator.free(result);
         try std.testing.expectEqualStrings(path, result);
@@ -318,7 +319,7 @@ test "expand malformed expression" {
 }
 
 test "expand multiple variables" {
-    if (std.posix.getenv("HOME")) |_| {
+    if (environ.getenv("HOME")) |_| {
         const result = try expand("${HOME}:${HOME}", std.testing.allocator);
         defer std.testing.allocator.free(result);
         try std.testing.expect(mem.indexOf(u8, result, ":") != null);
@@ -327,7 +328,7 @@ test "expand multiple variables" {
 
 test "expand alternate value if set" {
     // PATH is set, so alternate should be used
-    if (std.posix.getenv("PATH")) |_| {
+    if (environ.getenv("PATH")) |_| {
         const result = try expand("${PATH:+alternate}", std.testing.allocator);
         defer std.testing.allocator.free(result);
         try std.testing.expectEqualStrings("alternate", result);

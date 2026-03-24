@@ -32,10 +32,10 @@ pub fn main() !void {
     // In a real app: try parser.parseArgs();
     // For demo, parse hardcoded args:
     try parser.parse(&.{
-        "--host", "0.0.0.0",
-        "-p",     "9000",
-        "--debug",
-        "-c",     "production.toml",
+        "--host",          "0.0.0.0",
+        "-p",              "9000",
+        "--debug",         "-c",
+        "production.toml",
     });
 
     // Initialize loader and apply flags

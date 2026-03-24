@@ -117,32 +117,65 @@ pub const ProvenanceTracker = struct {
     }
 
     /// Get all tracked values
-    pub fn getAll(self: *const Self) []TrackedValue {
+    pub fn getAll(self: *const Self) ![]TrackedValue {
         var list: std.ArrayList(TrackedValue) = .empty;
         var iter = self.values.valueIterator();
         while (iter.next()) |val| {
-            list.append(self.allocator, val.*) catch {};
+            try list.append(self.allocator, val.*);
         }
-        return list.toOwnedSlice(self.allocator) catch &.{};
+        return try list.toOwnedSlice(self.allocator);
     }
 
     /// Print JSON provenance report
     pub fn printJson(self: *const Self, writer: anytype) !void {
-        try writer.print("[", .{});
+        try writer.writeAll("[");
         var first = true;
         var iter = self.values.valueIterator();
         while (iter.next()) |val| {
-            if (!first) try writer.print(",", .{});
+            if (!first) try writer.writeAll(",");
             first = false;
-            try writer.print("{{\"key\":\"{s}\",\"value\":\"{s}\",\"source\":\"{s}\"}}", .{
-                val.key,
-                val.value,
-                val.source.format(),
-            });
+            try writer.writeAll("{\"key\":");
+            try writeJsonString(writer, val.key);
+            try writer.writeAll(",\"value\":");
+            try writeJsonString(writer, val.value);
+            try writer.writeAll(",\"source\":");
+            try writeJsonString(writer, val.source.format());
+            try writer.writeAll("}");
         }
-        try writer.print("]\n", .{});
+        try writer.writeAll("]\n");
     }
 };
+
+/// Write a JSON-escaped string (with surrounding quotes) to the writer.
+/// Escapes `"`, `\`, and control characters (U+0000 through U+001F)
+/// per RFC 8259.
+fn writeJsonString(writer: anytype, string: []const u8) !void {
+    try writer.writeByte('"');
+    for (string) |c| {
+        switch (c) {
+            '"' => try writer.writeAll("\\\""),
+            '\\' => try writer.writeAll("\\\\"),
+            '\n' => try writer.writeAll("\\n"),
+            '\r' => try writer.writeAll("\\r"),
+            '\t' => try writer.writeAll("\\t"),
+            0x08 => try writer.writeAll("\\b"),
+            0x0C => try writer.writeAll("\\f"),
+            // Other control characters (U+0000..U+001F) excluding the ones above
+            0x00...0x07, 0x0B, 0x0E...0x1F => {
+                try writer.writeAll("\\u00");
+                try writer.writeByte(hexDigit(@truncate(c >> 4)));
+                try writer.writeByte(hexDigit(@truncate(c & 0x0F)));
+            },
+            else => try writer.writeByte(c),
+        }
+    }
+    try writer.writeByte('"');
+}
+
+fn hexDigit(nibble: u4) u8 {
+    const n: u8 = nibble;
+    return if (n < 10) '0' + n else 'a' + n - 10;
+}
 
 // ============================================================================
 // Tests
@@ -278,7 +311,7 @@ test "provenance: getAll returns all tracked values" {
     try tracker.set("port", "8080", .env, null);
     try tracker.set("debug", "true", .flag, null);
 
-    const all = tracker.getAll();
+    const all = try tracker.getAll();
     defer std.testing.allocator.free(all);
 
     try std.testing.expectEqual(@as(usize, 3), all.len);
@@ -327,4 +360,128 @@ test "provenance: equal precedence does not override" {
 
     const val = tracker.get("port").?;
     try std.testing.expectEqualStrings("first", val.value);
+}
+
+test "provenance: getAll returns error union (GAP-0007)" {
+    var tracker = ProvenanceTracker.init(std.testing.allocator);
+    defer tracker.deinit();
+
+    try tracker.set("a", "1", .default, null);
+    try tracker.set("b", "2", .env, null);
+
+    // getAll() must return an error union -- verify with try
+    const all = try tracker.getAll();
+    defer std.testing.allocator.free(all);
+
+    try std.testing.expectEqual(@as(usize, 2), all.len);
+
+    // Verify return type is an error union at comptime
+    const ReturnType = @typeInfo(@TypeOf(ProvenanceTracker.getAll)).@"fn".return_type.?;
+    const is_error_union = @typeInfo(ReturnType) == .error_union;
+    try std.testing.expect(is_error_union);
+}
+
+test "provenance: printJson escapes special characters (GAP-0024)" {
+    var tracker = ProvenanceTracker.init(std.testing.allocator);
+    defer tracker.deinit();
+
+    // Value with quotes, backslashes, newlines, and tabs
+    try tracker.set("special", "test\"value\\with\nnew\tlines", .env, null);
+
+    var buffer: [2048]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    try tracker.printJson(writer);
+    const output = stream.getWritten();
+
+    // Verify the output is parseable as valid JSON
+    const parsed = std.json.parseFromSlice(
+        std.json.Value,
+        std.testing.allocator,
+        output,
+        .{},
+    ) catch |err| {
+        std.debug.print("JSON parse error: {}\nOutput was: {s}\n", .{ err, output });
+        return err;
+    };
+    defer parsed.deinit();
+
+    // Verify the parsed JSON has the expected structure
+    const arr = parsed.value.array;
+    try std.testing.expectEqual(@as(usize, 1), arr.items.len);
+
+    const obj = arr.items[0].object;
+    try std.testing.expectEqualStrings("special", obj.get("key").?.string);
+    // The parsed value should have the original unescaped content
+    try std.testing.expectEqualStrings("test\"value\\with\nnew\tlines", obj.get("value").?.string);
+    try std.testing.expectEqualStrings("env", obj.get("source").?.string);
+}
+
+test "provenance: printJson escapes control characters (GAP-0024)" {
+    var tracker = ProvenanceTracker.init(std.testing.allocator);
+    defer tracker.deinit();
+
+    // Value with various control characters
+    const ctrl_value = "before\x00\x01\x02\x1fafter";
+    try tracker.set("ctrl", ctrl_value, .default, null);
+
+    var buffer: [2048]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    try tracker.printJson(writer);
+    const output = stream.getWritten();
+
+    // Must be parseable as valid JSON
+    const parsed = std.json.parseFromSlice(
+        std.json.Value,
+        std.testing.allocator,
+        output,
+        .{},
+    ) catch |err| {
+        std.debug.print("JSON parse error: {}\nOutput was: {s}\n", .{ err, output });
+        return err;
+    };
+    defer parsed.deinit();
+
+    const arr = parsed.value.array;
+    try std.testing.expectEqual(@as(usize, 1), arr.items.len);
+
+    const obj = arr.items[0].object;
+    try std.testing.expectEqualStrings(ctrl_value, obj.get("value").?.string);
+}
+
+test "provenance: writeJsonString escapes correctly" {
+    var buffer: [256]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buffer);
+    const writer = stream.writer();
+
+    try writeJsonString(writer, "hello\"world");
+    try std.testing.expectEqualStrings("\"hello\\\"world\"", stream.getWritten());
+
+    stream.reset();
+    try writeJsonString(writer, "back\\slash");
+    try std.testing.expectEqualStrings("\"back\\\\slash\"", stream.getWritten());
+
+    stream.reset();
+    try writeJsonString(writer, "new\nline");
+    try std.testing.expectEqualStrings("\"new\\nline\"", stream.getWritten());
+
+    stream.reset();
+    try writeJsonString(writer, "tab\there");
+    try std.testing.expectEqualStrings("\"tab\\there\"", stream.getWritten());
+
+    stream.reset();
+    try writeJsonString(writer, "cr\rhere");
+    try std.testing.expectEqualStrings("\"cr\\rhere\"", stream.getWritten());
+
+    stream.reset();
+    try writeJsonString(writer, "\x00\x1f");
+    try std.testing.expectEqualStrings("\"\\u0000\\u001f\"", stream.getWritten());
+
+    // Normal string should pass through unchanged
+    stream.reset();
+    try writeJsonString(writer, "normal");
+    try std.testing.expectEqualStrings("\"normal\"", stream.getWritten());
 }

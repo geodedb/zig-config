@@ -38,13 +38,13 @@ pub const toml = @import("toml");
 pub const json = @import("json");
 
 // Internal module imports
+pub const environ = @import("environ.zig");
 pub const loader = @import("loader.zig");
 pub const provenance = @import("provenance.zig");
 pub const xdg = @import("xdg.zig");
 pub const dotenv = @import("dotenv.zig");
 pub const secret = @import("secret.zig");
 const createFileNoFollow = secret.createFileNoFollow;
-pub const validate = @import("validate.zig");
 pub const flags = @import("flags.zig");
 pub const merge = @import("merge.zig");
 pub const encrypted_secrets = @import("encrypted_secrets.zig");
@@ -58,33 +58,13 @@ pub const validation = @import("validation.zig");
 pub const async_load = @import("async.zig");
 pub const diff = @import("diff.zig");
 
-// ============================================================================
-// File Size Limits (CWE-400 - Resource Exhaustion Prevention, #64)
-// ============================================================================
-//
-// These limits prevent resource exhaustion from malicious or corrupted files.
-// Different limits apply to different use cases based on security requirements.
-//
-// Rationale:
-// - Config files: 10 MB - Large configs are legitimate (complex apps, data)
-// - Remote responses: 1 MB - Network responses should be bounded tightly
-// - Secret files: 64 KB - Secrets should be small; larger files are suspicious
-// - CLI output: 1 MB - Reasonable bound for tool output
-//
-// To override these limits, use the explicit readToEndAlloc parameter.
-
-/// Maximum size for configuration files (10 MB)
-pub const MAX_CONFIG_FILE_SIZE: usize = 10 * 1024 * 1024;
-
-/// Maximum size for remote API responses (1 MB)
-pub const MAX_REMOTE_RESPONSE_SIZE: usize = 1024 * 1024;
-
-/// Maximum size for secret files (64 KB)
-/// Security: Secrets should be small; larger files may indicate misuse
-pub const MAX_SECRET_FILE_SIZE: usize = 64 * 1024;
-
-/// Maximum size for CLI command output (1 MB)
-pub const MAX_CLI_OUTPUT_SIZE: usize = 1024 * 1024;
+// File Size Limits - re-exported from limits.zig (CWE-400, #64, #101)
+pub const limits = @import("limits.zig");
+pub const MAX_CONFIG_FILE_SIZE = limits.MAX_CONFIG_FILE_SIZE;
+pub const MAX_REMOTE_RESPONSE_SIZE = limits.MAX_REMOTE_RESPONSE_SIZE;
+pub const MAX_SECRET_FILE_SIZE = limits.MAX_SECRET_FILE_SIZE;
+pub const MAX_CLI_OUTPUT_SIZE = limits.MAX_CLI_OUTPUT_SIZE;
+pub const MAX_DOTENV_FILE_SIZE = limits.MAX_DOTENV_FILE_SIZE;
 
 // Re-export commonly used types from loader
 pub const Loader = loader.Loader;
@@ -118,7 +98,7 @@ pub const readFromFile = secret.readFromFile;
 pub const readFromStdin = secret.readFromStdin;
 
 // Re-export validation types
-pub const ValidationError = validate.ValidationError;
+pub const ValidationError = validation.ValidationError;
 
 // Re-export flag types
 pub const FlagParser = flags.FlagParser;
@@ -370,7 +350,7 @@ pub fn parseFile(allocator: Allocator, path: []const u8) !Value {
     };
     defer file.close();
 
-    const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    const content = try file.readToEndAlloc(allocator, MAX_CONFIG_FILE_SIZE);
     defer allocator.free(content);
 
     const format = Format.fromExtension(path);
@@ -876,7 +856,7 @@ pub const FormatRegistry = struct {
             };
             defer file.close();
 
-            const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+            const content = try file.readToEndAlloc(allocator, MAX_CONFIG_FILE_SIZE);
             defer allocator.free(content);
 
             var arena = std.heap.ArenaAllocator.init(allocator);
@@ -956,7 +936,6 @@ test {
     _ = xdg;
     _ = dotenv;
     _ = secret;
-    _ = validate;
     _ = flags;
     _ = ini;
     _ = properties;
@@ -1060,4 +1039,35 @@ test "unified config: parse TOML content" {
     try std.testing.expectEqualStrings("localhost", config.getString("host").?);
     try std.testing.expectEqual(@as(i64, 8080), config.getInt("port").?);
     try std.testing.expectEqual(true, config.getBool("debug").?);
+}
+
+// ============================================================================
+// GAP-0010: Config.parseContent with .auto should use content detection
+// ============================================================================
+
+test "unified config: parseContent with .auto detects JSON (GAP-0010)" {
+    // GAP-0010: When .auto is specified, Config.parseContent should detect
+    // the format from content instead of blindly defaulting to YAML.
+    const json_content =
+        \\{"host": "json-host", "port": 3000}
+    ;
+
+    var config = try parseContent(std.testing.allocator, json_content, .auto);
+    defer config.deinit();
+
+    try std.testing.expectEqualStrings("json-host", config.getString("host").?);
+    try std.testing.expectEqual(@as(i64, 3000), config.getInt("port").?);
+}
+
+test "unified config: parseContent with .auto detects TOML (GAP-0010)" {
+    const toml_content =
+        \\host = "toml-host"
+        \\port = 4000
+    ;
+
+    var config = try parseContent(std.testing.allocator, toml_content, .auto);
+    defer config.deinit();
+
+    try std.testing.expectEqualStrings("toml-host", config.getString("host").?);
+    try std.testing.expectEqual(@as(i64, 4000), config.getInt("port").?);
 }

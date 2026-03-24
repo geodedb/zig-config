@@ -58,8 +58,17 @@ pub fn mergeMaps(
 
         switch (options.strategy) {
             .override => {
-                const owned_key = try allocator.dupe(u8, key);
-                try result.put(owned_key, entry.value_ptr.*);
+                if (result.getPtr(key)) |value_ptr| {
+                    // Key already exists (from base) -- just update the value.
+                    // The existing owned key is equivalent, so no new dupe needed.
+                    // Previously this duped a new key and called put(), which kept
+                    // the old key and leaked the new one (StringHashMap.put does not
+                    // replace existing keys).
+                    value_ptr.* = entry.value_ptr.*;
+                } else {
+                    const owned_key = try allocator.dupe(u8, key);
+                    try result.put(owned_key, entry.value_ptr.*);
+                }
             },
             .keep_first => {
                 if (result.get(key) == null) {
@@ -69,8 +78,12 @@ pub fn mergeMaps(
             },
             .concat_arrays, .unique_arrays => {
                 // For simple types, just override
-                const owned_key = try allocator.dupe(u8, key);
-                try result.put(owned_key, entry.value_ptr.*);
+                if (result.getPtr(key)) |value_ptr| {
+                    value_ptr.* = entry.value_ptr.*;
+                } else {
+                    const owned_key = try allocator.dupe(u8, key);
+                    try result.put(owned_key, entry.value_ptr.*);
+                }
             },
         }
     }
@@ -125,7 +138,7 @@ pub fn mergeStructs(comptime T: type, base: T, overlay: T) T {
 
         // Check if overlay has a non-default value
         if (field.default_value_ptr) |default_ptr| {
-            const default_value: *const field.type = @alignCast(@ptrCast(default_ptr));
+            const default_value: *const field.type = @ptrCast(@alignCast(default_ptr));
             if (!eqlValue(field.type, overlay_value, default_value.*)) {
                 @field(result, field.name) = overlay_value;
             }
@@ -193,7 +206,7 @@ pub fn mergePreferOverlay(comptime T: type, base: T, overlay: T) T {
             }
         } else if (field.default_value_ptr) |default_ptr| {
             // For types with defaults, check if overlay is non-default
-            const default_value: *const field.type = @alignCast(@ptrCast(default_ptr));
+            const default_value: *const field.type = @ptrCast(@alignCast(default_ptr));
             if (!eqlValue(field.type, overlay_value, default_value.*)) {
                 @field(result, field.name) = overlay_value;
             } else {
@@ -307,4 +320,60 @@ test "eqlValue for optionals" {
     try std.testing.expect(eqlValue(?u32, a, b));
     try std.testing.expect(eqlValue(?u32, c, d));
     try std.testing.expect(!eqlValue(?u32, a, c));
+}
+
+test "mergeMaps override with overlapping keys does not leak" {
+    // std.testing.allocator detects leaks -- if the base key duplicate is
+    // not freed when the overlay replaces it, this test will fail.
+    const allocator = std.testing.allocator;
+
+    var base = std.StringHashMap(u32).init(allocator);
+    defer base.deinit();
+    try base.put("shared_key", 100);
+    try base.put("base_only", 200);
+
+    var overlay = std.StringHashMap(u32).init(allocator);
+    defer overlay.deinit();
+    try overlay.put("shared_key", 999);
+    try overlay.put("overlay_only", 300);
+
+    var result = try mergeMaps(u32, allocator, base, overlay, .{ .strategy = .override });
+    defer {
+        // Free all owned keys in the result map
+        var it = result.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+        }
+        result.deinit();
+    }
+
+    // Verify the merged result
+    try std.testing.expectEqual(@as(u32, 999), result.get("shared_key").?);
+    try std.testing.expectEqual(@as(u32, 200), result.get("base_only").?);
+    try std.testing.expectEqual(@as(u32, 300), result.get("overlay_only").?);
+    try std.testing.expectEqual(@as(usize, 3), result.count());
+}
+
+test "mergeMaps concat_arrays with overlapping keys does not leak" {
+    const allocator = std.testing.allocator;
+
+    var base = std.StringHashMap(u32).init(allocator);
+    defer base.deinit();
+    try base.put("key", 1);
+
+    var overlay = std.StringHashMap(u32).init(allocator);
+    defer overlay.deinit();
+    try overlay.put("key", 2);
+
+    var result = try mergeMaps(u32, allocator, base, overlay, .{ .strategy = .concat_arrays });
+    defer {
+        var it = result.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+        }
+        result.deinit();
+    }
+
+    try std.testing.expectEqual(@as(u32, 2), result.get("key").?);
+    try std.testing.expectEqual(@as(usize, 1), result.count());
 }
