@@ -10,8 +10,8 @@ This document compares zigconfig features with [Viper](https://github.com/spf13/
 | JSON | Yes | Yes | Complete | - |
 | YAML | Yes | Yes | Complete | - |
 | TOML | Yes | Yes | Complete | - |
-| INI | Yes | Yes | Complete | `src/ini.zig` |
-| Java Properties | Yes | Yes | Complete | `src/properties.zig` |
+| INI | Yes | Yes | Partial | `src/ini.zig` (parse only; serialization not yet supported) |
+| Java Properties | Yes | Yes | Partial | `src/properties.zig` (parse only; serialization not yet supported) |
 | Envfile | Yes | Yes | Complete | `src/dotenv.zig` |
 | HCL | Yes | No | Planned | [#85](https://gitlab.com/devnw/zig/config/-/issues/85) |
 | HOCON | No | No | Planned | [#86](https://gitlab.com/devnw/zig/config/-/issues/86) |
@@ -20,7 +20,7 @@ This document compares zigconfig features with [Viper](https://github.com/spf13/
 | Config files | Yes | Yes | Complete | - |
 | Environment variables | Yes | Yes | Complete | - |
 | Command-line flags | Yes | Yes | Complete | `src/flags.zig` |
-| Remote config (etcd, Consul) | Yes | Yes | Complete | `src/remote.zig` with SSRF protection |
+| Remote config (etcd, Consul) | Yes | Yes | Partial | `src/remote.zig` with SSRF protection; remote clients available independently; manual wiring required (no integrated `ReadRemoteConfig` equivalent) |
 | **Value Management** |
 | Set() explicit overrides | Yes | Yes | Complete | [#26](https://gitlab.com/devnw/zig/config/-/issues/26) |
 | SetDefault() runtime defaults | Yes | Yes | Complete | [#41](https://gitlab.com/devnw/zig/config/-/issues/41) |
@@ -30,7 +30,7 @@ This document compares zigconfig features with [Viper](https://github.com/spf13/
 | **Path Access** |
 | Dot notation | Yes | Yes | Complete | - |
 | Array indexing | Yes | Yes | Complete | e.g. `servers.0.host` via `applyJsonValue` |
-| Sub() extraction | Yes | No | Planned | [#36](https://gitlab.com/devnw/zig/config/-/issues/36) |
+| Sub() extraction | Yes | Yes | Complete | `src/loader.zig` `sub()`/`hasSub()` |
 | Custom key delimiter | Yes | No | Planned | [#40](https://gitlab.com/devnw/zig/config/-/issues/40) |
 | **Environment Variables** |
 | BindEnv() | Yes | Yes | Complete | [#30](https://gitlab.com/devnw/zig/config/-/issues/30) |
@@ -188,7 +188,6 @@ std.debug.print("token: {s}\n", .{token});
 | SOPS integration | [#87](https://gitlab.com/devnw/zig/config/-/issues/87) | Mozilla SOPS encrypted files |
 | age/GPG encryption | [#88](https://gitlab.com/devnw/zig/config/-/issues/88) | age/GPG encrypted config files |
 | JSON Schema validation | [#5](https://gitlab.com/devnw/zig/config/-/issues/5) | Schema-based config validation |
-| Sub() extraction | [#36](https://gitlab.com/devnw/zig/config/-/issues/36) | Config subset extraction |
 | AllSettings() | [#37](https://gitlab.com/devnw/zig/config/-/issues/37) | Export all settings as map |
 | AllKeys() | [#43](https://gitlab.com/devnw/zig/config/-/issues/43) | List all known keys |
 | parseReader() | [#38](https://gitlab.com/devnw/zig/config/-/issues/38) | Read from io.Reader |

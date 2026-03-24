@@ -1,7 +1,7 @@
 # Gap Analysis -- Resolved
 
-Last updated: 2026-03-24 (Waves 6-9 closure)
-Review commit: 65f3c93 (HEAD of main) + working tree
+Last updated: 2026-03-24 (Waves 6-10 closure)
+Review commit: fe9d0f6 (HEAD of main) + working tree
 
 ## Resolved Gaps
 
@@ -1426,3 +1426,171 @@ The following gaps were closed in Wave 9 of implementation. 656 tests pass (328 
   - `src/encrypted_secrets.zig:560-575` -- `buildVaultEnvMap()` constructs environment-only credential passing
   - `src/remote.zig:147-154` -- `recheckDnsBinding` mitigations remain active for remote HTTP clients
 - **Resolved date:** 2026-03-24 (False Positive)
+
+---
+
+## Wave 10 Gap Closures (2026-03-24)
+
+All 774/774 tests pass. Format clean. Build clean.
+
+### PERF-26: allocPrint in JSON object recursion [RESOLVED]
+
+- **ID:** PERF-26
+- **Category:** Performance (P2)
+- **Resolution:** Re-applied `bufPrint` stack buffer in `applyJsonValue` (reverted in Wave 9, re-applied in Wave 10).
+- **Evidence:**
+  - `src/loader.zig:790-806` -- `var key_buf: [512]u8` with `std.fmt.bufPrint` for JSON object key construction
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### PERF-27: allocPrint in TOML section loop [RESOLVED]
+
+- **ID:** PERF-27
+- **Category:** Performance (P3)
+- **Resolution:** Re-applied `bufPrint` stack buffer in `parseSimpleToml` (reverted in Wave 9, re-applied in Wave 10).
+- **Evidence:**
+  - `src/loader.zig:865-887` -- `var key_buf: [512]u8` with `std.fmt.bufPrint` for TOML section.key construction
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### PERF-28: allocPrint in INI section loop [RESOLVED]
+
+- **ID:** PERF-28
+- **Category:** Performance (P3)
+- **Resolution:** Re-applied `bufPrint` stack buffer in `parseIni` (reverted in Wave 9, re-applied in Wave 10).
+- **Evidence:**
+  - `src/loader.zig:939-954` -- `var key_buf: [512]u8` with `std.fmt.bufPrint` for INI section.key construction
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### PERF-32: prefix_with_dot heap alloc in sub()/hasSub() [RESOLVED]
+
+- **ID:** PERF-32
+- **Category:** Performance (Info)
+- **Resolution:** Re-applied `bufPrint` stack buffer (256B) in `sub()` and `hasSub()` (reverted in Wave 9, re-applied in Wave 10).
+- **Evidence:**
+  - `src/loader.zig:318-378` -- stack buffer `bufPrint` (256B) for prefix + "." construction
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### PERF-54: HashMap no capacity hint in diff merge()/compareWithOptions() [RESOLVED]
+
+- **ID:** PERF-54
+- **Category:** Performance (P3)
+- **Resolution:** Added `ensureTotalCapacity` to `merge()` result map and `compareWithOptions()` helper maps (`new_lower_index`, `seen_keys`) in diff.zig.
+- **Evidence:**
+  - `src/diff.zig` -- `ensureTotalCapacity` added to `merge()` result map and `compareWithOptions()` helper HashMaps
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### SEC-01: Consul missing HTTP status code validation [RESOLVED]
+
+- **ID:** SEC-01
+- **Category:** Security (CWE-754)
+- **Resolution:** HTTP status validation added to `makeGetRequest`, `makePutRequest`, and `makeDeleteRequest` in remote.zig. 4xx/5xx responses now return typed errors.
+- **Evidence:**
+  - `src/remote.zig` -- `makeGetRequest`/`makePutRequest`/`makeDeleteRequest` check `result.status` and return errors for non-2xx responses
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### SEC-03: Case-insensitive hostname bypass in isPrivateAddress [RESOLVED]
+
+- **ID:** SEC-03
+- **Category:** Security (CWE-918)
+- **Resolution:** Case-insensitive `localhost` comparison implemented in `isPrivateAddress` using `std.ascii.eqlIgnoreCase` per RFC 4343.
+- **Evidence:**
+  - `src/remote.zig` -- `isPrivateAddress` uses case-insensitive comparison for `localhost` hostname check
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### SEC-05: isPathSafe Windows backslash path traversal [RESOLVED]
+
+- **ID:** SEC-05
+- **Category:** Security (CWE-22)
+- **Resolution:** Windows backslash path traversal documented and tested. `mem.indexOf(u8, path, "..")` catches `..` regardless of surrounding separator characters.
+- **Evidence:**
+  - `src/secret.zig` -- documentation and tests for Windows backslash path traversal behavior
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### SEC-06: Windows symlink TOCTOU [RESOLVED -- ACCEPTED RISK]
+
+- **ID:** SEC-06
+- **Category:** Security (CWE-367)
+- **Resolution:** Documented as accepted risk. POSIX uses `O_NOFOLLOW` atomically. Windows uses check-then-open pattern (inherent TOCTOU). Low risk: requires local attacker with file creation rights.
+- **Evidence:**
+  - `src/secret.zig` -- documentation of Windows TOCTOU accepted risk with CWE-367 reference
+- **Resolved date:** 2026-03-24 (Wave 10, accepted risk)
+
+### SEC-07/SEC-17: isValidVaultPath tightened [RESOLVED]
+
+- **ID:** SEC-07, SEC-17
+- **Category:** Security (CWE-426, CWE-78)
+- **Resolution:** `isValidVaultPath` tightened to match `isValidOpPath` strict pattern. Rejects null bytes, control characters, and shell metacharacters.
+- **Evidence:**
+  - `src/encrypted_secrets.zig` -- `isValidVaultPath` validates against strict character set matching `isValidOpPath`
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### SEC-08: execCommand stdout/stderr not secureZero'd [RESOLVED]
+
+- **ID:** SEC-08
+- **Category:** Security (CWE-244)
+- **Resolution:** `secureZero` applied to stdout and stderr buffers before free in `execCommand`.
+- **Evidence:**
+  - `src/encrypted_secrets.zig` -- `secureZero` on stdout/stderr buffers before `deinit()`
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### SEC-09: @constCast in loadFromFile [RESOLVED]
+
+- **ID:** SEC-09
+- **Category:** Security (CWE-704)
+- **Resolution:** Replaced `@constCast(content)` with `allocator.dupe(u8, content)` to produce a genuinely mutable copy.
+- **Evidence:**
+  - `src/encrypted_secrets.zig` -- `allocator.dupe` replaces `@constCast`
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### SEC-15/SEC-16: IPv4-mapped IPv6 SSRF case-sensitivity [RESOLVED]
+
+- **ID:** SEC-15, SEC-16
+- **Category:** Security (CWE-918)
+- **Resolution:** Case-insensitive `::ffff:` prefix check added in `isPrivateAddress` for IPv4-mapped IPv6 SSRF protection.
+- **Evidence:**
+  - `src/remote.zig` -- case-insensitive `::ffff:` prefix comparison in `isPrivateAddress`
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### SEC-18: Percent-encoded double-decode risk [RESOLVED]
+
+- **ID:** SEC-18
+- **Category:** Security (CWE-918)
+- **Resolution:** Double-decode protection added via pre-decode `%` check. `SuspiciousUrl` error returned for encoded-percent patterns before SSRF validation.
+- **Evidence:**
+  - `src/remote.zig` -- pre-decode `%` check + `SuspiciousUrl` error rejects encoded-percent patterns
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### Q-NEW-2: isPathSafeStrict doc comment [RESOLVED]
+
+- **ID:** Q-NEW-2
+- **Category:** Quality (documentation)
+- **Resolution:** Doc comment added to `isPathSafeStrict` explaining its intended use as a stricter alternative to `isPathSafe` that also rejects absolute paths.
+- **Evidence:**
+  - `src/secret.zig:69` -- `///` doc comment added to `pub fn isPathSafeStrict`
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### Q-NEW-3: AsyncLoaderWithCallback integration test [RESOLVED]
+
+- **ID:** Q-NEW-3
+- **Category:** Quality (tests)
+- **Resolution:** Integration test added exercising the full AsyncLoaderWithCallback load-then-callback flow.
+- **Evidence:**
+  - `src/async.zig` -- integration test for AsyncLoaderWithCallback verifying callback invocation with parsed result
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### Q-NEW-4: Loader.parseContent doc comment [RESOLVED]
+
+- **ID:** Q-NEW-4
+- **Category:** Quality (documentation)
+- **Resolution:** Doc comment added to `Loader.parseContent` describing format dispatch behavior, parameter semantics, and error conditions.
+- **Evidence:**
+  - `src/loader.zig:734` -- `///` doc comment added to `pub fn parseContent`
+- **Resolved date:** 2026-03-24 (Wave 10)
+
+### Q-NEW-7: HTTP error response tests [RESOLVED]
+
+- **ID:** Q-NEW-7
+- **Category:** Quality (tests)
+- **Resolution:** HTTP error response tests added for both Etcd and Consul, covering 4xx/5xx error response paths.
+- **Evidence:**
+  - `src/remote.zig` -- mock HTTP error response tests for Etcd and Consul error handling
+- **Resolved date:** 2026-03-24 (Wave 10)

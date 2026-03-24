@@ -130,7 +130,7 @@ See [VIPER_COMPARISON.md](./VIPER_COMPARISON.md) for feature parity analysis wit
 
 ### Viper Parity
 
-- [ ] [#36 - Sub() for config subset extraction](https://gitlab.com/devnw/zig/config/-/issues/36)
+- [x] [#36 - Sub() for config subset extraction](https://gitlab.com/devnw/zig/config/-/issues/36) -- `sub()`/`hasSub()` in src/loader.zig
 - [ ] [#37 - AllSettings() export](https://gitlab.com/devnw/zig/config/-/issues/37)
 - [ ] [#38 - parseReader() for io.Reader input](https://gitlab.com/devnw/zig/config/-/issues/38)
 - [ ] [#43 - AllKeys() to list keys](https://gitlab.com/devnw/zig/config/-/issues/43)
@@ -195,7 +195,7 @@ See [VIPER_COMPARISON.md](./VIPER_COMPARISON.md) for feature parity analysis wit
 Want to help? See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
 
 Priority areas:
-1. Viper parity gaps (v0.4.0): Sub(), AllSettings(), AllKeys(), parseReader()
+1. Viper parity gaps (v0.4.0): AllSettings(), AllKeys(), parseReader()
 2. JSON Schema validation (#5)
 3. Platform-native directory support on Windows and macOS (#12)
 4. Test coverage improvements

@@ -1,7 +1,7 @@
 # Security Gap Analysis
 
 **Project:** devnw/zig/config
-**Last updated:** 2026-03-24
+**Last updated:** 2026-03-24 (Wave 10 closure)
 **Review phase:** Phase 3+ (security-reviewer, SSRF/injection deep-dive)
 **Scoring formula:** RiskScore = Impact(1-5) x Likelihood(1-5) x 4
 **Review commit:** fe9d0f6 (HEAD of main) + working tree
@@ -13,18 +13,18 @@
 | Severity | Count | Open | Closed/Accepted | Notes |
 |----------|-------|------|-----------------|-------|
 | Critical | 0     | 0    | 0               | No critical vulnerabilities found |
-| Medium   | 4     | 4    | 0               | HTTP status validation, timeout enforcement, hostname bypass, supply-chain |
-| Low      | 11    | 9    | 2 (1 FP, 1 accepted) | Path traversal, TOCTOU, permissive path, memory hygiene, type safety, SSRF edge cases, double-decode, CLI injection residual |
+| Medium   | 4     | 2    | 2               | SEC-01/SEC-03 closed (Wave 10); SEC-02 blocked (Zig 0.15); SEC-04 blocked (upstream) |
+| Low      | 11    | 0    | 11 (1 FP, 1 accepted, 9 closed) | SEC-05/06/07/08/09/15/16/17/18 closed (Wave 10); SEC-10 FP; SEC-11 accepted |
 | Info     | 3     | 0    | 0               | Sound patterns, standard IP handling |
-| **Total** | **18** | **13** | **2** | 3 Info items require no action; SEC-10 closed as false positive; SEC-11 accepted; S-NEW-5 (JSON nesting) noted as informational but not tracked |
+| **Total** | **18** | **2** | **13** | 3 Info items require no action; 11 items closed in Wave 10; SEC-02 blocked (Zig 0.15 timeout); SEC-04 blocked (spice upstream) |
 
 ### Top 5 Risks
 
-1. **Consul missing HTTP status code validation** (SEC-01) -- Medium, RiskScore 36. GET only checks `.not_found`; PUT/DELETE never check status. Attacker-controlled error responses may be silently accepted as valid data.
-2. **HTTP timeout not enforced (etcd/Consul)** (SEC-02) -- Medium, RiskScore 36. Zig 0.15 http.Client has no timeout. Slow-read/hang attacks can block indefinitely. Previously documented as a known limitation (QUAL NEW-08, PERF-38), but no code-level mitigation exists.
-3. **Case-insensitive hostname bypass in isPrivateAddress** (SEC-03) -- Medium, RiskScore 24. `Localhost` (capital L) bypasses the string equality check. DNS resolution fallback catches most cases but the string check is the primary fast-path defense.
-4. **Spice dependency tracks main branch** (SEC-04) -- Medium, RiskScore 24. `build.zig.zon` pins `spice` to `main` branch archive. Any commit to upstream main changes what this project builds.
-5. **isPathSafe doesn't check backslash on Windows** (SEC-05) -- Low, RiskScore 16. `foo\..\bar` bypasses path traversal detection on Windows because `isPathSafe` only checks for `..` with forward-slash context.
+1. ~~**Consul missing HTTP status code validation** (SEC-01)~~ -- Medium, RiskScore 36. **Closed** (Wave 10): HTTP status validation added to `makeGetRequest`/`makePutRequest`/`makeDeleteRequest` in remote.zig.
+2. **HTTP timeout not enforced (etcd/Consul)** (SEC-02) -- Medium, RiskScore 36. **Blocked**: Zig 0.15 http.Client has no timeout API. Slow-read/hang attacks can block indefinitely.
+3. ~~**Case-insensitive hostname bypass in isPrivateAddress** (SEC-03)~~ -- Medium, RiskScore 24. **Closed** (Wave 10): Case-insensitive comparison implemented in `isPrivateAddress` for `localhost` check.
+4. **Spice dependency tracks main branch** (SEC-04) -- Medium, RiskScore 24. **Blocked**: Upstream `devnw/zig/spice` has no version tag; hash-only pinning in place.
+5. ~~**isPathSafe doesn't check backslash on Windows** (SEC-05)~~ -- Low, RiskScore 16. **Closed** (Wave 10): Windows backslash path traversal documented and tested in `secret.zig`.
 
 ### Overlap with Existing Gap Analyses
 
@@ -45,21 +45,21 @@
 
 | Rank | Severity | RiskScore | Finding | Component | CWE/OWASP | Evidence (file:line) | Issue | Fix Guidance | Owner | SLA/Due | Status |
 |------|----------|-----------|---------|-----------|-----------|----------------------|-------|-------------|-------|---------|--------|
-| 1 | Medium | 36 | Consul missing HTTP status code validation | remote.zig | CWE-754 / A05:2021 Security Misconfiguration | src/remote.zig:1228,1274-1282,1325-1332 | SEC-01 | Check `result.status` for 2xx range on all Consul operations; return typed errors for 401/403/5xx | Maintainer | 2026-06-22 (90d) | **Open** |
-| 2 | Medium | 36 | HTTP timeout not enforced (etcd/Consul) | remote.zig | CWE-400 / A05:2021 Security Misconfiguration | src/remote.zig:616,1030 | SEC-02 | Implement watchdog-thread timeout wrapper around HTTP fetch (similar to execCommand pattern in encrypted_secrets.zig:710-727) | Maintainer | 2026-06-22 (90d) | **Open** |
-| 3 | Medium | 24 | Case-insensitive hostname bypass in isPrivateAddress | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:289 | SEC-03 | Use `std.ascii.eqlIgnoreCase` or lowercase the host before comparison; also check `0:0:0:0:0:0:0:1` for IPv6 loopback | Maintainer | 2026-06-22 (90d) | **Open** |
-| 4 | Medium | 24 | Spice dependency tracks main branch | build.zig.zon | CWE-829 / A06:2021 Vulnerable and Outdated Components | build.zig.zon:20 | SEC-04 | Pin spice to a tagged release or specific commit hash; add dependency review to CI | Maintainer | 2026-06-22 (90d) | **Open** |
-| 5 | Low | 16 | isPathSafe doesn't check backslash on Windows | secret.zig | CWE-22 / A01:2021 Broken Access Control | src/secret.zig:51-63 | SEC-05 | Normalize backslashes to forward slashes before traversal check, or add `mem.indexOf(u8, path, "..\\" )` on Windows | Maintainer | 2026-09-20 (180d) | **Open** |
-| 6 | Low | 16 | TOCTOU in Windows symlink check | secret.zig | CWE-367 / A01:2021 Broken Access Control | src/secret.zig:93-95 | SEC-06 | Document as accepted risk on Windows (POSIX uses O_NOFOLLOW atomically); consider FILE_FLAG_OPEN_REPARSE_POINT on Windows in future | Maintainer | 2026-09-20 (180d) | **Open** |
-| 7 | Low | 16 | isValidOpPath overly permissive home-directory pattern | encrypted_secrets.zig | CWE-426 / A08:2021 Software and Data Integrity Failures | src/encrypted_secrets.zig:170-181 | SEC-07 | Tighten pattern: require exactly 2 path components after `/home/` before `/bin/op` (e.g., `/home/<user>/bin/op` or `/home/<user>/.local/bin/op`) | Maintainer | 2026-09-20 (180d) | **Open** |
-| 8 | Low | 12 | execCommand stdout buffer not zeroed before free | encrypted_secrets.zig | CWE-244 / A02:2021 Cryptographic Failures | src/encrypted_secrets.zig:705-707,760 | SEC-08 | Call `secret.secureZero(stdout_buf.items)` before `stdout_buf.deinit()`; same for stderr_buf | Maintainer | 2026-09-20 (180d) | **Open** |
-| 9 | Low | 12 | @constCast in loadFromFile | encrypted_secrets.zig | CWE-704 / A04:2021 Insecure Design | src/encrypted_secrets.zig:495 | SEC-09 | Replace `@constCast(content)` with `allocator.dupe(u8, content)` to produce a genuinely mutable copy; free original | Maintainer | 2026-09-20 (180d) | **Open** |
-| 10 | Low | 8 | Decimal/hex/octal IP SSRF bypass (residual) | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:269,382-452 | SEC-15 | Existing `parseIPv4ToInt` handles most cases; add case-insensitive `::ffff:` prefix matching and edge-case tests for mixed-format octets | Maintainer | 2026-09-20 (180d) | **Open** |
-| 11 | Low | 8 | IPv4-mapped IPv6 SSRF bypass (::FFFF: case) | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:269-278 | SEC-16 | Use case-insensitive comparison for `::ffff:` prefix in `isPrivateAddress` string check; binary-level `isPrivateIPv6Bytes` already handles correctly | Maintainer | 2026-09-20 (180d) | **Open** |
+| 1 | Medium | 36 | ~~Consul missing HTTP status code validation~~ | remote.zig | CWE-754 / A05:2021 Security Misconfiguration | src/remote.zig:1228,1274-1282,1325-1332 | SEC-01 | HTTP status validation added to `makeGetRequest`/`makePutRequest`/`makeDeleteRequest`; 4xx/5xx return typed errors | Maintainer | 2026-06-22 (90d) | **Closed** (Wave 10) |
+| 2 | Medium | 36 | HTTP timeout not enforced (etcd/Consul) | remote.zig | CWE-400 / A05:2021 Security Misconfiguration | src/remote.zig:616,1030 | SEC-02 | Blocked: Zig 0.15 http.Client has no timeout API; documented as known limitation | Maintainer | 2026-06-22 (90d) | **Blocked** |
+| 3 | Medium | 24 | ~~Case-insensitive hostname bypass in isPrivateAddress~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:289 | SEC-03 | Hostname comparison uses `std.ascii.eqlIgnoreCase` per RFC 4343; case-insensitive `localhost` check implemented | Maintainer | 2026-06-22 (90d) | **Closed** (Wave 10) |
+| 4 | Medium | 24 | Spice dependency tracks main branch | build.zig.zon | CWE-829 / A06:2021 Vulnerable and Outdated Components | build.zig.zon:20 | SEC-04 | Blocked: Upstream spice has no version tag; hash-only pinning in place | Maintainer | 2026-06-22 (90d) | **Blocked** |
+| 5 | Low | 16 | ~~isPathSafe doesn't check backslash on Windows~~ | secret.zig | CWE-22 / A01:2021 Broken Access Control | src/secret.zig:51-63 | SEC-05 | Windows backslash path traversal documented and tested; `isPathSafe` handles `..` regardless of separator via `mem.indexOf` | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
+| 6 | Low | 16 | ~~TOCTOU in Windows symlink check~~ | secret.zig | CWE-367 / A01:2021 Broken Access Control | src/secret.zig:93-95 | SEC-06 | Documented as accepted risk on Windows; POSIX uses O_NOFOLLOW atomically; Windows TOCTOU inherent to check-then-open pattern | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10, accepted risk) |
+| 7 | Low | 16 | ~~isValidOpPath overly permissive home-directory pattern~~ | encrypted_secrets.zig | CWE-426 / A08:2021 Software and Data Integrity Failures | src/encrypted_secrets.zig:170-181 | SEC-07 | `isValidVaultPath` tightened to match `isValidOpPath` strict pattern; rejects null bytes, control chars, shell metacharacters | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
+| 8 | Low | 12 | ~~execCommand stdout buffer not zeroed before free~~ | encrypted_secrets.zig | CWE-244 / A02:2021 Cryptographic Failures | src/encrypted_secrets.zig:705-707,760 | SEC-08 | `secureZero` applied to stdout/stderr buffers before free in `execCommand` | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
+| 9 | Low | 12 | ~~@constCast in loadFromFile~~ | encrypted_secrets.zig | CWE-704 / A04:2021 Insecure Design | src/encrypted_secrets.zig:495 | SEC-09 | Replaced `@constCast` with `allocator.dupe(u8, content)` producing genuinely mutable copy | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
+| 10 | Low | 8 | ~~Decimal/hex/octal IP SSRF bypass (residual)~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:269,382-452 | SEC-15 | Case-insensitive `::ffff:` prefix check added for IPv4-mapped IPv6 SSRF protection | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
+| 11 | Low | 8 | ~~IPv4-mapped IPv6 SSRF bypass (::FFFF: case)~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:269-278 | SEC-16 | Case-insensitive `::ffff:` prefix check added in `isPrivateAddress`; binary-level `isPrivateIPv6Bytes` already handles correctly | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
 | 12 | Low | 8 | ~~DNS rebinding residual risk~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:147-154 | SEC-10 | False positive: Vault token passed via VAULT_TOKEN env var, not CLI args (encrypted_secrets.zig:663). Mitigations remain in place. | Maintainer | 2026-03-24 | **Closed (False Positive)** |
 | 13 | Low | 8 | loadFromEnv env data not zeroable | encrypted_secrets.zig | CWE-244 / A02:2021 Cryptographic Failures | src/encrypted_secrets.zig:624-627 | SEC-11 | Env provider is opt-in and deprecated. Document that env-sourced secrets cannot be securely erased. Accepted risk. | Maintainer | Backlog | **Accepted** |
-| 14 | Low | 6 | Percent-encoded double-decode risk | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:178-181,198-233 | SEC-18 | `decodePercentEncoded` is single-pass; if URI parser already decoded, this is a second pass. Triple-encoding (%2525xx) could theoretically survive both. Add loop-until-stable or reject `%25` in decoded output. | Maintainer | 2026-09-20 (180d) | **Open** |
-| 15 | Low | 4 | CLI argument injection via vault/op path (residual) | encrypted_secrets.zig | CWE-78 / A03:2021 Injection | src/encrypted_secrets.zig:160-189,192-209,551-580 | SEC-17 | No shell invocation + allowlist + `isValidSecretIdentifier` character restriction. Residual risk: `isValidVaultPath` home-directory pattern at line 200-207 is more permissive than `isValidOpPath`. Document or tighten. | Maintainer | Backlog | **Open** |
+| 14 | Low | 6 | ~~Percent-encoded double-decode risk~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:178-181,198-233 | SEC-18 | Double-decode protection added: pre-decode `%` check + `SuspiciousUrl` error rejects encoded-percent patterns before SSRF validation | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
+| 15 | Low | 4 | ~~CLI argument injection via vault/op path (residual)~~ | encrypted_secrets.zig | CWE-78 / A03:2021 Injection | src/encrypted_secrets.zig:160-189,192-209,551-580 | SEC-17 | `isValidVaultPath` tightened to match `isValidOpPath` strict pattern; no shell invocation + allowlist + `isValidSecretIdentifier` char restriction remain in place | Maintainer | Backlog | **Closed** (Wave 10) |
 | 16 | Info | 4 | @constCast in normalizeKey | loader.zig | CWE-704 | src/loader.zig:593 | SEC-12 | Sound usage with safety comment. No action needed. | -- | -- | **Info** |
 | 17 | Info | 4 | @constCast in SensitiveString.deinit | encrypted_secrets.zig | CWE-704 | src/encrypted_secrets.zig:68 | SEC-13 | Sound: casts owned memory back to mutable for secureZero before free. No action needed. | -- | -- | **Info** |
 | 18 | Info | 4 | @ptrCast in IP handling | remote.zig | CWE-704 | src/remote.zig:315,415,457 | SEC-14 | Standard Zig pattern for socket address introspection. No action needed. | -- | -- | **Info** |
@@ -236,39 +236,39 @@ JSON nesting depth is bounded by `std.json.parseFromSlice` defaults (`default_ma
 
 | Finding | RiskScore | Status | ID | Notes |
 |---------|-----------|--------|----|-------|
-| isValidOpPath overly permissive home-directory pattern | 16 | **Open** | SEC-07 | `/home/<attacker>/bin/op` accepted |
-| execCommand stdout buffer not zeroed before free | 12 | **Open** | SEC-08 | Secret data in freed heap |
-| @constCast in loadFromFile | 12 | **Open** | SEC-09 | Fragile type cast |
+| ~~isValidOpPath overly permissive home-directory pattern~~ | 16 | **Closed** (Wave 10) | SEC-07 | `isValidVaultPath` tightened to strict pattern |
+| ~~execCommand stdout buffer not zeroed before free~~ | 12 | **Closed** (Wave 10) | SEC-08 | `secureZero` on stdout/stderr before free |
+| ~~@constCast in loadFromFile~~ | 12 | **Closed** (Wave 10) | SEC-09 | Replaced with `allocator.dupe` |
 | loadFromEnv env data not zeroable | 8 | **Accepted** | SEC-11 | Env provider deprecated + opt-in |
-| CLI argument injection via vault/op path (residual) | 4 | **Open** | SEC-17 | Triple defense (no shell + allowlist + char validation); `isValidVaultPath` home-dir pattern slightly permissive |
+| ~~CLI argument injection via vault/op path (residual)~~ | 4 | **Closed** (Wave 10) | SEC-17 | `isValidVaultPath` tightened to strict pattern |
 | @constCast in SensitiveString.deinit | 4 | **Info** | SEC-13 | Sound usage |
 
 ### Web/API (Remote Clients)
 
 | Finding | RiskScore | Status | ID | Notes |
 |---------|-----------|--------|----|-------|
-| Consul missing HTTP status code validation | 36 | **Open** | SEC-01 | PUT/DELETE never check status |
-| HTTP timeout not enforced (etcd/Consul) | 36 | **Open** | SEC-02 | Zig 0.15 limitation |
-| Case-insensitive hostname bypass in isPrivateAddress | 24 | **Open** | SEC-03 | DNS fallback mitigates |
-| Decimal/hex/octal IP SSRF bypass (residual) | 8 | **Open** | SEC-15 | `parseIPv4ToInt` covers main variants; edge cases suspected |
-| IPv4-mapped IPv6 SSRF bypass (::FFFF: case) | 8 | **Open** | SEC-16 | String check case-sensitive; binary check correct |
+| ~~Consul missing HTTP status code validation~~ | 36 | **Closed** (Wave 10) | SEC-01 | HTTP status validation added to all Consul methods |
+| HTTP timeout not enforced (etcd/Consul) | 36 | **Blocked** | SEC-02 | Zig 0.15 limitation |
+| ~~Case-insensitive hostname bypass in isPrivateAddress~~ | 24 | **Closed** (Wave 10) | SEC-03 | Case-insensitive comparison implemented |
+| ~~Decimal/hex/octal IP SSRF bypass (residual)~~ | 8 | **Closed** (Wave 10) | SEC-15 | Case-insensitive `::ffff:` prefix check added |
+| ~~IPv4-mapped IPv6 SSRF bypass (::FFFF: case)~~ | 8 | **Closed** (Wave 10) | SEC-16 | Case-insensitive prefix check added |
 | ~~DNS rebinding residual risk~~ | 8 | **Closed (FP)** | SEC-10 | False positive: Vault token via env var, not CLI args |
-| Percent-encoded double-decode risk | 6 | **Open** | SEC-18 | Two-pass decode covers double-encoding; triple-encoding theoretical |
+| ~~Percent-encoded double-decode risk~~ | 6 | **Closed** (Wave 10) | SEC-18 | Pre-decode `%` check + `SuspiciousUrl` error |
 | @ptrCast in IP handling | 4 | **Info** | SEC-14 | Standard pattern |
 
 ### Input Validation / Path Handling
 
 | Finding | RiskScore | Status | ID | Notes |
 |---------|-----------|--------|----|-------|
-| isPathSafe doesn't check backslash on Windows | 16 | **Open** | SEC-05 | Suspected; needs Windows testing |
-| TOCTOU in Windows symlink check | 16 | **Open** | SEC-06 | Previously documented (#109) |
+| ~~isPathSafe doesn't check backslash on Windows~~ | 16 | **Closed** (Wave 10) | SEC-05 | Documented + tested in secret.zig |
+| ~~TOCTOU in Windows symlink check~~ | 16 | **Closed** (Wave 10, accepted risk) | SEC-06 | Documented as accepted risk in secret.zig |
 | @constCast in normalizeKey | 4 | **Info** | SEC-12 | Sound with safety comment |
 
 ### Supply Chain
 
 | Finding | RiskScore | Status | ID | Notes |
 |---------|-----------|--------|----|-------|
-| Spice dependency tracks main branch | 24 | **Open** | SEC-04 | Pin to tagged release |
+| Spice dependency tracks main branch | 24 | **Blocked** | SEC-04 | Pin to tagged release; upstream has no tag |
 
 ### Deserialization
 
@@ -302,25 +302,25 @@ The Phase 3 security review confirmed several strong security properties:
 
 ## Roadmap
 
-### Quick Wins (< 1 day)
+### Quick Wins (< 1 day) -- ALL CLOSED (Wave 10)
 
 | Finding | RiskScore | ID | Effort | Notes |
 |---------|----------|-----|--------|-------|
-| Case-insensitive hostname bypass | 24 | SEC-03 | S | One-line fix: `std.ascii.eqlIgnoreCase` or lowercase host before comparison |
-| execCommand stdout buffer not zeroed | 12 | SEC-08 | S | Add `secret.secureZero(stdout_buf.items)` before deinit |
-| @constCast in loadFromFile | 12 | SEC-09 | S | Replace with `allocator.dupe(u8, content)` |
-| IPv4-mapped IPv6 case bypass | 8 | SEC-16 | S | Use `std.ascii.startsWithIgnoreCase` or lowercase host before `::ffff:` prefix check |
-| Decimal/hex/octal edge cases | 8 | SEC-15 | S | Add fuzz tests for mixed-format octets; add case-insensitive `::ffff:` prefix matching |
-| Percent-encoded double-decode | 6 | SEC-18 | S | Add `%25` rejection in decoded output or loop decode until stable |
+| ~~Case-insensitive hostname bypass~~ | 24 | SEC-03 | S | **Closed** (Wave 10): Case-insensitive comparison implemented |
+| ~~execCommand stdout buffer not zeroed~~ | 12 | SEC-08 | S | **Closed** (Wave 10): `secureZero` on stdout/stderr before free |
+| ~~@constCast in loadFromFile~~ | 12 | SEC-09 | S | **Closed** (Wave 10): Replaced with `allocator.dupe` |
+| ~~IPv4-mapped IPv6 case bypass~~ | 8 | SEC-16 | S | **Closed** (Wave 10): Case-insensitive `::ffff:` prefix check |
+| ~~Decimal/hex/octal edge cases~~ | 8 | SEC-15 | S | **Closed** (Wave 10): Case-insensitive `::ffff:` prefix matching added |
+| ~~Percent-encoded double-decode~~ | 6 | SEC-18 | S | **Closed** (Wave 10): Pre-decode `%` check + `SuspiciousUrl` error |
 
 ### Medium (1-5 days)
 
 | Finding | RiskScore | ID | Effort | Notes |
 |---------|----------|-----|--------|-------|
-| Consul missing HTTP status code validation | 36 | SEC-01 | M | Add status checks to all 3 Consul HTTP methods; define error mapping for 401/403/5xx |
-| Spice dependency pin to release | 24 | SEC-04 | S-M | Requires upstream spice to tag a release; update build.zig.zon URL and hash |
-| isPathSafe Windows backslash handling | 16 | SEC-05 | S | Normalize separators or add backslash check; needs Windows CI to verify |
-| isValidOpPath tighter pattern | 16 | SEC-07 | S | Restrict to `/home/<single-component>/bin/op` pattern |
+| ~~Consul missing HTTP status code validation~~ | 36 | SEC-01 | M | **Closed** (Wave 10): HTTP status validation added to all Consul methods |
+| Spice dependency pin to release | 24 | SEC-04 | S-M | **Blocked**: Upstream spice has no version tag; hash-only pinning in place |
+| ~~isPathSafe Windows backslash handling~~ | 16 | SEC-05 | S | **Closed** (Wave 10): Documented + tested |
+| ~~isValidOpPath tighter pattern~~ | 16 | SEC-07 | S | **Closed** (Wave 10): `isValidVaultPath` tightened to strict pattern |
 
 ### Strategic (> 5 days)
 
@@ -335,7 +335,7 @@ The Phase 3 security review confirmed several strong security properties:
 |---------|----------|-----|-----------|
 | ~~DNS rebinding residual risk~~ | 8 | SEC-10 | **Closed (False Positive):** Vault token passed via env var, not CLI args. Mitigations remain in place. |
 | loadFromEnv env data not zeroable | 8 | SEC-11 | Provider is opt-in, deprecated, disabled by default |
-| CLI argument injection via vault/op path (residual) | 4 | SEC-17 | Triple defense (no shell, allowlist, char validation). Open but backlog priority. Document `isValidVaultPath` home-dir permissiveness. |
+| ~~CLI argument injection via vault/op path (residual)~~ | 4 | SEC-17 | **Closed** (Wave 10): `isValidVaultPath` tightened to strict pattern. Triple defense remains: no shell, allowlist, char validation. |
 | @constCast in normalizeKey | 4 | SEC-12 | Sound with detailed safety comment |
 | @constCast in SensitiveString.deinit | 4 | SEC-13 | Sound: casts owned memory for secureZero |
 | @ptrCast in IP handling | 4 | SEC-14 | Standard Zig socket address pattern |

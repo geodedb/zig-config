@@ -315,19 +315,38 @@ pub fn Loader(comptime T: type) type {
             var result = std.StringHashMap([]const u8).init(self.allocator);
             errdefer result.deinit();
 
-            const prefix_with_dot = if (prefix.len > 0 and prefix[prefix.len - 1] != '.')
-                try std.fmt.allocPrint(self.allocator, "{s}.", .{prefix})
-            else
-                try self.allocator.dupe(u8, prefix);
-            defer self.allocator.free(prefix_with_dot);
+            // PERF-32: Use stack buffer for prefix construction, heap fallback for oversized prefixes
+            var dot_buf: [256]u8 = undefined;
+            if (prefix.len > 0 and prefix[prefix.len - 1] != '.') {
+                var heap_dot: ?[]u8 = null;
+                defer if (heap_dot) |h| self.allocator.free(h);
+                const prefix_with_dot = std.fmt.bufPrint(&dot_buf, "{s}.", .{prefix}) catch blk: {
+                    const h = try self.allocator.alloc(u8, prefix.len + 1);
+                    @memcpy(h[0..prefix.len], prefix);
+                    h[prefix.len] = '.';
+                    heap_dot = h;
+                    break :blk @as([]u8, h);
+                };
 
-            var iter = self.tracker.values.iterator();
-            while (iter.next()) |entry| {
-                const key = entry.key_ptr.*;
-                if (mem.startsWith(u8, key, prefix_with_dot)) {
-                    const sub_key = key[prefix_with_dot.len..];
-                    if (sub_key.len > 0) {
-                        try result.put(sub_key, entry.value_ptr.value);
+                var iter = self.tracker.values.iterator();
+                while (iter.next()) |entry| {
+                    const key = entry.key_ptr.*;
+                    if (mem.startsWith(u8, key, prefix_with_dot)) {
+                        const sub_key = key[prefix_with_dot.len..];
+                        if (sub_key.len > 0) {
+                            try result.put(sub_key, entry.value_ptr.value);
+                        }
+                    }
+                }
+            } else {
+                var iter = self.tracker.values.iterator();
+                while (iter.next()) |entry| {
+                    const key = entry.key_ptr.*;
+                    if (mem.startsWith(u8, key, prefix)) {
+                        const sub_key = key[prefix.len..];
+                        if (sub_key.len > 0) {
+                            try result.put(sub_key, entry.value_ptr.value);
+                        }
                     }
                 }
             }
@@ -337,8 +356,17 @@ pub fn Loader(comptime T: type) type {
 
         /// Check if a sub-configuration exists
         pub fn hasSub(self: *const Self, prefix: []const u8) bool {
-            const prefix_with_dot = std.fmt.allocPrint(self.allocator, "{s}.", .{prefix}) catch return false;
-            defer self.allocator.free(prefix_with_dot);
+            // PERF-32: Use stack buffer for prefix construction, heap fallback for oversized prefixes
+            var dot_buf: [256]u8 = undefined;
+            var heap_dot: ?[]u8 = null;
+            defer if (heap_dot) |h| self.allocator.free(h);
+            const prefix_with_dot = std.fmt.bufPrint(&dot_buf, "{s}.", .{prefix}) catch blk: {
+                const h = self.allocator.alloc(u8, prefix.len + 1) catch return false;
+                @memcpy(h[0..prefix.len], prefix);
+                h[prefix.len] = '.';
+                heap_dot = h;
+                break :blk @as([]u8, h);
+            };
 
             var iter = self.tracker.values.keyIterator();
             while (iter.next()) |key| {
@@ -731,6 +759,24 @@ pub fn Loader(comptime T: type) type {
             try self.parseContent(content, format, source, path);
         }
 
+        /// Parse raw configuration content in the given format and apply the
+        /// resulting key/value pairs to this loader's field store.
+        ///
+        /// **Parameters**
+        /// - `content` -- Raw bytes to parse (e.g. the body of a config file).
+        /// - `format`  -- `Format` enum that selects the parser:
+        ///     - `.json`       -> `std.json` (via `parseSimpleJson`)
+        ///     - `.toml`       -> `parseSimpleToml`
+        ///     - `.yaml`       -> `parseSimpleYaml`
+        ///     - `.ini`        -> `parseIni`
+        ///     - `.properties` -> `parseProperties`
+        ///     - `.auto`       -> calls `detectFormatFromContent` and recurses
+        /// - `source`  -- `ConfigSource` tag used for provenance tracking.
+        /// - `path`    -- File path (or identifier) used in error messages.
+        ///
+        /// **Errors**
+        /// Returns `LoadError.OutOfMemory` on allocation failure, or the parse
+        /// error produced by the selected format-specific parser.
         pub fn parseContent(self: *Self, content: []const u8, format: Format, source: Source, path: []const u8) LoadError!void {
             switch (format) {
                 .json => try self.parseSimpleJson(content, source, path),
@@ -759,13 +805,23 @@ pub fn Loader(comptime T: type) type {
                 .object => |obj| {
                     var iter = obj.iterator();
                     while (iter.next()) |entry| {
-                        const full_key = if (prefix.len > 0)
-                            std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ prefix, entry.key_ptr.* }) catch return LoadError.OutOfMemory
-                        else
-                            self.allocator.dupe(u8, entry.key_ptr.*) catch return LoadError.OutOfMemory;
-                        defer self.allocator.free(full_key);
-
-                        try self.applyJsonValue(full_key, entry.value_ptr.*, source, path);
+                        if (prefix.len > 0) {
+                            // PERF-26: Use stack buffer for key construction, heap fallback for oversized keys
+                            var key_buf: [512]u8 = undefined;
+                            var heap_key: ?[]u8 = null;
+                            defer if (heap_key) |h| self.allocator.free(h);
+                            const full_key = std.fmt.bufPrint(&key_buf, "{s}.{s}", .{ prefix, entry.key_ptr.* }) catch blk: {
+                                const h = self.allocator.alloc(u8, prefix.len + 1 + entry.key_ptr.*.len) catch return LoadError.OutOfMemory;
+                                @memcpy(h[0..prefix.len], prefix);
+                                h[prefix.len] = '.';
+                                @memcpy(h[prefix.len + 1 ..], entry.key_ptr.*);
+                                heap_key = h;
+                                break :blk @as([]u8, h);
+                            };
+                            try self.applyJsonValue(full_key, entry.value_ptr.*, source, path);
+                        } else {
+                            try self.applyJsonValue(entry.key_ptr.*, entry.value_ptr.*, source, path);
+                        }
                     }
                 },
                 .string => |s| {
@@ -824,19 +880,29 @@ pub fn Loader(comptime T: type) type {
                         }
                     }
 
-                    const full_key = if (current_section) |section|
-                        std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ section, key }) catch return LoadError.OutOfMemory
-                    else
-                        key;
-
-                    if (current_section != null) {
-                        defer self.allocator.free(full_key);
+                    if (current_section) |section| {
+                        // PERF-27: Use stack buffer for key construction, heap fallback for oversized keys
+                        var key_buf: [512]u8 = undefined;
+                        var heap_key: ?[]u8 = null;
+                        defer if (heap_key) |h| self.allocator.free(h);
+                        const full_key = std.fmt.bufPrint(&key_buf, "{s}.{s}", .{ section, key }) catch blk: {
+                            const h = self.allocator.alloc(u8, section.len + 1 + key.len) catch return LoadError.OutOfMemory;
+                            @memcpy(h[0..section.len], section);
+                            h[section.len] = '.';
+                            @memcpy(h[section.len + 1 ..], key);
+                            heap_key = h;
+                            break :blk @as([]u8, h);
+                        };
+                        self.setField(full_key, value, source, path) catch |err| switch (err) {
+                            LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                            else => {}, // Unknown key or type mismatch is non-fatal during TOML parsing
+                        };
+                    } else {
+                        self.setField(key, value, source, path) catch |err| switch (err) {
+                            LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                            else => {}, // Unknown key or type mismatch is non-fatal during TOML parsing
+                        };
                     }
-
-                    self.setField(full_key, value, source, path) catch |err| switch (err) {
-                        LoadError.OutOfMemory => return LoadError.OutOfMemory,
-                        else => {}, // Unknown key or type mismatch is non-fatal during TOML parsing
-                    };
                 }
             }
         }
@@ -888,8 +954,18 @@ pub fn Loader(comptime T: type) type {
                 const section_name = section_entry.key_ptr.*;
                 var value_iter = section_entry.value_ptr.values.iterator();
                 while (value_iter.next()) |value_entry| {
-                    const full_key = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ section_name, value_entry.key_ptr.* }) catch return LoadError.OutOfMemory;
-                    defer self.allocator.free(full_key);
+                    // PERF-28: Use stack buffer for key construction, heap fallback for oversized keys
+                    var key_buf: [512]u8 = undefined;
+                    var heap_key: ?[]u8 = null;
+                    defer if (heap_key) |h| self.allocator.free(h);
+                    const full_key = std.fmt.bufPrint(&key_buf, "{s}.{s}", .{ section_name, value_entry.key_ptr.* }) catch blk: {
+                        const h = self.allocator.alloc(u8, section_name.len + 1 + value_entry.key_ptr.*.len) catch return LoadError.OutOfMemory;
+                        @memcpy(h[0..section_name.len], section_name);
+                        h[section_name.len] = '.';
+                        @memcpy(h[section_name.len + 1 ..], value_entry.key_ptr.*);
+                        heap_key = h;
+                        break :blk @as([]u8, h);
+                    };
                     self.setField(full_key, value_entry.value_ptr.*, source, path) catch |err| switch (err) {
                         LoadError.OutOfMemory => return LoadError.OutOfMemory,
                         else => {}, // Unknown key or type mismatch is non-fatal during INI parsing

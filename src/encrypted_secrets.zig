@@ -189,6 +189,8 @@ pub fn isValidOpPath(path: []const u8) bool {
 }
 
 /// Validate the Vault CLI binary path against an allowlist (CWE-426).
+/// Security (SEC-07, SEC-17): Uses strict suffix matching identical to isValidOpPath
+/// to prevent matches like /home/user/projects/evil/bin/vault.
 pub fn isValidVaultPath(path: []const u8) bool {
     if (path.len == 0) return false;
 
@@ -196,11 +198,21 @@ pub fn isValidVaultPath(path: []const u8) bool {
         if (mem.eql(u8, path, allowed)) return true;
     }
 
-    // Allow paths in home directories: ~/.local/bin/vault or ~/bin/vault
-    if (mem.endsWith(u8, path, "/vault") or mem.endsWith(u8, path, "\\vault.exe")) {
-        if (mem.indexOf(u8, path, "..") != null) return false;
-        if (mem.startsWith(u8, path, "/home/") or mem.startsWith(u8, path, "/Users/")) {
-            if (mem.indexOf(u8, path, "/bin/vault") != null) {
+    // Allow paths in home directories: ~/bin/vault or ~/.local/bin/vault only.
+    // Security (SEC-07): Restrict to exactly /home/<user>/bin/vault or
+    // /home/<user>/.local/bin/vault to prevent matches like
+    // /home/user/projects/evil/bin/vault.
+    if (mem.indexOf(u8, path, "..") != null) return false;
+    const prefixes = [_][]const u8{ "/home/", "/Users/" };
+    for (prefixes) |prefix| {
+        if (mem.startsWith(u8, path, prefix)) {
+            const after_prefix = path[prefix.len..];
+            const user_end = mem.indexOf(u8, after_prefix, "/") orelse continue;
+            if (user_end == 0) continue;
+            const after_user = after_prefix[user_end..];
+            if (mem.eql(u8, after_user, "/bin/vault") or
+                mem.eql(u8, after_user, "/.local/bin/vault"))
+            {
                 return true;
             }
         }
@@ -1313,6 +1325,48 @@ test "resolveVaultPath rejects paths outside allowlist" {
     const allocator = std.testing.allocator;
     const result = resolveVaultPath(allocator, "/tmp/evil_vault");
     try std.testing.expectError(SecretError.InvalidInputCharacters, result);
+}
+
+// ============================================================================
+// Gap Closure Tests: isValidVaultPath strict suffix matching (SEC-07, SEC-17)
+// ============================================================================
+
+test "isValidVaultPath allows safe paths" {
+    // Allowlisted system paths
+    try std.testing.expect(isValidVaultPath("/usr/bin/vault"));
+    try std.testing.expect(isValidVaultPath("/usr/local/bin/vault"));
+    try std.testing.expect(isValidVaultPath("/opt/hashicorp/vault"));
+    try std.testing.expect(isValidVaultPath("/opt/homebrew/bin/vault"));
+    try std.testing.expect(isValidVaultPath("/snap/bin/vault"));
+
+    // Home directory bin paths (strict suffix matching)
+    try std.testing.expect(isValidVaultPath("/home/user/bin/vault"));
+    try std.testing.expect(isValidVaultPath("/home/user/.local/bin/vault"));
+    try std.testing.expect(isValidVaultPath("/Users/developer/bin/vault"));
+    try std.testing.expect(isValidVaultPath("/Users/developer/.local/bin/vault"));
+}
+
+test "isValidVaultPath rejects malicious paths (SEC-07, SEC-17)" {
+    // Empty path
+    try std.testing.expect(!isValidVaultPath(""));
+
+    // Arbitrary binaries
+    try std.testing.expect(!isValidVaultPath("/tmp/malicious"));
+    try std.testing.expect(!isValidVaultPath("/bin/sh"));
+
+    // Nested evil paths that the old permissive check would have accepted
+    try std.testing.expect(!isValidVaultPath("/home/user/projects/evil/bin/vault"));
+    try std.testing.expect(!isValidVaultPath("/home/user/code/malicious/bin/vault"));
+    try std.testing.expect(!isValidVaultPath("/Users/dev/work/exploit/bin/vault"));
+
+    // Path traversal attempts
+    try std.testing.expect(!isValidVaultPath("/home/user/../../../tmp/bin/vault"));
+    try std.testing.expect(!isValidVaultPath("/usr/bin/../../../tmp/evil"));
+
+    // Paths not ending exactly in /vault
+    try std.testing.expect(!isValidVaultPath("/home/user/bin/vault2"));
+    try std.testing.expect(!isValidVaultPath("/home/user/bin/vault.bak"));
+    try std.testing.expect(!isValidVaultPath("/home/user/bin/notvault"));
 }
 
 // ============================================================================

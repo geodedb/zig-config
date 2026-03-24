@@ -1,6 +1,6 @@
 # Performance Gap Analysis -- zigconfig
 
-Last updated: 2026-03-24 (Phase 5 review)
+Last updated: 2026-03-24 (Wave 10 closure)
 
 ## Summary
 
@@ -8,9 +8,9 @@ Last updated: 2026-03-24 (Phase 5 review)
 |-------------|-------|--------|----------|----------|------|
 | P1          | 5     | 4      | 1        | 0        | 0    |
 | P2          | 11    | 9      | 1        | 0        | 1    |
-| P3          | 15    | 14     | 0        | 0        | 1    |
+| P3          | 15    | 15     | 0        | 0        | 0    |
 | Info        | 19    | 15     | 4        | 0        | 0    |
-| **Total**   | **50** | **42** | **6** | **0** | **2** |
+| **Total**   | **50** | **43** | **6** | **0** | **1** |
 
 4 legacy Info items superseded by higher-severity Phase 4 findings and excluded from counts above:
 PERF-22 superseded by PERF-28, PERF-23 superseded by PERF-32, PERF-20i superseded by PERF-37, PERF-21 superseded by PERF-38.
@@ -78,18 +78,18 @@ Phase 5 review applied 2026-03-24. Added 5 new findings from Phase 5 code-level 
 | 3 | PERF-31 | P2 | 48 | ~~applyBoundEnvVars per-item getenv syscall~~ | loader.zig | All three env functions now receive a shared `std.process.EnvMap` snapshot from `load()`. Uses `env_map.get()` instead of `environ.getenv()`. | 0 per-item syscalls; single snapshot shared | -- | Hoisted `std.process.getEnvMap` into `load()` and passed to all env functions (Wave 7) | benjiv | Quarter | **Closed** (Wave 7) |
 | 4 | PERF-44 | P2 | 40 | No benchmark suite -- CI blocker now resolved | build.zig | No `bench` step in `build.zig`. CI infrastructure (#82) is now resolved (build+test stages active with Zig 0.15.2), removing the previous blocker. Rescored from original 80 to 40 since CI is available but benchmarks are not yet added. | Cannot quantify any optimization; all perf estimates are code-inspection only | [#89](https://gitlab.com/devnw/zig/config/-/issues/89) | Add `zig build bench` step with per-component benchmarks. CI can now run them. | benjiv | Quarter | **Open** (was Won't Do, now unblocked) |
 | 5 | PERF-36 | P2 | 36 | ~~setFieldInner dupes before field match~~ | loader.zig | Verified: `setField` already performs `arena.dupe()` inside the `if (matchFieldName(...))` branch. No `setFieldInner` exists. Already resolved by prior refactoring. | No wasted allocs; dupes only on match | -- | Already resolved in current code | benjiv | Quarter | **Closed** (already resolved) |
-| 6 | PERF-26 | P2 | 32 | ~~allocPrint in JSON object recursion~~ | loader.zig | `applyJsonValue` uses `var key_buf: [512]u8` with `std.fmt.bufPrint`. No heap allocation per JSON object entry. | 0 heap allocs for key construction | -- | Replaced `allocPrint` with stack-buffer `bufPrint` (Wave 7) | benjiv | Quarter | **Closed** (Wave 7) |
+| 6 | PERF-26 | P2 | 32 | ~~allocPrint in JSON object recursion~~ | loader.zig | `applyJsonValue` uses `var key_buf: [512]u8` with `std.fmt.bufPrint` at `loader.zig:790-806`. No heap allocation per JSON object entry. | 0 heap allocs for key construction | -- | Replaced `allocPrint` with stack-buffer `bufPrint` (Wave 7; reverted Wave 9; re-applied Wave 10) | benjiv | Quarter | **Closed** (Wave 10) |
 | 7 | PERF-39 | P2 | 28 | ~~Double getEnvMap snapshot~~ | loader.zig | `load()` creates a single `std.process.getEnvMap` snapshot and passes `*const std.process.EnvMap` to all three env functions. | 1 snapshot total instead of up to 3 | -- | Hoisted single snapshot into `load()` (Wave 7) | benjiv | Quarter | **Closed** (Wave 7) |
 | 8 | PERF-33 | P3 | 24 | ~~Auth header rebuilt on every Etcd request~~ | remote.zig | `src/remote.zig` -- auth header cached at `Etcd.init()`, `secureZero` in `deinit()` | 0 per-request allocs for auth; cached at init | -- | Cached auth header at init, secureZero in deinit | benjiv | Backlog | **Closed** (Wave 8) |
 | 9 | PERF-37 | P3 | 24 | ~~recheckDnsBinding re-parses URI redundantly per request~~ | remote.zig | `src/remote.zig` -- cached parsed URIs at init for both Etcd and Consul; path override per request | 0 per-request URI parses | -- | Cached parsed URIs at init for both Etcd and Consul clients | benjiv | Backlog | **Closed** (Wave 8) |
 | 10 | PERF-42 | P3 | 20 | ~~Thread pool spawns OS threads even when parallel module is inactive~~ | parallel.zig | `src/parallel.zig` -- parallel threshold raised from 2 to 4 files; small file counts use sequential I/O | Threads only spawned for 4+ files; avoids overhead for small configs | -- | Raised parallel threshold from 2 to 4 files | benjiv | Backlog | **Closed** (Wave 8) |
 | 11 | PERF-25 | P3 | 16 | Double allocLowerString per matching key in case-insensitive diff | diff.zig | `src/diff.zig:176` -- `allocLowerString(key)` for lookup, then `src/diff.zig:183` -- `allocLowerString(key)` again for seen_keys insertion. Same key lowercased twice. Similarly at lines 230 and 237 for the added-keys pass. | 2x allocLowerString per key in case-insensitive mode; 4x for keys checked in both passes | -- | Refactored: seen_keys stores lowered keys (allocated once) for O(1) hash lookup in added-keys pass. Removed O(n) containsKeyInsensitive linear scan. Each key is lowered once per pass. | benjiv | Backlog | **Closed** |
-| 12 | PERF-27 | P3 | 16 | ~~allocPrint in TOML section loop~~ | loader.zig | `parseSimpleToml` uses `var key_buf: [512]u8` with `std.fmt.bufPrint` for section.key construction. | 0 heap allocs for key construction | -- | Replaced `allocPrint` with stack-buffer `bufPrint` (Wave 7) | benjiv | Backlog | **Closed** (Wave 7) |
-| 13 | PERF-28 | P3 | 16 | ~~allocPrint in INI section loop~~ | loader.zig | `parseIni` uses `var key_buf: [512]u8` with `std.fmt.bufPrint` for section.key construction. | 0 heap allocs for key construction | -- | Replaced `allocPrint` with stack-buffer `bufPrint` (Wave 7) | benjiv | Backlog | **Closed** (Wave 7) |
+| 12 | PERF-27 | P3 | 16 | ~~allocPrint in TOML section loop~~ | loader.zig | `parseSimpleToml` uses `var key_buf: [512]u8` with `std.fmt.bufPrint` for section.key construction at `loader.zig:865-887`. | 0 heap allocs for key construction | -- | Replaced `allocPrint` with stack-buffer `bufPrint` (Wave 7; reverted Wave 9; re-applied Wave 10) | benjiv | Backlog | **Closed** (Wave 10) |
+| 13 | PERF-28 | P3 | 16 | ~~allocPrint in INI section loop~~ | loader.zig | `parseIni` uses `var key_buf: [512]u8` with `std.fmt.bufPrint` for section.key construction at `loader.zig:939-954`. | 0 heap allocs for key construction | -- | Replaced `allocPrint` with stack-buffer `bufPrint` (Wave 7; reverted Wave 9; re-applied Wave 10) | benjiv | Backlog | **Closed** (Wave 10) |
 | 14 | PERF-29 | P3 | 16 | ~~allocPrint in JSON array index loop~~ | loader.zig | No JSON array handling code exists in `applyJsonValue`; the `.array` case is handled by the `else => {}` branch which skips arrays. Nothing to fix. | N/A -- code path does not exist | -- | Not applicable; no array flattening in current parser | benjiv | Backlog | **Closed** (N/A) |
 | 15 | PERF-34 | Info | 16 | ~~URL allocPrint per Etcd failover attempt~~ | remote.zig | `src/remote.zig` -- eliminated via cached URI with path override | 0 per-request URL allocs; base URI cached at init | -- | Cached URI at init; path override per request eliminates allocPrint | benjiv | As capacity | **Closed** (Wave 8) |
 | 16 | PERF-35 | Info | 16 | ~~Consul URL allocPrint per operation~~ | remote.zig | `src/remote.zig` -- stack buffer `bufPrint` for paths + cached URI at init | 0 heap allocs for typical Consul KV paths | -- | Stack buffer bufPrint for paths + cached URI | benjiv | As capacity | **Closed** (Wave 8) |
-| 17 | PERF-32 | Info | 12 | ~~prefix_with_dot heap alloc in sub()/hasSub()~~ | loader.zig | `src/loader.zig` -- stack buffer `bufPrint` (256B) in sub()/hasSub() | 0 heap allocs for prefix + "." (typical < 256B) | -- | Stack buffer bufPrint (256B) in sub/hasSub | benjiv | As capacity | **Closed** (Wave 8) |
+| 17 | PERF-32 | Info | 12 | ~~prefix_with_dot heap alloc in sub()/hasSub()~~ | loader.zig | `src/loader.zig:318-378` -- stack buffer `bufPrint` (256B) in sub()/hasSub() | 0 heap allocs for prefix + "." (typical < 256B) | -- | Stack buffer bufPrint (256B) in sub/hasSub (Wave 8; reverted Wave 9; re-applied Wave 10) | benjiv | As capacity | **Closed** (Wave 10) |
 | 18 | PERF-30 | Info | 8 | ~~formatDiff iterates changes array 3x~~ | diff.zig | `src/diff.zig` -- single pass with 3 output buffers | 1 pass over changes array instead of 3 | -- | Single pass with 3 output buffers | benjiv | As capacity | **Closed** (Wave 8) |
 | 19 | PERF-40 | Info | 8 | ~~page_allocator granularity waste for small file reads~~ | parallel.zig | `src/parallel.zig` -- added `initPool()` accepting caller allocator + documentation | Callers can now pass GPA or other allocator; docs explain trade-offs | -- | Added initPool() with caller allocator + docs | benjiv | As capacity | **Closed** (Wave 8) |
 | 20 | PERF-41 | Info | 8 | ~~Global pool_mutex contention in parallel.zig~~ | parallel.zig | `src/parallel.zig` -- replaced mutex with `std.once` for lock-free reads after init | Lock-free reads on hot path; init serialized via std.once | -- | Replaced pool_mutex with std.once for lock-free reads | benjiv | As capacity | **Closed** (Wave 8) |
@@ -109,7 +109,7 @@ Phase 5 review applied 2026-03-24. Added 5 new findings from Phase 5 code-level 
 
 | Rank | ID | PerfSeverity | PerfScore | Finding | Component | Evidence | Measurement | Issue | Fix Summary | Owner | SLA | Status |
 |------|-----|-------------|-----------|---------|-----------|----------|-------------|-------|-------------|-------|-----|--------|
-| 1 | PERF-54 | P3 | 12 | HashMap no capacity hint in diff `merge()` and `compareWithOptions()` | diff.zig | `src/diff.zig:124,146,434` -- `StringHashMap.init()` with no `ensureTotalCapacity`; input sizes known from `.count()` | Avoids O(log n) rehashes during map population; saves ~3-5 realloc+rehash cycles for 50+ key configs | -- | Add `ensureTotalCapacity(base.count() + overlay.count())` to `merge()` result map; add hints to `new_lower_index` and `seen_keys` in `compareWithOptions()` | benjiv | Backlog | **Open** |
+| 1 | PERF-54 | P3 | 12 | ~~HashMap no capacity hint in diff `merge()` and `compareWithOptions()`~~ | diff.zig | `src/diff.zig:124,146,434` -- `ensureTotalCapacity` added to `merge()` result map and `compareWithOptions()` helper maps (`new_lower_index`, `seen_keys`) | Eliminates O(log n) rehashes during map population; ~3-5 fewer realloc+rehash cycles for 50+ key configs | -- | Added `ensureTotalCapacity` to `merge()` result map and `compareWithOptions()` helper maps (Wave 10) | benjiv | Backlog | **Closed** (Wave 10) |
 | 2 | PERF-55 | Info | 4 | HTTP connection reuse already works via std.http.Client pool | remote.zig | `src/remote.zig:655,1045` -- `http.Client{ .allocator = allocator }` manages connection pooling internally via `client.fetch()` | No action needed; connection pooling confirmed in PERF-7 (Closed Wave 4) | -- | No action -- already works. Duplicate of PERF-7 validation. | benjiv | As capacity | **Won't Do** (confirmed working) |
 | 3 | PERF-56 | Info | 4 | allocPrint in INI section loop negligible for realistic configs | loader.zig | `src/loader.zig:828,891` -- `allocPrint` for section.key construction; typical configs have < 20 sections x < 10 keys = < 200 allocs | Negligible: < 200 small allocs total; already mitigated in JSON/TOML paths by PERF-28 (Wave 7) | -- | No action -- cost is negligible for realistic config sizes; INI path retained for simplicity | benjiv | As capacity | **Won't Do** (negligible impact) |
 | 4 | PERF-57 | Info | 4 | Repeated toLower in merge path | merge.zig | `src/merge.zig` -- no `toLower`/`allocLowerString` calls found; merge.zig operates on exact keys only | No toLower calls exist in merge.zig; finding does not apply to current codebase | -- | No action -- merge.zig uses exact key matching; case-insensitive lowering is in diff.zig only (already optimized by PERF-25) | benjiv | As capacity | **Won't Do** (not applicable) |
@@ -134,7 +134,7 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 | PERF-8 | 40 | ~~parallel.loadFile/serializeData stubs~~ | P2 | [#132](https://gitlab.com/devnw/zig/config/-/issues/132) | **Closed** (Wave 3) |
 | PERF-36 | 36 | ~~setFieldInner dupes before match~~ | P2 | -- | **Closed** (already resolved) |
 | PERF-9 | 36 | ~~Sequential file loading~~ | P2 | [#104](https://gitlab.com/devnw/zig/config/-/issues/104) | **Closed** (Wave 5) |
-| PERF-26 | 32 | ~~allocPrint in JSON recursion~~ | P2 | -- | **Closed** (Wave 7) |
+| PERF-26 | 32 | ~~allocPrint in JSON recursion~~ | P2 | -- | **Closed** (Wave 10) |
 | PERF-10 | 24 | ~~Full file buffering (mitigated to 1MB)~~ | P2 | [#111](https://gitlab.com/devnw/zig/config/-/issues/111) | **Closed** |
 | PERF-11 | 32 | ~~Double string duplication in setField~~ | P3 | [#125](https://gitlab.com/devnw/zig/config/-/issues/125) | **Closed** |
 | PERF-39 | 28 | ~~Double getEnvMap snapshot~~ | P2 | -- | **Closed** (Wave 7) |
@@ -144,13 +144,13 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 | PERF-13 | 16 | ~~Global thread pool page_allocator~~ | P3 | [#124](https://gitlab.com/devnw/zig/config/-/issues/124) | **Closed** (Wave 3) |
 | PERF-14 | 16 | ~~Repeated env lookups~~ | P3 | [#126](https://gitlab.com/devnw/zig/config/-/issues/126) | **Closed** (Wave 7) |
 | PERF-25 | 16 | ~~Double allocLowerString in diff~~ | P3 | -- | **Closed** |
-| PERF-27 | 16 | ~~allocPrint in TOML section loop~~ | P3 | -- | **Closed** (Wave 7) |
-| PERF-28 | 16 | ~~allocPrint in INI section loop~~ | P3 | -- | **Closed** (Wave 7) |
+| PERF-27 | 16 | ~~allocPrint in TOML section loop~~ | P3 | -- | **Closed** (Wave 10) |
+| PERF-28 | 16 | ~~allocPrint in INI section loop~~ | P3 | -- | **Closed** (Wave 10) |
 | PERF-29 | 16 | ~~allocPrint in JSON array loop~~ | P3 | -- | **Closed** (N/A) |
 | PERF-16 | 12 | ~~allocPrint in parse loops~~ | P3 | [#128](https://gitlab.com/devnw/zig/config/-/issues/128) | **Closed** (Wave 7) |
 | PERF-15 | 12 | ~~O(n^2) case-insensitive diff~~ | P3 | [#127](https://gitlab.com/devnw/zig/config/-/issues/127) | **Closed** |
 | PERF-17 | 20 | ~~No capacity hints on key collections~~ | Info | [#129](https://gitlab.com/devnw/zig/config/-/issues/129) | **Closed** |
-| PERF-32 | 12 | ~~prefix_with_dot heap alloc~~ | Info | -- | **Closed** (Wave 8) |
+| PERF-32 | 12 | ~~prefix_with_dot heap alloc~~ | Info | -- | **Closed** (Wave 10) |
 | PERF-30 | 8 | ~~formatDiff iterates 3x~~ | Info | -- | **Closed** (Wave 8) |
 | PERF-40 | 8 | ~~page_allocator granularity waste~~ | Info | -- | **Closed** (Wave 8) |
 | PERF-41 | 8 | ~~Global pool_mutex contention~~ | Info | -- | **Closed** (Wave 8) |
@@ -162,7 +162,7 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 | PERF-53 | 8 | ~~addFile lacks runtime guard~~ | Info | -- | **Closed** (Wave 9) |
 | PERF-22 | 4 | INI section.key allocPrint (see PERF-28) | Info | -- | Superseded by PERF-28 |
 | PERF-23 | 4 | Redundant prefix_with_dot (see PERF-32) | Info | -- | Superseded by PERF-32 |
-| PERF-54 | 12 | HashMap no capacity hint in diff `merge()`/`compareWithOptions()` | P3 | -- | **Open** |
+| PERF-54 | 12 | ~~HashMap no capacity hint in diff `merge()`/`compareWithOptions()`~~ | P3 | -- | **Closed** (Wave 10) |
 | PERF-56 | 4 | allocPrint in INI section loop negligible | Info | -- | **Won't Do** (negligible) |
 | PERF-57 | 4 | Repeated toLower in merge (not applicable) | Info | -- | **Won't Do** (N/A) |
 | PERF-58 | 8 | Provenance tracker unbounded growth (bounded by design) | Info | -- | **Won't Do** (bounded) |
@@ -211,7 +211,7 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 | ~~Double getEnvMap~~ | PERF-39 | 28 | ~1 hour | ~~Single getEnvMap snapshot in load() passed to all env functions~~ **Closed** (Wave 7) |
 | ~~Double allocLowerString~~ | PERF-25 | 16 | ~30 min | ~~Reuse lowered key for both lookup and seen_keys insertion~~ **Closed** |
 | ~~prefix_with_dot~~ | PERF-32 | 12 | ~15 min | ~~Stack buffer bufPrint (256B) in sub/hasSub~~ **Closed** (Wave 8) |
-| HashMap capacity hints in diff | PERF-54 | 12 | ~30 min | Add `ensureTotalCapacity` to `merge()` result map and `compareWithOptions()` helper maps |
+| ~~HashMap capacity hints in diff~~ | PERF-54 | 12 | ~30 min | ~~Add `ensureTotalCapacity` to `merge()` result map and `compareWithOptions()` helper maps~~ **Closed** (Wave 10) |
 
 ### Medium (1-5 days)
 
@@ -231,7 +231,7 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 
 ---
 
-## Closed Findings (Waves 1-8)
+## Closed Findings (Waves 1-10)
 
 | Issue | Finding | PerfScore (original) | Closed In | Resolution |
 |-------|---------|---------------------|-----------|------------|
@@ -251,9 +251,9 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 | [#126](https://gitlab.com/devnw/zig/config/-/issues/126) | Repeated env lookups (PERF-14) | 16 | Wave 7 | Fully resolved: all three env functions share single EnvMap snapshot |
 | -- | Double getEnvMap snapshot (PERF-39) | 28 | Wave 7 | Single snapshot in `load()` eliminates redundant env cloning |
 | -- | setFieldInner dupes before match (PERF-36) | 36 | Wave 7 | Verified already resolved: dupes inside match branch in current code |
-| -- | allocPrint in JSON recursion (PERF-26) | 32 | Wave 7 | Stack-buffer `bufPrint` in `applyJsonValue` |
-| -- | allocPrint in TOML section (PERF-27) | 16 | Wave 7 | Stack-buffer `bufPrint` in `parseSimpleToml` |
-| -- | allocPrint in INI section (PERF-28) | 16 | Wave 7 | Stack-buffer `bufPrint` in `parseIni` |
+| -- | allocPrint in JSON recursion (PERF-26) | 32 | Wave 10 | Stack-buffer `bufPrint` in `applyJsonValue` (loader.zig:790-806); reverted Wave 9, re-applied Wave 10 |
+| -- | allocPrint in TOML section (PERF-27) | 16 | Wave 10 | Stack-buffer `bufPrint` in `parseSimpleToml` (loader.zig:865-887); reverted Wave 9, re-applied Wave 10 |
+| -- | allocPrint in INI section (PERF-28) | 16 | Wave 10 | Stack-buffer `bufPrint` in `parseIni` (loader.zig:939-954); reverted Wave 9, re-applied Wave 10 |
 | [#128](https://gitlab.com/devnw/zig/config/-/issues/128) | allocPrint in parse loops (PERF-16) | 12 | Wave 7 | Fully resolved: all parse loops use stack-buffer bufPrint |
 | -- | allocPrint in JSON array loop (PERF-29) | 16 | Wave 7 | N/A: no JSON array handling exists in current parser |
 | -- | Double allocLowerString in diff (PERF-25) | 16 | Wave 7 | Refactored seen_keys to store lowered keys; O(1) hash lookup replaces O(n) linear scan |
@@ -268,7 +268,7 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 | -- | Base64 encode allocates per request (PERF-19) | 12 | Wave 8 | Stack buffer (512B), heap fallback |
 | -- | Lowercased key alloc per lookup (PERF-20) | 8 | Wave 8 | Stack buffer in `normalizeKey`, arena fallback |
 | -- | formatDiff iterates 3x (PERF-30) | 8 | Wave 8 | Single pass with 3 output buffers |
-| -- | prefix_with_dot heap alloc (PERF-32) | 12 | Wave 8 | Stack buffer `bufPrint` (256B) in sub/hasSub |
+| -- | prefix_with_dot heap alloc (PERF-32) | 12 | Wave 10 | Stack buffer `bufPrint` (256B) in sub/hasSub (loader.zig:318-378); reverted Wave 9, re-applied Wave 10 |
 | -- | page_allocator granularity waste (PERF-40) | 8 | Wave 8 | Added `initPool()` with caller allocator + docs |
 | -- | pool_mutex contention (PERF-41) | 8 | Wave 8 | Replaced with `std.once` for lock-free reads |
 | -- | Thread pool eager spawning (PERF-42) | 20 | Wave 8 | Raised threshold from 2 to 4 files |
@@ -277,6 +277,7 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 | -- | Batch literal appending (PERF-51) | 8 | Wave 9 | literal_start tracking with batch appendSlice |
 | -- | Missing memory fence in initPool (PERF-52) | 12 | Wave 9 | @fence(.seq_cst) after pool_allocator write |
 | -- | addFile runtime guard (PERF-53) | 8 | Wave 9 | AlreadyRunning guard in addFile |
+| -- | HashMap capacity hints in diff (PERF-54) | 12 | Wave 10 | Added `ensureTotalCapacity` to `merge()` and `compareWithOptions()` HashMaps in diff.zig |
 
 ---
 
@@ -333,20 +334,17 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
    - Validation: `zig build bench` runs successfully; results are reproducible within 10% variance
    - Rollout risk: None -- additive, no production code changes
 
-5. **PERF-54 -- Add ensureTotalCapacity to diff.zig HashMaps** (PerfScore 12, ~30 min)
-   - Add `ensureTotalCapacity(base.count() + overlay.count())` to `merge()` result map at `diff.zig:434`
-   - Add `ensureTotalCapacity(new_config.count())` to `new_lower_index` at `diff.zig:124` and `seen_keys` at `diff.zig:146`
-   - Expected: Eliminates O(log n) rehashes during map population; ~3-5 fewer realloc cycles for 50+ key configs
-   - Validation: `zig build test` passes; no functional change
-   - Rollout risk: None -- purely additive capacity hint; no behavioral change
+5. ~~**PERF-54 -- Add ensureTotalCapacity to diff.zig HashMaps** (PerfScore 12, ~30 min)~~ **Closed** (Wave 10)
+   - Added `ensureTotalCapacity` to `merge()` result map and `compareWithOptions()` helper maps (`new_lower_index`, `seen_keys`)
+   - Eliminates O(log n) rehashes during map population; ~3-5 fewer realloc cycles for 50+ key configs
+   - Validation: `zig build test` passes (774/774); no functional change
 
 ---
 
 ## Next Steps
 
-**2 items remain open** out of 50 total findings:
+**1 item remains open** out of 50 total findings:
 
-- **PERF-44** (P2, PerfScore 40): Build benchmark suite (`zig build bench`). Estimated effort: 3-5 days. This is the highest-priority remaining performance gap. CI infrastructure is ready.
-- **PERF-54** (P3, PerfScore 12): Add `ensureTotalCapacity` to diff.zig `merge()` and `compareWithOptions()` HashMaps. Estimated effort: ~30 min. Quick win -- input sizes are known at call time.
+- **PERF-44** (P2, PerfScore 40): Build benchmark suite (`zig build bench`). Estimated effort: 3-5 days. This is the only remaining performance gap. CI infrastructure is ready.
 
-All other performance findings (42 closed, 6 won't do) have been resolved across Waves 1-9 and Phase 5 review.
+All other performance findings (43 closed, 6 won't do) have been resolved across Waves 1-10 and Phase 5 review. PERF-54 was closed in Wave 10 (ensureTotalCapacity added to diff.zig). PERF-26/27/28/32 were re-applied in Wave 10 after being reverted in Wave 9.

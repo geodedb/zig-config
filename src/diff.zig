@@ -130,6 +130,9 @@ pub fn compareWithOptions(
         new_lower_index.deinit();
     }
     if (options.case_insensitive) {
+        // PERF-54: Pre-allocate capacity to avoid incremental resizing
+        try new_lower_index.ensureTotalCapacity(@intCast(new_config.count()));
+
         var ni = new_config.iterator();
         while (ni.next()) |entry| {
             const lowered = try std.ascii.allocLowerString(allocator, entry.key_ptr.*);
@@ -144,6 +147,8 @@ pub fn compareWithOptions(
     // In case-insensitive mode, store lowered keys for O(1) lookup;
     // each lowered key is allocated once and freed at the end.
     var seen_keys = std.StringHashMap(void).init(allocator);
+    // PERF-54: Pre-allocate capacity to avoid incremental resizing
+    try seen_keys.ensureTotalCapacity(@intCast(old_config.count() + new_config.count()));
     defer {
         if (options.case_insensitive) {
             var key_iter = seen_keys.keyIterator();
@@ -432,6 +437,8 @@ pub fn merge(
     strategy: MergeStrategy,
 ) MergeError!std.StringHashMap([]const u8) {
     var result = std.StringHashMap([]const u8).init(allocator);
+    // PERF-54: Pre-allocate capacity to avoid incremental resizing
+    result.ensureTotalCapacity(@intCast(base.count() + overlay.count())) catch return MergeError.OutOfMemory;
     errdefer result.deinit();
 
     // Copy base

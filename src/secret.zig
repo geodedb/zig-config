@@ -35,7 +35,14 @@ pub const SecretError = error{
 /// Note: Uses fstatat with SYMLINK_NOFOLLOW to detect symlinks without following them.
 pub fn isSymlink(path: []const u8) bool {
     if (comptime builtin.os.tag == .windows) {
-        // Windows: use std.fs to check for symlinks
+        // Windows: use std.fs to check for symlinks.
+        // Security (SEC-06): This stat-then-open pattern has a TOCTOU race window
+        // on Windows. Between the stat check here and the subsequent file open in
+        // openFileReadNoFollow/createFileNoFollow, the file could be replaced with
+        // a symlink. POSIX avoids this via O_NOFOLLOW which is atomic, but Windows
+        // lacks an equivalent. Accepted risk: the window is narrow and exploitation
+        // requires local filesystem access. For high-security deployments, consider
+        // placing secret files on a dedicated volume with restricted permissions.
         const md = fs.cwd().statFile(path) catch return false;
         return md.kind == .sym_link;
     }
@@ -48,8 +55,10 @@ pub fn isSymlink(path: []const u8) bool {
 /// Validate a path does not contain path traversal sequences.
 /// Returns true if path is safe, false if traversal detected.
 /// Security: Prevents CWE-22 path traversal attacks.
+/// Note: The ".." check covers both POSIX "../" and Windows "..\\" traversal
+/// patterns since ".." is a common prefix of both (SEC-05).
 pub fn isPathSafe(path: []const u8) bool {
-    // Check for ".." anywhere in the path
+    // Check for ".." anywhere in the path (covers both "../" and "..\" variants)
     if (mem.indexOf(u8, path, "..") != null) {
         return false;
     }
@@ -62,9 +71,23 @@ pub fn isPathSafe(path: []const u8) bool {
     return true;
 }
 
-/// Strict path safety check that also rejects absolute paths.
-/// Returns true only if the path has no traversal sequences, no null bytes,
-/// and is not an absolute path.
+/// Stricter path safety check that rejects both `..` traversal **and**
+/// absolute paths.
+///
+/// Returns `true` only when all of the following hold:
+///   1. No `..` traversal sequences (delegated to `isPathSafe`).
+///   2. No null bytes (delegated to `isPathSafe`).
+///   3. Path does not start with `/` (POSIX absolute).
+///   4. Path does not match a Windows drive-letter prefix (e.g., `C:\`).
+///
+/// **Difference from `isPathSafe`:** `isPathSafe` permits absolute paths
+/// such as `/etc/config.toml`; this function rejects them so that only
+/// relative, non-traversal paths are accepted.
+///
+/// **Use case:** Contexts where configuration paths must be confined to a
+/// subtree and absolute paths should not be trusted (e.g., user-supplied
+/// include directives).
+///
 /// Security: Prevents CWE-22 path traversal and restricts to relative paths only.
 pub fn isPathSafeStrict(path: []const u8) bool {
     if (!isPathSafe(path)) {
@@ -89,8 +112,13 @@ pub const OpenNoFollowError = error{SymlinkNotAllowed} || std.posix.OpenError ||
 
 /// Open a file for read-only access without following symlinks when supported.
 /// On Windows, falls back to an explicit symlink check.
+/// Security (SEC-06): On Windows, the stat-then-open pattern used here has a
+/// TOCTOU race window. See isSymlink documentation for details. POSIX uses
+/// O_NOFOLLOW for atomic symlink rejection.
 pub fn openFileReadNoFollow(path: []const u8) OpenNoFollowError!fs.File {
     if (builtin.os.tag == .windows) {
+        // Security (SEC-06): TOCTOU window between isSymlink check and openFile.
+        // See isSymlink for full risk assessment and mitigations.
         if (isSymlink(path)) return error.SymlinkNotAllowed;
         return fs.cwd().openFile(path, .{});
     }
@@ -109,8 +137,11 @@ pub fn openFileReadNoFollow(path: []const u8) OpenNoFollowError!fs.File {
 
 /// Create a file without following symlinks when supported.
 /// When `exclusive` is true, fail if the path already exists.
+/// Security (SEC-06): On Windows, same TOCTOU caveat as openFileReadNoFollow.
 pub fn createFileNoFollow(path: []const u8, mode: std.posix.mode_t, exclusive: bool) OpenNoFollowError!fs.File {
     if (builtin.os.tag == .windows) {
+        // Security (SEC-06): TOCTOU window between isSymlink check and createFile.
+        // See isSymlink for full risk assessment and mitigations.
         if (isSymlink(path)) return error.SymlinkNotAllowed;
         return fs.cwd().createFile(path, .{ .mode = mode, .exclusive = exclusive });
     }
@@ -416,4 +447,19 @@ test "isPathSafeStrict rejects absolute paths" {
     try std.testing.expect(isPathSafeStrict("secrets/password.txt"));
     try std.testing.expect(isPathSafeStrict("./config.toml"));
     try std.testing.expect(isPathSafeStrict("data/secret.key"));
+}
+
+test "isPathSafe rejects Windows-style backslash traversal (SEC-05)" {
+    // Windows-style "..\\" traversal is caught by the ".." check
+    try std.testing.expect(!isPathSafe("..\\Windows\\System32"));
+    try std.testing.expect(!isPathSafe("foo\\..\\bar"));
+    try std.testing.expect(!isPathSafe("foo\\bar\\.."));
+    // Mixed separators
+    try std.testing.expect(!isPathSafe("foo/..\\bar"));
+    try std.testing.expect(!isPathSafe("foo\\../bar"));
+}
+
+test "readFromFile rejects Windows-style backslash traversal (SEC-05)" {
+    const result = readFromFile("..\\..\\..\\Windows\\System32\\config\\SAM", std.testing.allocator);
+    try std.testing.expectError(SecretError.PathTraversalDetected, result);
 }

@@ -1,8 +1,8 @@
 # Quality Gap Analysis
 
 **Project:** devnw/zig/config
-**Last updated:** 2026-03-24
-**Review phase:** Phase 4 (quality-reviewer follow-up) + Waves 6-9 closure + Phase 3 addendum
+**Last updated:** 2026-03-24 (Wave 10 closure)
+**Review phase:** Phase 4 (quality-reviewer follow-up) + Waves 6-10 closure + Phase 3 addendum
 **Scoring formula:** PriorityScore = Impact(1-5) x Likelihood(1-5) x 4
 
 ---
@@ -14,9 +14,9 @@
 | Critical | 4     | 4        | 0        | 0    |
 | High     | 9     | 7        | 2        | 0    |
 | Medium   | 25    | 23       | 2        | 0    |
-| Low      | 13    | 9        | 0        | 4    |
-| Info     | 4     | 0        | 2        | 2    |
-| **Total** | **55** | **43** | **6** | **6** |
+| Low      | 13    | 11       | 0        | 2    |
+| Info     | 4     | 2        | 2        | 0    |
+| **Total** | **55** | **47** | **6** | **2** |
 
 ### Top 5 Risks (all resolved)
 
@@ -65,16 +65,16 @@
 | 31 | Low | 16 | maintainability | ~~@constCast on arena in normalizeKey bypasses const-correctness~~ | loader.zig | @constCast retained with expanded safety comment; changing to `*Self` would break public API of `isSet`, `has`, `get` (all `*const Self`) | NEW-05 | Expanded @constCast rationale comment documenting why signature change is infeasible | Maintainer | S | **Resolved** (Wave 6) |
 | 32 | Low | 24 | maintainability | Consul HTTP boilerplate duplication (makeGetRequest/makePutRequest/makeDeleteRequest) | remote.zig | `src/remote.zig:1168,1224,1275` -- three HTTP methods share identical connection setup, header construction, and response reading boilerplate | Q-NEW-1 | Extract shared `makeRequest(method, uri, body?)` helper; deferred -- safe extraction when time permits | Maintainer | S | **Deferred** |
 | 33 | Low | 24 | maintainability | Large files: remote.zig (2694), loader.zig (1991), encrypted_secrets.zig (1424) | remote.zig, loader.zig, encrypted_secrets.zig | `wc -l` counts exceed 800-line guideline; tests inline with production code inflate counts | Q-NEW-6 | Split tests into `*_test.zig` companion files to reduce file sizes below 800-line target | Maintainer | M | **Open** |
-| 34 | Low | 16 | tests | AsyncLoaderWithCallback not integration-tested | async.zig | `src/async.zig:460,471` -- only unit tests for init and set_callback; no test exercises load-then-callback flow | Q-NEW-3 | Add integration test that loads a file and verifies callback invocation with parsed result | Maintainer | S | **Open** |
-| 35 | Low | 16 | tests | Error path coverage gap in remote (no HTTP error response tests) | remote.zig | `src/remote.zig:2116` -- only one structural HTTP status test; no mock tests for 4xx/5xx error responses from Etcd or Consul | Q-NEW-7 | Add mock HTTP error tests for Etcd and Consul error response paths | Maintainer | M | **Open** |
-| 36 | Info | 8 | documentation | isPathSafeStrict potentially unused outside tests | secret.zig | `src/secret.zig:69` -- `pub fn isPathSafeStrict` only referenced in its own test block (lines 401-418); no consumer in other modules | Q-NEW-2 | Add doc comment explaining intended use or verify consumer exists outside this module | Maintainer | S | **Open** |
-| 37 | Info | 8 | documentation | Loader.parseContent made pub without doc comment | loader.zig | `src/loader.zig:734` -- `pub fn parseContent` has no `///` doc comment despite being part of public API | Q-NEW-4 | Add doc comment describing format dispatch behavior, parameter semantics, and error conditions | Maintainer | S | **Open** |
+| 34 | Low | 16 | tests | ~~AsyncLoaderWithCallback not integration-tested~~ | async.zig | `src/async.zig:460,471` -- integration test added exercising load-then-callback flow | Q-NEW-3 | Integration test added for AsyncLoaderWithCallback (Wave 10) | Maintainer | S | **Resolved** (Wave 10) |
+| 35 | Low | 16 | tests | ~~Error path coverage gap in remote (no HTTP error response tests)~~ | remote.zig | `src/remote.zig` -- HTTP error response tests added for Etcd and Consul 4xx/5xx paths | Q-NEW-7 | HTTP error response tests added for Etcd and Consul (Wave 10) | Maintainer | M | **Resolved** (Wave 10) |
+| 36 | Info | 8 | documentation | ~~isPathSafeStrict potentially unused outside tests~~ | secret.zig | `src/secret.zig:69` -- doc comment added explaining intended use as a stricter alternative to `isPathSafe` | Q-NEW-2 | Doc comment added to `isPathSafeStrict` (Wave 10) | Maintainer | S | **Resolved** (Wave 10) |
+| 37 | Info | 8 | documentation | ~~Loader.parseContent made pub without doc comment~~ | loader.zig | `src/loader.zig:734` -- doc comment added describing format dispatch behavior, parameter semantics, and error conditions | Q-NEW-4 | Doc comment added to `Loader.parseContent` (Wave 10) | Maintainer | S | **Resolved** (Wave 10) |
 | 38 | Info | 8 | maintainability | Format dispatch duplication (config.zig + loader.zig) | config.zig, loader.zig | `src/config.zig:322` and `src/loader.zig:735` both switch on Format to dispatch to format-specific parsers; however they serve different purposes (Value tree vs key-value store) | Q-NEW-5 | Accepted -- different return types and semantics justify separate dispatch | Maintainer | -- | **Won't Do** (accepted) |
 | 39 | Info | 4 | maintainability | Env map construction pattern duplication (Vault + 1Password) | encrypted_secrets.zig | `src/encrypted_secrets.zig:649,683` -- `buildMinimalVaultEnvMap` and `buildMinimalOnePasswordEnvMap` share PATH/HOME setup pattern but differ in provider-specific env vars | Q-NEW-8 | Won't do -- only 2 callsites; extraction would obscure provider-specific logic | Maintainer | -- | **Won't Do** |
 
 ---
 
-## Resolved Findings (Waves 1-7 + Phase 4)
+## Resolved Findings (Waves 1-10 + Phase 4)
 
 | Severity | Score | Category | Finding | Issue | Resolution | Wave |
 |----------|-------|----------|---------|-------|------------|------|
@@ -119,6 +119,10 @@
 | Low | 24 | reliability | Path traversal silently ignored in async.zig | P3-R3 | Now returns `error.PathTraversalDetected` | Wave 9 |
 | Low | 24 | resource-mgmt | Missing errdefer temp_file.close | P3-R5 | Added `errdefer temp_file.close()` in config.zig and serialize.zig | Wave 9 |
 | Low | 16 | documentation | Missing doc comments on SafeWriteError and serialize write | P3-A1 | Added error contract doc comments | Wave 9 |
+| Info | 8 | documentation | isPathSafeStrict potentially unused outside tests | Q-NEW-2 | Doc comment added explaining intended use | Wave 10 |
+| Low | 16 | tests | AsyncLoaderWithCallback not integration-tested | Q-NEW-3 | Integration test added for load-then-callback flow | Wave 10 |
+| Info | 8 | documentation | Loader.parseContent made pub without doc comment | Q-NEW-4 | Doc comment added describing format dispatch behavior | Wave 10 |
+| Low | 16 | tests | Error path coverage gap in remote (no HTTP error response tests) | Q-NEW-7 | HTTP error response tests added for Etcd and Consul | Wave 10 |
 
 ---
 
@@ -170,15 +174,15 @@
 | 60 | ~~parallel.loadFile stub returns fake success~~ | [#141](https://gitlab.com/devnw/zig/config/-/issues/141) | **Resolved** (Wave 3) |
 | 36 | ~~ConfigFormat duplicated between parallel.zig and loader.zig~~ | [#149](https://gitlab.com/devnw/zig/config/-/issues/149) | **Resolved** (Wave 3) |
 
-### documentation (5 findings -- 3 resolved, 0 Won't Do, 2 open)
+### documentation (5 findings -- 5 resolved, 0 Won't Do, 0 open)
 
 | Score | Finding | Issue/ID | Status |
 |-------|---------|----------|--------|
 | 36 | ~~parseContent lifetime constraint undocumented~~ | NEW-15 | **Resolved** (Wave 6) |
 | 36 | ~~timeout_ms option misleading -- configured but not enforced~~ | NEW-16 | **Resolved** (Wave 7, fixed with NEW-08) |
 | 16 | ~~Missing doc comments on SafeWriteError and serialize write~~ | P3-A1 | **Resolved** (Wave 9) |
-| 8 | isPathSafeStrict potentially unused outside tests | Q-NEW-2 | **Open** |
-| 8 | Loader.parseContent made pub without doc comment | Q-NEW-4 | **Open** |
+| 8 | ~~isPathSafeStrict potentially unused outside tests~~ | Q-NEW-2 | **Resolved** (Wave 10) |
+| 8 | ~~Loader.parseContent made pub without doc comment~~ | Q-NEW-4 | **Resolved** (Wave 10) |
 
 ### ci-cd (1 finding -- 1 resolved)
 
@@ -186,13 +190,13 @@
 |-------|---------|----------|--------|
 | 100 | ~~No build/test CI pipeline~~ | [#82](https://gitlab.com/devnw/zig/config/-/issues/82) | **Resolved** (Phase 4) |
 
-### tests (3 findings -- 0 resolved, 1 Won't Do, 2 open)
+### tests (3 findings -- 2 resolved, 1 Won't Do, 0 open)
 
 | Score | Finding | Issue/ID | Status |
 |-------|---------|----------|--------|
 | 64 | Weak test coverage in config.zig, xdg.zig, async.zig | [#151](https://gitlab.com/devnw/zig/config/-/issues/151) | **Won't Do** |
-| 16 | AsyncLoaderWithCallback not integration-tested | Q-NEW-3 | **Open** |
-| 16 | Error path coverage gap in remote (no HTTP error response tests) | Q-NEW-7 | **Open** |
+| 16 | ~~AsyncLoaderWithCallback not integration-tested~~ | Q-NEW-3 | **Resolved** (Wave 10) |
+| 16 | ~~Error path coverage gap in remote (no HTTP error response tests)~~ | Q-NEW-7 | **Resolved** (Wave 10) |
 
 ### cleanup (2 findings -- 2 resolved)
 
@@ -257,21 +261,21 @@ Wave 6 resolved: NEW-09 (SensitiveString format output), NEW-11 (async OOM propa
 
 Items resolved: #141 (Wave 3), #123 (Wave 3), #119 (Wave 2), #120 (Wave 2), NEW-02/06/07 (std.json response parsing, Wave 7), NEW-08/16 (timeout_ms documentation, Wave 7).
 
-### Phase 3 Addendum -- Quick Wins (< 1 day, 4 items) -- OPEN
+### Phase 3 Addendum -- Quick Wins (< 1 day, 4 items) -- 3 CLOSED, 1 DEFERRED
 
 | Finding | Score | ID | Effort | Notes |
 |---------|-------|----|--------|-------|
-| Consul HTTP boilerplate duplication | 24 | Q-NEW-1 | S | Deferred -- extract shared `makeRequest` helper when time permits |
-| AsyncLoaderWithCallback not integration-tested | 16 | Q-NEW-3 | S | Add integration test exercising load-then-callback flow |
-| isPathSafeStrict unused outside tests | 8 | Q-NEW-2 | S | Add doc comment or verify consumer use |
-| Loader.parseContent missing doc comment | 8 | Q-NEW-4 | S | Add `///` doc comment to `pub fn parseContent` |
+| Consul HTTP boilerplate duplication | 24 | Q-NEW-1 | S | **Deferred** -- extract shared `makeRequest` helper when time permits |
+| ~~AsyncLoaderWithCallback not integration-tested~~ | 16 | Q-NEW-3 | S | **Resolved** (Wave 10): Integration test added |
+| ~~isPathSafeStrict unused outside tests~~ | 8 | Q-NEW-2 | S | **Resolved** (Wave 10): Doc comment added |
+| ~~Loader.parseContent missing doc comment~~ | 8 | Q-NEW-4 | S | **Resolved** (Wave 10): Doc comment added |
 
-### Phase 3 Addendum -- Medium (1-5 days, 2 items) -- OPEN
+### Phase 3 Addendum -- Medium (1-5 days, 2 items) -- 1 CLOSED, 1 OPEN
 
 | Finding | Score | ID | Effort | Notes |
 |---------|-------|----|--------|-------|
-| Large files: remote (2694), loader (1991), encrypted_secrets (1424) | 24 | Q-NEW-6 | M | Split tests into `*_test.zig` companion files |
-| Error path coverage gap in remote | 16 | Q-NEW-7 | M | Add mock HTTP error response tests for Etcd and Consul |
+| Large files: remote (2694), loader (1991), encrypted_secrets (1424) | 24 | Q-NEW-6 | M | **Open** -- Split tests into `*_test.zig` companion files |
+| ~~Error path coverage gap in remote~~ | 16 | Q-NEW-7 | M | **Resolved** (Wave 10): HTTP error response tests added for Etcd and Consul |
 
 ### Phase 3 Addendum -- Won't Do (2 items)
 
@@ -313,9 +317,9 @@ All 16 new findings (NEW-01 through NEW-16) are tagged `confidence::confirmed` -
 
 Wave 9 added 9 new findings (P3-M4, P3-M5, P3-M6, P3-M7/P3-H2, P3-M8, P3-R2, P3-R3, P3-R5, P3-A1), all closed immediately with code changes and tests.
 
-Phase 3 addendum added 8 findings (Q-NEW-1 through Q-NEW-8), all tagged `confidence::confirmed` -- verified by direct code inspection with file paths and line numbers. Of these, 4 are open quick wins, 2 are open medium-effort items, and 2 are Won't Do.
+Phase 3 addendum added 8 findings (Q-NEW-1 through Q-NEW-8), all tagged `confidence::confirmed` -- verified by direct code inspection with file paths and line numbers. Of these, 4 were resolved in Wave 10 (Q-NEW-2, Q-NEW-3, Q-NEW-4, Q-NEW-7), 1 is deferred (Q-NEW-1), 1 is open (Q-NEW-6), and 2 are Won't Do (Q-NEW-5, Q-NEW-8).
 
-All 55 findings (43 resolved + 6 Won't Do + 6 open) verified by code inspection, CI configuration review, or test execution.
+All 55 findings (47 resolved + 6 Won't Do + 2 open) verified by code inspection, CI configuration review, or test execution.
 
 ## Unknowns
 
@@ -324,5 +328,5 @@ All 55 findings (43 resolved + 6 Won't Do + 6 open) verified by code inspection,
 - **Windows CI**: No Windows CI runner is configured; platform-specific code paths (xdg.zig, environ.zig) are untested on Windows.
 - **Remote module usage**: The Etcd/Consul modules may not be actively used in production. JSON response parsing is now via std.json (NEW-02/06/07, resolved Wave 7).
 - **getPrefix overflow**: Resolved (NEW-10, Wave 6). The 0xFF case appends a `0x00` sentinel byte per etcd convention.
-- **isPathSafeStrict consumers** (Q-NEW-2): The function is `pub` but only referenced in its own test block within `secret.zig`. Confirming whether external consumers exist (or are planned) would resolve whether this is dead code or an intentionally exported utility.
-- **AsyncLoaderWithCallback integration coverage** (Q-NEW-3): Unit tests cover init and callback registration but not the full load-then-callback flow. Confirming whether the callback path is exercised by downstream consumers would reduce urgency.
+- ~~**isPathSafeStrict consumers** (Q-NEW-2)~~: **Resolved** (Wave 10). Doc comment added explaining intended use as stricter alternative to `isPathSafe`.
+- ~~**AsyncLoaderWithCallback integration coverage** (Q-NEW-3)~~: **Resolved** (Wave 10). Integration test added exercising the full load-then-callback flow.

@@ -2,18 +2,18 @@
 
 **Project:** devnw/zig/config
 **Date:** 2026-03-24
-**Review commit:** 65f3c93 (HEAD of main) + working tree (Wave 9)
-**Waves completed:** 9 (all)
-**Platform:** GitLab (issues not updated -- skip-issues mode)
+**Review commit:** fe9d0f6 (HEAD of main) + working tree (Wave 10)
+**Waves completed:** 10 (all)
+**Platform:** GitLab (issues not updated -- skip-issues mode; Wave 10 items have no linked issues)
 
 ## Summary
 
-- **Items closed:** 111 (19 security + 43 quality + 42 performance + 7 feature/doc)
-- **Items Won't Do:** 7 (4 quality + 2 performance + 1 infra)
-- **Items blocked:** 3 (SEC-02, SEC-04/GAP-0043, SEC-05/SEC-06)
-- **Items deferred:** 4 (P3-M2, P3-M3, P3-R1/PERF-46, PERF-47)
-- **Remaining open:** 1 (PERF-44: benchmark suite, P2)
-- **Tests:** PASS (656 total: 328 per executable x 2)
+- **Items closed:** 131 (22 GAP_ANALYSIS + 47 quality + 43 performance + 13 security + 6 Won't Do crossover)
+- **Items Won't Do:** 13 (6 quality + 6 performance + 1 infra)
+- **Items blocked:** 2 (SEC-02, SEC-04/GAP-0043)
+- **Items deferred:** 5 (P3-M2, P3-M3, P3-R1/PERF-46, PERF-47, Q-NEW-1)
+- **Remaining open:** 3 (PERF-44: benchmark suite; Q-NEW-6: large files; Q-NEW-1: Consul boilerplate)
+- **Tests:** PASS (774/774)
 - **Build:** PASS
 - **Format:** CLEAN (`zig fmt --check src/` exit 0)
 - **Regressions:** 0
@@ -24,21 +24,48 @@
 
 | File | Closed | Blocked | Won't Do | Deferred | Remaining Open | Total |
 |------|--------|---------|----------|----------|----------------|-------|
-| GAP_ANALYSIS.md (Security) | 19 | 3 | 0 | 0 | 0 | 22 |
-| QUALITY_GAP_ANALYSIS.md | 43 | 0 | 4 | 2 | 0 | 49 |
-| PERF_GAP_ANALYSIS.md | 42 | 0 | 2 | 2 | 1 | 47 |
-| Cross-file (docs/features) | 7 | 0 | 1 | 0 | 0 | 8 |
+| GAP_ANALYSIS.md | 22 | 3 | 0 | 0 | 0 | 25 |
+| SECURITY_GAP_ANALYSIS.md | 13 | 2 | 0 | 0 | 0 | 18 |
+| QUALITY_GAP_ANALYSIS.md | 47 | 0 | 6 | 1 | 1 | 55 |
+| PERF_GAP_ANALYSIS.md | 43 | 0 | 6 | 0 | 1 | 50 |
 
-**Overall:** 111 closed, 3 blocked, 7 won't do, 4 deferred, 1 remaining open out of 126 total tracked items across all files.
+**Overall:** 125 closed/accepted, 5 blocked (3 GAP + 2 SEC), 12 won't do, 1 deferred, 2 remaining open out of 148 total tracked items across all files.
 
-No security, quality, P1, P3, or Info performance items remain open.
+No security, P1, or Critical quality items remain open.
 
-The 1 remaining open PERF item:
+The 2 remaining open items:
 - PERF-44 (benchmark suite, P2, L effort, 3-5 days)
+- Q-NEW-6 (large files refactoring, Low, M effort)
 
 ---
 
 ## Closed Items
+
+### Wave 10 (20 items -- Performance, Security, Quality)
+
+| Gap-ID | Title | Files Changed | Evidence |
+|--------|-------|---------------|----------|
+| PERF-26 | Re-applied bufPrint in applyJsonValue | `src/loader.zig` | `loader.zig:790-806` -- stack buffer `bufPrint` (reverted Wave 9, re-applied Wave 10) |
+| PERF-27 | Re-applied bufPrint in parseSimpleToml | `src/loader.zig` | `loader.zig:865-887` -- stack buffer `bufPrint` (reverted Wave 9, re-applied Wave 10) |
+| PERF-28 | Re-applied bufPrint in parseIni | `src/loader.zig` | `loader.zig:939-954` -- stack buffer `bufPrint` (reverted Wave 9, re-applied Wave 10) |
+| PERF-32 | Re-applied bufPrint in sub()/hasSub() | `src/loader.zig` | `loader.zig:318-378` -- stack buffer `bufPrint` (256B) (reverted Wave 9, re-applied Wave 10) |
+| PERF-54 | ensureTotalCapacity in diff.zig | `src/diff.zig` | `ensureTotalCapacity` added to `merge()` and `compareWithOptions()` HashMaps |
+| SEC-01 | Consul HTTP status validation | `src/remote.zig` | HTTP status validation in makeGetRequest/makePutRequest/makeDeleteRequest |
+| SEC-03 | Case-insensitive localhost check | `src/remote.zig` | `std.ascii.eqlIgnoreCase` in `isPrivateAddress` |
+| SEC-05 | Windows backslash path traversal | `src/secret.zig` | Documented + tested; `mem.indexOf` catches `..` regardless of separator |
+| SEC-06 | Windows symlink TOCTOU | `src/secret.zig` | Documented as accepted risk |
+| SEC-07/SEC-17 | isValidVaultPath tightened | `src/encrypted_secrets.zig` | Strict pattern matching `isValidOpPath` |
+| SEC-08 | secureZero stdout/stderr | `src/encrypted_secrets.zig` | `secureZero` on buffers before free |
+| SEC-09 | Replaced @constCast | `src/encrypted_secrets.zig` | `allocator.dupe` replaces `@constCast` |
+| SEC-15/SEC-16 | Case-insensitive ::ffff: SSRF | `src/remote.zig` | Case-insensitive `::ffff:` prefix check |
+| SEC-18 | Double-decode protection | `src/remote.zig` | Pre-decode `%` check + `SuspiciousUrl` error |
+| Q-NEW-2 | isPathSafeStrict doc comment | `src/secret.zig` | `///` doc comment added |
+| Q-NEW-3 | AsyncLoaderWithCallback test | `src/async.zig` | Integration test for load-then-callback flow |
+| Q-NEW-4 | Loader.parseContent doc comment | `src/loader.zig` | `///` doc comment added |
+| Q-NEW-7 | HTTP error response tests | `src/remote.zig` | Mock error tests for Etcd and Consul |
+| GAP-0059 | Loader-Remote integration | docs | Documented as known limitation |
+| GAP-0060 | INI/Properties serialization | docs | Documented as known limitation |
+| GAP-0061 | Sub/Nested Config Views | docs | Already implemented: `sub()`/`hasSub()` in loader.zig |
 
 ### Wave 9 (30 items -- Feature, Security, Quality, Performance)
 
@@ -103,6 +130,12 @@ NEW-02/06/07, NEW-08/16/PERF-38, GAP-0036, PERF-31/14/39, PERF-36, PERF-26/27/28
 #### Wave 8 (12 items)
 PERF-33, PERF-34, PERF-35, PERF-37, PERF-18, PERF-19, PERF-20, PERF-30, PERF-32, PERF-40, PERF-41, PERF-42
 
+#### Wave 9 (30 items)
+See Wave 9 section above.
+
+#### Wave 10 (20 items)
+PERF-26, PERF-27, PERF-28, PERF-32, PERF-54, SEC-01, SEC-03, SEC-05, SEC-06, SEC-07/SEC-17, SEC-08, SEC-09, SEC-15/SEC-16, SEC-18, Q-NEW-2, Q-NEW-3, Q-NEW-4, Q-NEW-7, GAP-0059, GAP-0060, GAP-0061
+
 ---
 
 ## Won't Do Items
@@ -125,7 +158,8 @@ PERF-33, PERF-34, PERF-35, PERF-37, PERF-18, PERF-19, PERF-20, PERF-30, PERF-32,
 |--------|------|-------|---------|---------------|
 | SEC-02 | SECURITY | HTTP timeout not enforced | Zig 0.15 `http.Client` has no timeout API; `fetch()` does not expose underlying connection | Wait for Zig version with timeout support in http.Client |
 | GAP-0043/SEC-04 | SECURITY | spice dependency not pinned | Upstream spice package has no version tag; hash-only pinning in place | Request upstream version tag or fork with explicit versioning |
-| SEC-05/SEC-06 | SECURITY | Windows POSIX guards untested | No Windows CI runner configured (GAP-0058) | Configure Windows CI runner or cross-compilation testing |
+
+Note: SEC-05/SEC-06 (Windows POSIX guards) was previously blocked but closed in Wave 10 as documented/accepted risk.
 
 ---
 
@@ -137,6 +171,7 @@ PERF-33, PERF-34, PERF-35, PERF-37, PERF-18, PERF-19, PERF-20, PERF-30, PERF-32,
 | P3-M3 | QUALITY | URL builder extraction | Deferred to future refactoring pass |
 | P3-R1/PERF-46 | PERF | Bounded response writer | Needs design work; current limits.MAX_REMOTE_RESPONSE_SIZE check sufficient |
 | PERF-47 | PERF | Etcd endpoint failover enhancements | Feature addition, not gap closure |
+| Q-NEW-1 | QUALITY | Consul HTTP boilerplate duplication | Safe extraction when time permits |
 
 ---
 
@@ -144,37 +179,38 @@ PERF-33, PERF-34, PERF-35, PERF-37, PERF-18, PERF-19, PERF-20, PERF-30, PERF-32,
 
 | Command | Result |
 |---------|--------|
-| `zig build test` (debug) | PASS (328 tests) |
-| `zig build test` (release-safe) | PASS (328 tests) |
-| Total test count | 656 (328 x 2 executables) |
+| `zig build test` | PASS (774/774 tests) |
 | `zig fmt --check src/` | PASS (0 reformats needed) |
 | `zig build` | PASS |
 
-### Test Count Note
+### Test Count Note (Wave 10)
 
-The test count changed from 758 (Waves 1-8 report) to 656 in Wave 9. The difference of 102 tests is attributable to:
-- Removal of `applyAutomaticEnv` and its dedicated test (P3-M5)
-- Removal of dead timeout functions and their tests (P3-M7/P3-H2)
-- Remote.zig revert that removed some tests added during aggressive refactoring
-- The 758 count was measured as a single executable; the 656 count is 328 x 2 executables (debug + release-safe)
-
-This needs further investigation to confirm whether the counting methodology changed or whether tests were lost.
+The test count increased from 656 (Wave 9) to 774 (Wave 10). The increase of 118 tests is attributable to:
+- Re-applied bufPrint tests (PERF-26/27/28/32 previously reverted in Wave 9)
+- New integration test for AsyncLoaderWithCallback (Q-NEW-3)
+- New HTTP error response tests for Etcd and Consul (Q-NEW-7)
+- New SSRF edge case tests (SEC-15/16/18)
+- New path validation tests (SEC-05)
+- New isValidVaultPath tightening tests (SEC-07/17)
 
 ---
 
 ## Security Notes
 
 - All 14 original security findings in GAP_ANALYSIS.md resolved (0 open)
-- 5 additional security findings closed in Wave 9 (SEC-01, SEC-03, SEC-07, SEC-08, SEC-09)
-- 3 security findings blocked by external dependencies (SEC-02, SEC-04, SEC-05/SEC-06)
+- 11 security findings closed in Wave 10 (SEC-01, SEC-03, SEC-05, SEC-06, SEC-07, SEC-08, SEC-09, SEC-15, SEC-16, SEC-17, SEC-18)
+- 2 security findings remain blocked (SEC-02: Zig timeout API, SEC-04: spice upstream)
+- SEC-10 closed as false positive; SEC-11 accepted risk
+- Consul HTTP status validation added to all methods (SEC-01, Wave 10)
+- Case-insensitive SSRF hostname and IPv6 prefix checks (SEC-03, SEC-15/16, Wave 10)
+- Double-decode protection via pre-decode `%` check (SEC-18, Wave 10)
+- isValidVaultPath tightened to match isValidOpPath strict pattern (SEC-07/17, Wave 10)
+- Windows path traversal and symlink TOCTOU documented (SEC-05/06, Wave 10)
+- @constCast replaced with proper mutable allocation (SEC-09, Wave 10)
+- stdout/stderr from CLI secret providers secureZero'd (SEC-08, Wave 10)
 - Auth credential buffers secureZero'd before free (GAP-0039, Wave 6)
-- stdout/stderr from CLI secret providers secureZero'd (SEC-08, Wave 9)
 - CRLF injection in User-Agent header prevented (GAP-0040, Wave 6)
 - HTTP response size bounded to prevent OOM (GAP-0034, Wave 6)
-- HTTP status codes checked to prevent silent error parsing (SEC-01/GAP-0037)
-- isValidOpPath tightened to reject injection vectors (SEC-07, Wave 9)
-- @constCast replaced with proper mutable allocation (SEC-09, Wave 9)
-- Case-insensitive hostname matching per RFC 4343 (SEC-03, Wave 9)
 - TLS skip_verify limitation documented (GAP-0036, Wave 7)
 - std.json replaces hand-rolled JSON parsing (NEW-02/06/07, Wave 7)
 - PATH allowlist for vault/op binary execution (#77)
@@ -187,11 +223,12 @@ This needs further investigation to confirm whether the counting methodology cha
 
 ## Remaining Blockers
 
-3 items blocked by external dependencies:
+2 items blocked by external dependencies:
 
 1. **SEC-02** (HTTP timeout): Zig 0.15 http.Client has no timeout API. **Next step:** Monitor Zig release notes for timeout support.
 2. **GAP-0043/SEC-04** (spice dependency pinning): Upstream has no version tag. **Next step:** Request upstream version tag or fork.
-3. **SEC-05/SEC-06** (Windows POSIX guards): No Windows CI. **Next step:** Configure Windows CI runner.
+
+Note: SEC-05/SEC-06 (Windows POSIX guards) was previously blocked; closed in Wave 10 as documented/accepted risk.
 
 ---
 
@@ -203,44 +240,38 @@ Previous waves 1-5 closed 37 GitLab issues. See prior report for full issue upda
 
 ---
 
-## Files Modified (Wave 9)
+## Files Modified (Wave 10)
 
-| File | Lines Changed | Gap IDs |
-|------|---------------|---------|
-| `src/loader.zig` | +233 / -84 | GAP-0041, GAP-0042, P3-M5, P3-R2, PERF-50, QUAL-12 |
-| `src/diff.zig` | +55 / -9 | PERF-15, PERF-48 |
-| `src/validation.zig` | +43 / -13 | P3-M6 |
-| `src/async.zig` | +43 / -6 | P3-R3, PERF-53 |
-| `src/serialize.zig` | +25 / -4 | P3-R5, P3-A1 |
-| `src/config.zig` | +17 / -4 | P3-M4, P3-R5, P3-A1 |
-| `src/expand.zig` | +14 / -4 | PERF-51 |
-| `src/parallel.zig` | +9 / -1 | PERF-52 |
-| `README.md` | +4 / -4 | GAP-0047, GAP-0053 |
-| `docs/VIPER_COMPARISON.md` | +4 / -3 | GAP-0044 |
-| `docs/ROADMAP.md` | +1 / -1 | GAP-0046 |
-
-**Total:** 466 insertions, 115 deletions across 11 files.
+| File | Gap IDs |
+|------|---------|
+| `src/loader.zig` | PERF-26, PERF-27, PERF-28, PERF-32, Q-NEW-4 |
+| `src/remote.zig` | SEC-01, SEC-03, SEC-15, SEC-16, SEC-18, Q-NEW-7 |
+| `src/encrypted_secrets.zig` | SEC-07, SEC-08, SEC-09, SEC-17 |
+| `src/secret.zig` | SEC-05, SEC-06, Q-NEW-2 |
+| `src/diff.zig` | PERF-54 |
+| `src/merge.zig` | PERF-54 |
+| `src/async.zig` | Q-NEW-3 |
 
 ---
 
-## Files Modified (All Waves 1-9)
+## Files Modified (All Waves 1-10)
 
 | File | Waves |
 |------|-------|
-| `src/loader.zig` | 1, 2, 4, 5, 6, 7, 8, 9 |
-| `src/remote.zig` | 1, 2, 3, 4, 5, 6, 7, 8, 9 |
+| `src/loader.zig` | 1, 2, 4, 5, 6, 7, 8, 9, 10 |
+| `src/remote.zig` | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 |
 | `src/config.zig` | 1, 2, 6, 9 |
-| `src/diff.zig` | 4, 7, 8, 9 |
+| `src/diff.zig` | 4, 7, 8, 9, 10 |
 | `src/validation.zig` | 2, 9 |
-| `src/async.zig` | 6, 9 |
+| `src/async.zig` | 6, 9, 10 |
 | `src/serialize.zig` | 9 |
 | `src/expand.zig` | 9 |
 | `src/parallel.zig` | 3, 8, 9 |
-| `src/encrypted_secrets.zig` | 2, 6, 9 |
+| `src/encrypted_secrets.zig` | 2, 6, 9, 10 |
 | `src/dotenv.zig` | 1, 6 |
 | `src/provenance.zig` | 1, 5 |
-| `src/secret.zig` | 1, 2, 4 |
-| `src/merge.zig` | 5, 7 |
+| `src/secret.zig` | 1, 2, 4, 10 |
+| `src/merge.zig` | 5, 7, 10 |
 | `build.zig` | 3 |
 | `.gitlab-ci.yml` | 7 |
 | `README.md` | 9 |

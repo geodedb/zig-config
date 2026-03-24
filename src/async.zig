@@ -543,6 +543,61 @@ test "addFile rejects calls when loader is running (PERF-53)" {
     try std.testing.expectError(AsyncError.AlreadyRunning, result);
 }
 
+test "AsyncLoaderWithCallback invokes callback on completion (Q-NEW-3)" {
+    // Integration test: create a real temp config file, load it through
+    // AsyncLoaderWithCallback, and verify the callback fires after poll().
+    const Config = struct {
+        host: []const u8 = "localhost",
+        port: u16 = 8080,
+    };
+
+    // Write a temp JSON config file
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const json_content = "{\"host\": \"integration.test\", \"port\": 9090}";
+    tmp_dir.dir.writeFile(.{ .sub_path = "config.json", .data = json_content }) catch return;
+
+    const tmp_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, "config.json") catch return;
+    defer std.testing.allocator.free(tmp_path);
+
+    // Shared state for the callback -- use a pointer so the callback can
+    // mutate it via user_data without relying on mutable static vars.
+    const CallbackState = struct {
+        invoked: bool = false,
+        success_value: bool = false,
+    };
+    var cb_state = CallbackState{};
+
+    const TestCb = struct {
+        fn callback(success: bool, user_data: ?*anyopaque) void {
+            const state: *CallbackState = @ptrCast(@alignCast(user_data.?));
+            state.invoked = true;
+            state.success_value = success;
+        }
+    };
+
+    var loader = AsyncLoaderWithCallback(Config).init(std.testing.allocator);
+    defer loader.deinit();
+
+    loader.setCallback(TestCb.callback, @ptrCast(&cb_state));
+    try loader.addFile(tmp_path, .json);
+    try loader.startAsync();
+
+    // Wait for the background thread to finish
+    const config = try loader.await();
+
+    // poll() checks isComplete() and invokes the callback
+    const done = loader.poll();
+    try std.testing.expect(done);
+    try std.testing.expect(cb_state.invoked);
+    try std.testing.expect(cb_state.success_value);
+
+    // Verify the loaded config values
+    try std.testing.expectEqualStrings("integration.test", config.host);
+    try std.testing.expectEqual(@as(u16, 9090), config.port);
+}
+
 test "MAX_PARALLEL_THREADS bounds thread count" {
     // Verify the constant is a reasonable value that prevents unbounded spawning (#106)
     try std.testing.expect(MAX_PARALLEL_THREADS > 0);
