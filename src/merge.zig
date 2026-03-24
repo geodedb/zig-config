@@ -159,7 +159,7 @@ fn eqlValue(comptime T: type, a: T, b: T) bool {
         .bool => a == b,
         .int, .float => a == b,
         .pointer => |ptr| blk: {
-            if (ptr.size == .Slice) {
+            if (ptr.size == .slice) {
                 if (ptr.child == u8) {
                     break :blk mem.eql(u8, a, b);
                 }

@@ -1,7 +1,7 @@
 # Security Gap Analysis
 
 **Project:** devnw/zig/config
-**Last updated:** 2026-03-24 (Wave 10 closure)
+**Last updated:** 2026-03-24 (Wave 11 closure -- no security changes in Wave 11)
 **Review phase:** Phase 3+ (security-reviewer, SSRF/injection deep-dive)
 **Scoring formula:** RiskScore = Impact(1-5) x Likelihood(1-5) x 4
 **Review commit:** fe9d0f6 (HEAD of main) + working tree

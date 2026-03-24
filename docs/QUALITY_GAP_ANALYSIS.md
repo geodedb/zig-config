@@ -1,8 +1,8 @@
 # Quality Gap Analysis
 
 **Project:** devnw/zig/config
-**Last updated:** 2026-03-24 (Wave 10 closure)
-**Review phase:** Phase 4 (quality-reviewer follow-up) + Waves 6-10 closure + Phase 3 addendum
+**Last updated:** 2026-03-24 (Wave 11 closure)
+**Review phase:** Phase 4 (quality-reviewer follow-up) + Waves 6-11 closure + Phase 3 addendum
 **Scoring formula:** PriorityScore = Impact(1-5) x Likelihood(1-5) x 4
 
 ---
@@ -14,9 +14,9 @@
 | Critical | 4     | 4        | 0        | 0    |
 | High     | 9     | 7        | 2        | 0    |
 | Medium   | 25    | 23       | 2        | 0    |
-| Low      | 13    | 11       | 0        | 2    |
+| Low      | 13    | 13       | 0        | 0    |
 | Info     | 4     | 2        | 2        | 0    |
-| **Total** | **55** | **47** | **6** | **2** |
+| **Total** | **55** | **49** | **6** | **0** |
 
 ### Top 5 Risks (all resolved)
 
@@ -63,8 +63,8 @@
 | 29 | Low | 24 | cleanup | ~~Duplicate validate/validation import alias in config.zig~~ | config.zig | Fixed: single alias retained | [#150](https://gitlab.com/devnw/zig/config/-/issues/150) | Removed duplicate alias, kept canonical name | Maintainer | S | **Resolved** (Wave 1) |
 | 30 | Low | 24 | readability | ~~build.zig repeats imports 6 times~~ | build.zig | Fixed: consolidated imports | [#153](https://gitlab.com/devnw/zig/config/-/issues/153) | Consolidated imports at top of file | Maintainer | S | **Resolved** (Wave 3) |
 | 31 | Low | 16 | maintainability | ~~@constCast on arena in normalizeKey bypasses const-correctness~~ | loader.zig | @constCast retained with expanded safety comment; changing to `*Self` would break public API of `isSet`, `has`, `get` (all `*const Self`) | NEW-05 | Expanded @constCast rationale comment documenting why signature change is infeasible | Maintainer | S | **Resolved** (Wave 6) |
-| 32 | Low | 24 | maintainability | Consul HTTP boilerplate duplication (makeGetRequest/makePutRequest/makeDeleteRequest) | remote.zig | `src/remote.zig:1168,1224,1275` -- three HTTP methods share identical connection setup, header construction, and response reading boilerplate | Q-NEW-1 | Extract shared `makeRequest(method, uri, body?)` helper; deferred -- safe extraction when time permits | Maintainer | S | **Deferred** |
-| 33 | Low | 24 | maintainability | Large files: remote.zig (2694), loader.zig (1991), encrypted_secrets.zig (1424) | remote.zig, loader.zig, encrypted_secrets.zig | `wc -l` counts exceed 800-line guideline; tests inline with production code inflate counts | Q-NEW-6 | Split tests into `*_test.zig` companion files to reduce file sizes below 800-line target | Maintainer | M | **Open** |
+| 32 | Low | 24 | maintainability | ~~Consul HTTP boilerplate duplication (makeGetRequest/makePutRequest/makeDeleteRequest)~~ | remote.zig | `src/remote.zig` -- extracted shared `makeRequest` helper; three HTTP methods now delegate to it; remote.zig reduced by 102 lines | Q-NEW-1 | Extracted shared `makeRequest(method, uri, body?)` helper; Consul boilerplate deduplicated | Maintainer | S | **Resolved** (Wave 11) |
+| 33 | Low | 24 | maintainability | ~~Large files: remote.zig (2694), loader.zig (1991), encrypted_secrets.zig (1424)~~ | remote.zig, loader.zig, encrypted_secrets.zig | Tests split into companion `*_test.zig` files: remote.zig 2780->1348, loader.zig 2067->1294, encrypted_secrets.zig 1478->907 | Q-NEW-6 | Split tests into `remote_test.zig`, `loader_test.zig`, `encrypted_secrets_test.zig` companion files | Maintainer | M | **Resolved** (Wave 11) |
 | 34 | Low | 16 | tests | ~~AsyncLoaderWithCallback not integration-tested~~ | async.zig | `src/async.zig:460,471` -- integration test added exercising load-then-callback flow | Q-NEW-3 | Integration test added for AsyncLoaderWithCallback (Wave 10) | Maintainer | S | **Resolved** (Wave 10) |
 | 35 | Low | 16 | tests | ~~Error path coverage gap in remote (no HTTP error response tests)~~ | remote.zig | `src/remote.zig` -- HTTP error response tests added for Etcd and Consul 4xx/5xx paths | Q-NEW-7 | HTTP error response tests added for Etcd and Consul (Wave 10) | Maintainer | M | **Resolved** (Wave 10) |
 | 36 | Info | 8 | documentation | ~~isPathSafeStrict potentially unused outside tests~~ | secret.zig | `src/secret.zig:69` -- doc comment added explaining intended use as a stricter alternative to `isPathSafe` | Q-NEW-2 | Doc comment added to `isPathSafeStrict` (Wave 10) | Maintainer | S | **Resolved** (Wave 10) |
@@ -141,7 +141,7 @@
 | 24 | ~~Path traversal silently ignored in async.zig~~ | P3-R3 | **Resolved** (Wave 9) |
 | 48 | ~~7 remaining catch {} sites~~ | [#148](https://gitlab.com/devnw/zig/config/-/issues/148) | **Resolved** (Waves 1-2) |
 
-### maintainability (18 findings -- 12 resolved, 4 Won't Do, 2 open)
+### maintainability (18 findings -- 14 resolved, 4 Won't Do, 0 open)
 
 | Score | Finding | Issue/ID | Status |
 |-------|---------|----------|--------|
@@ -156,8 +156,8 @@
 | 36 | ~~DRY validator wrappers (hostname/url/email)~~ | P3-M6 | **Resolved** (Wave 9) |
 | 32 | ~~Dead timeout functions in remote.zig~~ | P3-M7/P3-H2 | **Resolved** (Wave 9) |
 | 32 | ~~Unused prefix param in remote.zig~~ | P3-M8 | **Resolved** (Wave 9) |
-| 24 | Consul HTTP boilerplate duplication | Q-NEW-1 | **Deferred** |
-| 24 | Large files: remote (2694), loader (1991), encrypted_secrets (1424) | Q-NEW-6 | **Open** |
+| 24 | ~~Consul HTTP boilerplate duplication~~ | Q-NEW-1 | **Resolved** (Wave 11) |
+| 24 | ~~Large files: remote (2694), loader (1991), encrypted_secrets (1424)~~ | Q-NEW-6 | **Resolved** (Wave 11) |
 | 24 | ~~safeWriteConfig/safeWriteConfigWithBackup near-duplicate~~ | NEW-03 | **Resolved** (Wave 6) |
 | 16 | ~~@constCast on arena in normalizeKey~~ | NEW-05 | **Resolved** (Wave 6) |
 | 8 | Format dispatch duplication (config.zig + loader.zig) | Q-NEW-5 | **Won't Do** (accepted) |
@@ -261,20 +261,20 @@ Wave 6 resolved: NEW-09 (SensitiveString format output), NEW-11 (async OOM propa
 
 Items resolved: #141 (Wave 3), #123 (Wave 3), #119 (Wave 2), #120 (Wave 2), NEW-02/06/07 (std.json response parsing, Wave 7), NEW-08/16 (timeout_ms documentation, Wave 7).
 
-### Phase 3 Addendum -- Quick Wins (< 1 day, 4 items) -- 3 CLOSED, 1 DEFERRED
+### Phase 3 Addendum -- Quick Wins (< 1 day, 4 items) -- ALL CLOSED
 
 | Finding | Score | ID | Effort | Notes |
 |---------|-------|----|--------|-------|
-| Consul HTTP boilerplate duplication | 24 | Q-NEW-1 | S | **Deferred** -- extract shared `makeRequest` helper when time permits |
+| ~~Consul HTTP boilerplate duplication~~ | 24 | Q-NEW-1 | S | **Resolved** (Wave 11): Extracted shared `makeRequest` helper; remote.zig reduced by 102 lines |
 | ~~AsyncLoaderWithCallback not integration-tested~~ | 16 | Q-NEW-3 | S | **Resolved** (Wave 10): Integration test added |
 | ~~isPathSafeStrict unused outside tests~~ | 8 | Q-NEW-2 | S | **Resolved** (Wave 10): Doc comment added |
 | ~~Loader.parseContent missing doc comment~~ | 8 | Q-NEW-4 | S | **Resolved** (Wave 10): Doc comment added |
 
-### Phase 3 Addendum -- Medium (1-5 days, 2 items) -- 1 CLOSED, 1 OPEN
+### Phase 3 Addendum -- Medium (1-5 days, 2 items) -- ALL CLOSED
 
 | Finding | Score | ID | Effort | Notes |
 |---------|-------|----|--------|-------|
-| Large files: remote (2694), loader (1991), encrypted_secrets (1424) | 24 | Q-NEW-6 | M | **Open** -- Split tests into `*_test.zig` companion files |
+| ~~Large files: remote (2694), loader (1991), encrypted_secrets (1424)~~ | 24 | Q-NEW-6 | M | **Resolved** (Wave 11) -- Split tests into `*_test.zig` companion files |
 | ~~Error path coverage gap in remote~~ | 16 | Q-NEW-7 | M | **Resolved** (Wave 10): HTTP error response tests added for Etcd and Consul |
 
 ### Phase 3 Addendum -- Won't Do (2 items)
@@ -317,9 +317,9 @@ All 16 new findings (NEW-01 through NEW-16) are tagged `confidence::confirmed` -
 
 Wave 9 added 9 new findings (P3-M4, P3-M5, P3-M6, P3-M7/P3-H2, P3-M8, P3-R2, P3-R3, P3-R5, P3-A1), all closed immediately with code changes and tests.
 
-Phase 3 addendum added 8 findings (Q-NEW-1 through Q-NEW-8), all tagged `confidence::confirmed` -- verified by direct code inspection with file paths and line numbers. Of these, 4 were resolved in Wave 10 (Q-NEW-2, Q-NEW-3, Q-NEW-4, Q-NEW-7), 1 is deferred (Q-NEW-1), 1 is open (Q-NEW-6), and 2 are Won't Do (Q-NEW-5, Q-NEW-8).
+Phase 3 addendum added 8 findings (Q-NEW-1 through Q-NEW-8), all tagged `confidence::confirmed` -- verified by direct code inspection with file paths and line numbers. Of these, 4 were resolved in Wave 10 (Q-NEW-2, Q-NEW-3, Q-NEW-4, Q-NEW-7), 2 resolved in Wave 11 (Q-NEW-1, Q-NEW-6), and 2 are Won't Do (Q-NEW-5, Q-NEW-8).
 
-All 55 findings (47 resolved + 6 Won't Do + 2 open) verified by code inspection, CI configuration review, or test execution.
+All 55 findings (49 resolved + 6 Won't Do) verified by code inspection, CI configuration review, or test execution.
 
 ## Unknowns
 

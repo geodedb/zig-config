@@ -1,6 +1,6 @@
 # Gap Analysis -- Resolved
 
-Last updated: 2026-03-24 (Waves 6-10 closure)
+Last updated: 2026-03-24 (Waves 6-11 closure)
 Review commit: fe9d0f6 (HEAD of main) + working tree
 
 ## Resolved Gaps
@@ -1594,3 +1594,39 @@ All 774/774 tests pass. Format clean. Build clean.
 - **Evidence:**
   - `src/remote.zig` -- mock HTTP error response tests for Etcd and Consul error handling
 - **Resolved date:** 2026-03-24 (Wave 10)
+
+### Q-NEW-1: Consul HTTP boilerplate duplication [RESOLVED]
+
+- **ID:** Q-NEW-1
+- **Category:** Quality (maintainability)
+- **Resolution:** Extracted shared `makeRequest(method, uri, body?)` helper in Consul client. The three HTTP methods (`makeGetRequest`, `makePutRequest`, `makeDeleteRequest`) now delegate to a single shared helper, eliminating duplicated connection setup, header construction, and response reading boilerplate. `remote.zig` reduced by 102 lines.
+- **Evidence:**
+  - `src/remote.zig` -- shared `makeRequest` helper replaces duplicated boilerplate in `makeGetRequest`, `makePutRequest`, `makeDeleteRequest`
+  - `src/remote_test.zig` -- Consul HTTP tests (1468 lines) all pass with refactored code
+- **Resolved date:** 2026-03-24 (Wave 11)
+
+### PERF-44: Benchmark suite [RESOLVED]
+
+- **ID:** PERF-44
+- **Category:** Performance (P2)
+- **Issue:** [#89](https://gitlab.com/devnw/zig/config/-/issues/89)
+- **Resolution:** Benchmark suite created with 6 benchmarks: JSON parse, TOML parse, YAML parse, diff compare, merge maps, merge structs. Standalone executable using `std.time.Timer` with 100-1000 iterations per benchmark; reports min/mean/max ns/op to stderr. `build.zig` has `bench` step with `.ReleaseFast` optimization.
+- **Evidence:**
+  - `src/bench.zig` -- benchmark executable with 6 benchmarks
+  - `build.zig` -- `bench` step added with ReleaseFast optimization
+  - `zig build bench` runs successfully with reproducible results
+- **Resolved date:** 2026-03-24 (Wave 11)
+
+### Q-NEW-6: Large source files (test code split) [RESOLVED]
+
+- **ID:** Q-NEW-6
+- **Category:** Quality (maintainability)
+- **Resolution:** Test code split into companion `*_test.zig` files for the three largest source files. Source files reduced significantly: `remote.zig` 2780->1348 lines, `loader.zig` 2067->1294 lines, `encrypted_secrets.zig` 1478->907 lines. Test companion files: `remote_test.zig` (1468 lines), `loader_test.zig` (796 lines), `encrypted_secrets_test.zig` (599 lines).
+- **Evidence:**
+  - `src/remote_test.zig` -- 1468 lines of remote module tests
+  - `src/loader_test.zig` -- 796 lines of loader module tests
+  - `src/encrypted_secrets_test.zig` -- 599 lines of encrypted secrets tests
+  - `src/remote.zig` -- reduced from 2780 to 1348 lines
+  - `src/loader.zig` -- reduced from 2067 to 1294 lines
+  - `src/encrypted_secrets.zig` -- reduced from 1478 to 907 lines
+- **Resolved date:** 2026-03-24 (Wave 11)

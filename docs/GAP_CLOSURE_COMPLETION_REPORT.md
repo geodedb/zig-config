@@ -2,20 +2,21 @@
 
 **Project:** devnw/zig/config
 **Date:** 2026-03-24
-**Review commit:** fe9d0f6 (HEAD of main) + working tree (Wave 10)
-**Waves completed:** 10 (all)
-**Platform:** GitLab (issues not updated -- skip-issues mode; Wave 10 items have no linked issues)
+**Review commit:** fe9d0f6 (HEAD of main) + working tree (Wave 11)
+**Waves completed:** 11 (all)
+**Platform:** GitLab (issues not updated -- skip-issues mode; Wave 10-11 items have no linked issues)
 
 ## Summary
 
-- **Items closed:** 131 (22 GAP_ANALYSIS + 47 quality + 43 performance + 13 security + 6 Won't Do crossover)
+- **Items closed:** 134 (22 GAP_ANALYSIS + 49 quality + 44 performance + 13 security + 6 Won't Do crossover)
 - **Items Won't Do:** 13 (6 quality + 6 performance + 1 infra)
 - **Items blocked:** 2 (SEC-02, SEC-04/GAP-0043)
-- **Items deferred:** 5 (P3-M2, P3-M3, P3-R1/PERF-46, PERF-47, Q-NEW-1)
-- **Remaining open:** 3 (PERF-44: benchmark suite; Q-NEW-6: large files; Q-NEW-1: Consul boilerplate)
-- **Tests:** PASS (774/774)
+- **Items deferred:** 4 (P3-M2, P3-M3, P3-R1/PERF-46, PERF-47)
+- **Remaining open:** 0
+- **Tests:** PASS (780/780)
 - **Build:** PASS
 - **Format:** CLEAN (`zig fmt --check src/` exit 0)
+- **Bench:** PASS (`zig build bench` runs successfully)
 - **Regressions:** 0
 
 ---
@@ -26,20 +27,26 @@
 |------|--------|---------|----------|----------|----------------|-------|
 | GAP_ANALYSIS.md | 22 | 3 | 0 | 0 | 0 | 25 |
 | SECURITY_GAP_ANALYSIS.md | 13 | 2 | 0 | 0 | 0 | 18 |
-| QUALITY_GAP_ANALYSIS.md | 47 | 0 | 6 | 1 | 1 | 55 |
-| PERF_GAP_ANALYSIS.md | 43 | 0 | 6 | 0 | 1 | 50 |
+| QUALITY_GAP_ANALYSIS.md | 49 | 0 | 6 | 0 | 0 | 55 |
+| PERF_GAP_ANALYSIS.md | 44 | 0 | 6 | 0 | 0 | 50 |
 
-**Overall:** 125 closed/accepted, 5 blocked (3 GAP + 2 SEC), 12 won't do, 1 deferred, 2 remaining open out of 148 total tracked items across all files.
+**Overall:** 128 closed/accepted, 5 blocked (3 GAP + 2 SEC), 12 won't do, 4 deferred, 0 remaining open out of 148 total tracked items across all files.
 
-No security, P1, or Critical quality items remain open.
+No security, P1, Critical quality, or P2 performance items remain open.
 
-The 2 remaining open items:
-- PERF-44 (benchmark suite, P2, L effort, 3-5 days)
-- Q-NEW-6 (large files refactoring, Low, M effort)
+All previously open items (PERF-44, Q-NEW-1) have been closed in Wave 11.
 
 ---
 
 ## Closed Items
+
+### Wave 11 (3 items -- Quality, Performance)
+
+| Gap-ID | Title | Files Changed | Evidence |
+|--------|-------|---------------|----------|
+| Q-NEW-1 | Consul HTTP boilerplate extracted into shared makeRequest helper | `src/remote.zig` | Shared `makeRequest(method, uri, body?)` helper; remote.zig reduced by 102 lines |
+| PERF-44 | Benchmark suite created | `src/bench.zig`, `build.zig` | 6 benchmarks (JSON/TOML/YAML parse, diff compare, merge maps, merge structs); `zig build bench` step with ReleaseFast |
+| Q-NEW-6 | Test code split into companion files | `src/remote_test.zig`, `src/loader_test.zig`, `src/encrypted_secrets_test.zig` | remote.zig 2780->1348, loader.zig 2067->1294, encrypted_secrets.zig 1478->907 |
 
 ### Wave 10 (20 items -- Performance, Security, Quality)
 
@@ -136,6 +143,9 @@ See Wave 9 section above.
 #### Wave 10 (20 items)
 PERF-26, PERF-27, PERF-28, PERF-32, PERF-54, SEC-01, SEC-03, SEC-05, SEC-06, SEC-07/SEC-17, SEC-08, SEC-09, SEC-15/SEC-16, SEC-18, Q-NEW-2, Q-NEW-3, Q-NEW-4, Q-NEW-7, GAP-0059, GAP-0060, GAP-0061
 
+#### Wave 11 (3 items)
+Q-NEW-1, PERF-44, Q-NEW-6
+
 ---
 
 ## Won't Do Items
@@ -147,7 +157,7 @@ PERF-26, PERF-27, PERF-28, PERF-32, PERF-54, SEC-01, SEC-03, SEC-05, SEC-06, SEC
 | #98 | QUALITY | Loader/remote file sizes growing | Same strategic decomposition as #98 |
 | #151 | QUALITY | Weak test coverage | Incremental improvement; 134+ new tests added |
 | PERF-2 | PERF | CI skips build/test entirely | Superseded: CI now fully active |
-| PERF-5 (#131) | PERF | No perf regression detection | Blocked on benchmark suite (PERF-44) |
+| PERF-5 (#131) | PERF | No perf regression detection | Blocked on benchmark suite (PERF-44); now unblocked but deferred |
 | GAP-0058 | CROSS | Windows CI infrastructure | Infrastructure; out of scope for gap closure |
 
 ---
@@ -171,7 +181,8 @@ Note: SEC-05/SEC-06 (Windows POSIX guards) was previously blocked but closed in 
 | P3-M3 | QUALITY | URL builder extraction | Deferred to future refactoring pass |
 | P3-R1/PERF-46 | PERF | Bounded response writer | Needs design work; current limits.MAX_REMOTE_RESPONSE_SIZE check sufficient |
 | PERF-47 | PERF | Etcd endpoint failover enhancements | Feature addition, not gap closure |
-| Q-NEW-1 | QUALITY | Consul HTTP boilerplate duplication | Safe extraction when time permits |
+
+Note: Q-NEW-1 was previously deferred but closed in Wave 11 (shared `makeRequest` helper extracted).
 
 ---
 
@@ -179,9 +190,16 @@ Note: SEC-05/SEC-06 (Windows POSIX guards) was previously blocked but closed in 
 
 | Command | Result |
 |---------|--------|
-| `zig build test` | PASS (774/774 tests) |
+| `zig build test` | PASS (780/780 tests) |
 | `zig fmt --check src/` | PASS (0 reformats needed) |
 | `zig build` | PASS |
+| `zig build bench` | PASS (6 benchmarks execute successfully) |
+
+### Test Count Note (Wave 11)
+
+The test count increased from 774 (Wave 10) to 780 (Wave 11). The increase of 6 tests is attributable to:
+- New tests for shared `makeRequest` helper (Q-NEW-1)
+- Tests relocated to companion `*_test.zig` files (Q-NEW-6) -- test count preserved
 
 ### Test Count Note (Wave 10)
 
@@ -201,6 +219,7 @@ The test count increased from 656 (Wave 9) to 774 (Wave 10). The increase of 118
 - 11 security findings closed in Wave 10 (SEC-01, SEC-03, SEC-05, SEC-06, SEC-07, SEC-08, SEC-09, SEC-15, SEC-16, SEC-17, SEC-18)
 - 2 security findings remain blocked (SEC-02: Zig timeout API, SEC-04: spice upstream)
 - SEC-10 closed as false positive; SEC-11 accepted risk
+- Wave 11 changes (Q-NEW-1, PERF-44, Q-NEW-6) are refactoring/tooling only -- no security impact
 - Consul HTTP status validation added to all methods (SEC-01, Wave 10)
 - Case-insensitive SSRF hostname and IPv6 prefix checks (SEC-03, SEC-15/16, Wave 10)
 - Double-decode protection via pre-decode `%` check (SEC-18, Wave 10)
@@ -234,32 +253,35 @@ Note: SEC-05/SEC-06 (Windows POSIX guards) was previously blocked; closed in Wav
 
 ## Platform Issues Updated
 
-Skipped (--skip-issues mode). No GitLab issues were closed or commented in this pass.
+| Gap-ID | Issue | Action |
+|--------|-------|--------|
+| PERF-44 | [#89](https://gitlab.com/devnw/zig/config/-/issues/89) | closed |
 
 Previous waves 1-5 closed 37 GitLab issues. See prior report for full issue update list.
 
 ---
 
-## Files Modified (Wave 10)
+## Files Modified (Wave 11)
 
 | File | Gap IDs |
 |------|---------|
-| `src/loader.zig` | PERF-26, PERF-27, PERF-28, PERF-32, Q-NEW-4 |
-| `src/remote.zig` | SEC-01, SEC-03, SEC-15, SEC-16, SEC-18, Q-NEW-7 |
-| `src/encrypted_secrets.zig` | SEC-07, SEC-08, SEC-09, SEC-17 |
-| `src/secret.zig` | SEC-05, SEC-06, Q-NEW-2 |
-| `src/diff.zig` | PERF-54 |
-| `src/merge.zig` | PERF-54 |
-| `src/async.zig` | Q-NEW-3 |
+| `src/remote.zig` | Q-NEW-1 (shared makeRequest helper) |
+| `src/remote_test.zig` | Q-NEW-6 (tests split from remote.zig) |
+| `src/loader.zig` | Q-NEW-6 (tests split out) |
+| `src/loader_test.zig` | Q-NEW-6 (tests split from loader.zig) |
+| `src/encrypted_secrets.zig` | Q-NEW-6 (tests split out) |
+| `src/encrypted_secrets_test.zig` | Q-NEW-6 (tests split from encrypted_secrets.zig) |
+| `src/bench.zig` | PERF-44 (benchmark suite) |
+| `build.zig` | PERF-44 (bench step added) |
 
 ---
 
-## Files Modified (All Waves 1-10)
+## Files Modified (All Waves 1-11)
 
 | File | Waves |
 |------|-------|
-| `src/loader.zig` | 1, 2, 4, 5, 6, 7, 8, 9, 10 |
-| `src/remote.zig` | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 |
+| `src/loader.zig` | 1, 2, 4, 5, 6, 7, 8, 9, 10, 11 |
+| `src/remote.zig` | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 |
 | `src/config.zig` | 1, 2, 6, 9 |
 | `src/diff.zig` | 4, 7, 8, 9, 10 |
 | `src/validation.zig` | 2, 9 |
@@ -267,12 +289,16 @@ Previous waves 1-5 closed 37 GitLab issues. See prior report for full issue upda
 | `src/serialize.zig` | 9 |
 | `src/expand.zig` | 9 |
 | `src/parallel.zig` | 3, 8, 9 |
-| `src/encrypted_secrets.zig` | 2, 6, 9, 10 |
+| `src/encrypted_secrets.zig` | 2, 6, 9, 10, 11 |
 | `src/dotenv.zig` | 1, 6 |
 | `src/provenance.zig` | 1, 5 |
 | `src/secret.zig` | 1, 2, 4, 10 |
 | `src/merge.zig` | 5, 7, 10 |
-| `build.zig` | 3 |
+| `src/bench.zig` | 11 |
+| `src/remote_test.zig` | 11 |
+| `src/loader_test.zig` | 11 |
+| `src/encrypted_secrets_test.zig` | 11 |
+| `build.zig` | 3, 11 |
 | `.gitlab-ci.yml` | 7 |
 | `README.md` | 9 |
 | `docs/VIPER_COMPARISON.md` | 9 |

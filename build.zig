@@ -166,6 +166,21 @@ pub fn build(b: *std.Build) void {
     const docs_step = b.step("docs", "Generate API documentation");
     docs_step.dependOn(&install_docs.step);
 
+    // Benchmark executable (ReleaseFast for realistic timings)
+    const bench_exe = b.addExecutable(.{
+        .name = "bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "config", .module = config_mod },
+            },
+        }),
+    });
+    const bench_step = b.step("bench", "Run benchmarks");
+    bench_step.dependOn(&b.addRunArtifact(bench_exe).step);
+
     // Examples
     const examples = .{
         .{ "basic_parsing", "Basic configuration parsing example" },

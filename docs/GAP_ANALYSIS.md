@@ -1,6 +1,6 @@
 # GAP Analysis
 
-Last updated: 2026-03-24 (Wave 10 closure)
+Last updated: 2026-03-24 (Wave 11 closure)
 Review commit: fe9d0f6 (HEAD of main) + working tree
 Reviewed by: Security Code Review Agent (adversarial)
 
@@ -196,4 +196,5 @@ Previous security items all resolved. See [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSI
 | P3-M3 | URL builder extraction | Deferred to future refactoring pass | **Deferred** |
 | P3-R1/PERF-46 | Bounded response writer | Needs design work; current `limits.MAX_REMOTE_RESPONSE_SIZE` check sufficient | **Deferred** |
 | PERF-47 | Etcd endpoint failover enhancements | Feature addition, not gap closure | **Deferred** |
+| ~~Q-NEW-1~~ | ~~Consul HTTP boilerplate duplication~~ | ~~Safe extraction when time permits~~ | **Closed** (Wave 11) |
 | GAP-0058 | Windows CI infrastructure | Infrastructure; out of scope for gap closure | **Won't Do** |

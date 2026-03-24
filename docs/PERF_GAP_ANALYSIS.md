@@ -1,16 +1,16 @@
 # Performance Gap Analysis -- zigconfig
 
-Last updated: 2026-03-24 (Wave 10 closure)
+Last updated: 2026-03-24 (Wave 11 closure)
 
 ## Summary
 
 | PerfSeverity | Count | Closed | Won't Do | Reopened | Open |
 |-------------|-------|--------|----------|----------|------|
 | P1          | 5     | 4      | 1        | 0        | 0    |
-| P2          | 11    | 9      | 1        | 0        | 1    |
+| P2          | 11    | 10     | 1        | 0        | 0    |
 | P3          | 15    | 15     | 0        | 0        | 0    |
 | Info        | 19    | 15     | 4        | 0        | 0    |
-| **Total**   | **50** | **43** | **6** | **0** | **1** |
+| **Total**   | **50** | **44** | **6** | **0** | **0** |
 
 4 legacy Info items superseded by higher-severity Phase 4 findings and excluded from counts above:
 PERF-22 superseded by PERF-28, PERF-23 superseded by PERF-32, PERF-20i superseded by PERF-37, PERF-21 superseded by PERF-38.
@@ -32,7 +32,7 @@ Phase 5 review applied 2026-03-24. Added 5 new findings from Phase 5 code-level 
 | Rank | Finding | PerfScore | Status |
 |------|---------|-----------|--------|
 | 1 | ~~timeout_ms configured but never applied to HTTP (PERF-38)~~ | 60 | **Closed** (Wave 7, documented limitation) |
-| 2 | No benchmark suite (#89) (PERF-44) | 40 | **Open** (rescored from 80) |
+| 2 | ~~No benchmark suite (#89) (PERF-44)~~ | 40 | **Closed** (Wave 11) |
 | 3 | ~~Auth header rebuilt per request (PERF-33)~~ | 24 | **Closed** (Wave 8) |
 | 4 | ~~recheckDnsBinding re-parses URI (PERF-37)~~ | 24 | **Closed** (Wave 8) |
 | 5 | ~~Thread pool spawns threads eagerly (PERF-42)~~ | 20 | **Closed** (Wave 8) |
@@ -76,7 +76,7 @@ Phase 5 review applied 2026-03-24. Added 5 new findings from Phase 5 code-level 
 | 1 | PERF-43 | P1 | 60 | No CI caching -- Zig downloaded 7x per pipeline | .gitlab-ci.yml | `.gitlab-ci.yml:36-71` -- `.install-zig` anchor runs `curl` + `tar` in every job (zig-format, build, test, test-release-safe, test-release-fast, test-release-small, fuzz). Conditional `if [ ! -f ... ]` is ineffective without caching since each job starts from a clean image. | 7 downloads of ~45MB Zig tarball per pipeline = ~315MB bandwidth + ~2-3 min install overhead per job | -- | Added global `cache:` block keyed on `ZIG_VERSION` for `zig-${ZIG_VERSION}/` and `.zig-cache/` directories. Install-zig conditional now skips download on cache hit. | benjiv | Sprint | **Closed** |
 | 2 | PERF-38 | P1 | 60 | ~~timeout_ms configured but never applied to HTTP requests~~ | remote.zig | `EtcdOptions.timeout_ms` and `ConsulOptions.timeout_ms` doc comments updated to document Zig 0.15 http.Client limitation; TODO retained for future version. Comment at `src/remote.zig` makeRequest explains fetch API constraint. | Limitation documented; callers warned timeout_ms is not enforced | -- | Documented limitation in doc comments (Wave 7); TODO retained for future Zig version with timeout support | benjiv | Sprint | **Closed** (Wave 7, documented limitation) |
 | 3 | PERF-31 | P2 | 48 | ~~applyBoundEnvVars per-item getenv syscall~~ | loader.zig | All three env functions now receive a shared `std.process.EnvMap` snapshot from `load()`. Uses `env_map.get()` instead of `environ.getenv()`. | 0 per-item syscalls; single snapshot shared | -- | Hoisted `std.process.getEnvMap` into `load()` and passed to all env functions (Wave 7) | benjiv | Quarter | **Closed** (Wave 7) |
-| 4 | PERF-44 | P2 | 40 | No benchmark suite -- CI blocker now resolved | build.zig | No `bench` step in `build.zig`. CI infrastructure (#82) is now resolved (build+test stages active with Zig 0.15.2), removing the previous blocker. Rescored from original 80 to 40 since CI is available but benchmarks are not yet added. | Cannot quantify any optimization; all perf estimates are code-inspection only | [#89](https://gitlab.com/devnw/zig/config/-/issues/89) | Add `zig build bench` step with per-component benchmarks. CI can now run them. | benjiv | Quarter | **Open** (was Won't Do, now unblocked) |
+| 4 | PERF-44 | P2 | 40 | ~~No benchmark suite -- CI blocker now resolved~~ | build.zig, src/bench.zig | Benchmark suite added: `src/bench.zig` with 6 benchmarks (JSON/TOML/YAML parse, diff compare, merge maps, merge structs); `build.zig` has `bench` step with ReleaseFast | 6 benchmarks with min/mean/max ns/op reporting | [#89](https://gitlab.com/devnw/zig/config/-/issues/89) | Added `zig build bench` step with per-component benchmarks (Wave 11) | benjiv | Quarter | **Closed** (Wave 11) |
 | 5 | PERF-36 | P2 | 36 | ~~setFieldInner dupes before field match~~ | loader.zig | Verified: `setField` already performs `arena.dupe()` inside the `if (matchFieldName(...))` branch. No `setFieldInner` exists. Already resolved by prior refactoring. | No wasted allocs; dupes only on match | -- | Already resolved in current code | benjiv | Quarter | **Closed** (already resolved) |
 | 6 | PERF-26 | P2 | 32 | ~~allocPrint in JSON object recursion~~ | loader.zig | `applyJsonValue` uses `var key_buf: [512]u8` with `std.fmt.bufPrint` at `loader.zig:790-806`. No heap allocation per JSON object entry. | 0 heap allocs for key construction | -- | Replaced `allocPrint` with stack-buffer `bufPrint` (Wave 7; reverted Wave 9; re-applied Wave 10) | benjiv | Quarter | **Closed** (Wave 10) |
 | 7 | PERF-39 | P2 | 28 | ~~Double getEnvMap snapshot~~ | loader.zig | `load()` creates a single `std.process.getEnvMap` snapshot and passes `*const std.process.EnvMap` to all three env functions. | 1 snapshot total instead of up to 3 | -- | Hoisted single snapshot into `load()` (Wave 7) | benjiv | Quarter | **Closed** (Wave 7) |
@@ -190,7 +190,7 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 | ID | PerfScore | Finding | Severity | Issue | Status |
 |----|-----------|---------|----------|-------|--------|
 | PERF-43 | 60 | ~~No CI caching -- 7x Zig download~~ | P1 | -- | **Closed** |
-| PERF-44 | 40 | No benchmark suite (CI unblocked) | P2 | [#89](https://gitlab.com/devnw/zig/config/-/issues/89) | **Open** (was Won't Do) |
+| PERF-44 | 40 | ~~No benchmark suite (CI unblocked)~~ | P2 | [#89](https://gitlab.com/devnw/zig/config/-/issues/89) | **Closed** (Wave 11) |
 | PERF-1 | 80 | No benchmark suite (original) | P1 | [#89](https://gitlab.com/devnw/zig/config/-/issues/89) | Rescored to PERF-44 |
 | PERF-2 | 80 | CI skips build/test entirely | P1 | [#82](https://gitlab.com/devnw/zig/config/-/issues/82) | **Won't Do** (CI now active) |
 | PERF-5 | 60 | No perf regression detection | P2 | [#131](https://gitlab.com/devnw/zig/config/-/issues/131) | **Won't Do** |
@@ -218,7 +218,7 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 | Finding | ID | PerfScore | Effort | Description |
 |---------|-----|-----------|--------|-------------|
 | ~~timeout_ms not applied~~ | PERF-38 | 60 | 2-3 days | ~~Investigate Zig 0.15.2 http.Client timeout support~~ **Closed** (Wave 7, documented limitation) |
-| Benchmark suite | PERF-44 | 40 | 3-5 days | Add `zig build bench` with per-component benchmarks; integrate into CI |
+| ~~Benchmark suite~~ | PERF-44 | 40 | 3-5 days | ~~Add `zig build bench` with per-component benchmarks~~ **Closed** (Wave 11) |
 | ~~JSON/TOML/INI allocPrint~~ | PERF-26/27/28/29 | 16-32 | 1-2 days | ~~Stack-buffer bufPrint in all parse loops~~ **Closed** (Wave 7) |
 | ~~recheckDnsBinding URI re-parse~~ | PERF-37 | 24 | 1 day | ~~Cached parsed URIs at init for both Etcd and Consul~~ **Closed** (Wave 8) |
 | ~~Thread pool eagerness~~ | PERF-42 | 20 | 1 day | ~~Raised threshold from 2 to 4 files~~ **Closed** (Wave 8) |
@@ -227,7 +227,7 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 
 | Finding | ID | PerfScore | Reason |
 |---------|-----|-----------|--------|
-| Performance regression detection (#131) | PERF-5 | 60 | Blocked on benchmark suite (PERF-44) |
+| Performance regression detection (#131) | PERF-5 | 60 | Previously blocked on PERF-44 (now resolved); CI integration deferred |
 
 ---
 
@@ -278,6 +278,7 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 | -- | Missing memory fence in initPool (PERF-52) | 12 | Wave 9 | @fence(.seq_cst) after pool_allocator write |
 | -- | addFile runtime guard (PERF-53) | 8 | Wave 9 | AlreadyRunning guard in addFile |
 | -- | HashMap capacity hints in diff (PERF-54) | 12 | Wave 10 | Added `ensureTotalCapacity` to `merge()` and `compareWithOptions()` HashMaps in diff.zig |
+| [#89](https://gitlab.com/devnw/zig/config/-/issues/89) | No benchmark suite (PERF-44) | 40 | Wave 11 | Added `src/bench.zig` with JSON/TOML/YAML parse, diff compare, merge maps/structs benchmarks; `zig build bench` step with ReleaseFast |
 
 ---
 
@@ -285,11 +286,11 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 
 1. ~~**timeout_ms is non-functional (PERF-38)**~~: **Closed** (Wave 7). Limitation documented in `EtcdOptions.timeout_ms` and `ConsulOptions.timeout_ms` doc comments. Callers warned that timeout_ms is not enforced by Zig 0.15's http.Client. TODO retained for future Zig version.
 
-2. **Benchmark baseline (PERF-44)**: Without benchmarks, all "expected improvement" numbers are estimates. The CI blocker (#82) is now resolved -- Zig 0.15.2 is available and build/test/fuzz stages are active. The benchmark suite can now be built and integrated.
+2. ~~**Benchmark baseline (PERF-44)**~~: **Closed** (Wave 11). Benchmark suite added via `src/bench.zig` and `zig build bench`. Baseline measurements now available for JSON/TOML/YAML parsing, diff comparison, and merge operations.
 
 3. **Thread safety of Loader.setField()**: The parallel file loading fix (#104) and the parallel stubs fix (#132) both require `setField` to be thread-safe or for results to be collected and merged post-join. Current implementation mutates shared state directly.
 
-4. **Performance regression detection (#131)**: Still blocked on benchmark suite. Once PERF-44 is resolved, this becomes unblocked.
+4. **Performance regression detection (#131)**: Unblocked now that PERF-44 is resolved. Can integrate `zig build bench` output into CI for regression gating.
 
 5. **Arena lifetime contracts in remote clients**: Resolved. Etcd.resetArena() and Consul.resetArena() provide explicit caller-controlled reset.
 
@@ -328,11 +329,11 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 3. ~~**PERF-31 -- Fix applyBoundEnvVars to use env snapshot** (PerfScore 48, ~30 min)~~ **Closed** (Wave 7)
    - Hoisted `std.process.getEnvMap` into `load()` and passed shared snapshot to all env functions
 
-4. **PERF-44 -- Build benchmark suite** (PerfScore 40, 3-5 days)
-   - Add `zig build bench` step with benchmarks for: config loading (JSON/TOML/INI/YAML), env var application, remote client operations, diff comparison
-   - Expected: Establish baseline measurements; enable data-driven optimization going forward
+4. ~~**PERF-44 -- Build benchmark suite** (PerfScore 40, 3-5 days)~~ **Closed** (Wave 11)
+   - Added `zig build bench` step with benchmarks for: JSON/TOML/YAML parsing, diff comparison, map merging, struct merging
+   - `src/bench.zig`: standalone executable using `std.time.Timer`; 100-1000 iterations per benchmark; reports min/mean/max ns/op to stderr
+   - `build.zig`: bench step with `.ReleaseFast` optimization
    - Validation: `zig build bench` runs successfully; results are reproducible within 10% variance
-   - Rollout risk: None -- additive, no production code changes
 
 5. ~~**PERF-54 -- Add ensureTotalCapacity to diff.zig HashMaps** (PerfScore 12, ~30 min)~~ **Closed** (Wave 10)
    - Added `ensureTotalCapacity` to `merge()` result map and `compareWithOptions()` helper maps (`new_lower_index`, `seen_keys`)
@@ -343,8 +344,8 @@ Phase 5 findings P-NEW-5 (sequential format detection) and P-NEW-6 (no streaming
 
 ## Next Steps
 
-**1 item remains open** out of 50 total findings:
+**All items are now closed** out of 50 total findings.
 
-- **PERF-44** (P2, PerfScore 40): Build benchmark suite (`zig build bench`). Estimated effort: 3-5 days. This is the only remaining performance gap. CI infrastructure is ready.
+- **PERF-44** (P2, PerfScore 40): Closed (Wave 11). Benchmark suite added via `zig build bench` with JSON/TOML/YAML parsing, diff comparison, map merging, and struct merging benchmarks.
 
-All other performance findings (43 closed, 6 won't do) have been resolved across Waves 1-10 and Phase 5 review. PERF-54 was closed in Wave 10 (ensureTotalCapacity added to diff.zig). PERF-26/27/28/32 were re-applied in Wave 10 after being reverted in Wave 9.
+All performance findings (44 closed, 6 won't do) have been resolved across Waves 1-11 and Phase 5 review. PERF-54 was closed in Wave 10 (ensureTotalCapacity added to diff.zig). PERF-26/27/28/32 were re-applied in Wave 10 after being reverted in Wave 9. PERF-44 was closed in Wave 11 (benchmark suite).
