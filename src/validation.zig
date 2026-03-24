@@ -819,30 +819,34 @@ pub fn port(value: u16) ValidationError!void {
     }
 }
 
-/// Validate hostname
+/// Validate hostname.
+/// P3-M6: Delegates to the thorough `isHostname` validator so both
+/// the bool-returning and error-returning APIs apply identical rules
+/// (label length, leading/trailing dash, etc.).
 pub fn hostname(value: []const u8) ValidationError!void {
-    if (value.len == 0 or value.len > 253) {
-        return ValidationError.TooLong;
-    }
-
-    // Basic hostname validation
-    for (value) |c| {
-        if (!std.ascii.isAlphanumeric(c) and c != '.' and c != '-') {
-            return ValidationError.PatternMismatch;
+    if (!isHostname(value)) {
+        if (value.len == 0 or value.len > 253) {
+            return ValidationError.TooLong;
         }
-    }
-}
-
-/// Validate URL
-pub fn url(value: []const u8) ValidationError!void {
-    if (!mem.startsWith(u8, value, "http://") and !mem.startsWith(u8, value, "https://")) {
         return ValidationError.PatternMismatch;
     }
 }
 
-/// Validate email address (basic)
+/// Validate URL.
+/// P3-M6: Delegates to the thorough `isUrl` validator so both the
+/// bool-returning and error-returning APIs apply identical rules.
+pub fn url(value: []const u8) ValidationError!void {
+    if (!isUrl(value)) {
+        return ValidationError.PatternMismatch;
+    }
+}
+
+/// Validate email address.
+/// P3-M6: Delegates to the thorough `isEmail` validator so both the
+/// bool-returning and error-returning APIs apply identical rules
+/// (local part, domain with dot, etc.).
 pub fn email(value: []const u8) ValidationError!void {
-    if (mem.indexOf(u8, value, "@") == null) {
+    if (!isEmail(value)) {
         return ValidationError.PatternMismatch;
     }
 }
@@ -1077,6 +1081,28 @@ test "isHostname" {
     try std.testing.expect(!isHostname("-invalid.com"));
 }
 
+test "P3-M6: hostname() delegates to isHostname (rejects trailing dash)" {
+    try std.testing.expectError(ValidationError.PatternMismatch, hostname("host-"));
+    try std.testing.expectError(ValidationError.PatternMismatch, hostname("-leading"));
+    try std.testing.expectError(ValidationError.TooLong, hostname(""));
+    try hostname("example.com");
+    try hostname("localhost");
+}
+
+test "P3-M6: email() delegates to isEmail (rejects bare @)" {
+    try std.testing.expectError(ValidationError.PatternMismatch, email("@domain.com"));
+    try std.testing.expectError(ValidationError.PatternMismatch, email("user@"));
+    try std.testing.expectError(ValidationError.PatternMismatch, email("nodomain"));
+    try email("user@example.com");
+}
+
+test "P3-M6: url() delegates to isUrl (accepts ftp://)" {
+    try url("ftp://files.example.com");
+    try url("http://example.com");
+    try url("https://example.com");
+    try std.testing.expectError(ValidationError.PatternMismatch, url("example.com"));
+}
+
 test "Validator validateAll" {
     var validator = Validator.init(std.testing.allocator);
     defer validator.deinit();
@@ -1177,5 +1203,7 @@ test "oneOf validation" {
 test "url validation" {
     try url("https://example.com");
     try url("http://localhost:8080");
-    try std.testing.expectError(ValidationError.PatternMismatch, url("ftp://example.com"));
+    // P3-M6: url() now delegates to isUrl(), which accepts ftp://
+    try url("ftp://example.com");
+    try std.testing.expectError(ValidationError.PatternMismatch, url("not-a-url"));
 }

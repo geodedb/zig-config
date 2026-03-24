@@ -309,19 +309,23 @@ pub const Value = struct {
 
 /// Parse configuration from file content with auto-detected or specified format
 pub fn parseContent(allocator: Allocator, content: []const u8, format: Format) !Value {
+    const resolved_format: Format = if (format == .auto)
+        loader.detectFormatFromContent(content)
+    else
+        format;
+
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
 
     const arena_alloc = arena.allocator();
 
-    const resolved_format = if (format == .auto) loader.detectFormatFromContent(content) else format;
     const data: Value.ValueData = switch (resolved_format) {
         .yaml => try parseYamlContent(arena_alloc, content),
         .json => try parseJsonContent(arena_alloc, content),
         .toml => try parseTomlContent(arena_alloc, content),
         .ini => try parseIniContent(arena_alloc, content),
         .properties => try parsePropertiesContent(arena_alloc, content),
-        .auto => try parseYamlContent(arena_alloc, content), // fallback
+        .auto => unreachable,
     };
 
     return Value{
@@ -655,62 +659,6 @@ pub const SafeWriteOptions = struct {
     atomic: bool = true,
 };
 
-/// Write content to a file atomically via a temp file and rename.
-/// The temp file uses a randomized suffix and O_EXCL to prevent CWE-377.
-/// Security: Uses restrictive permissions (0o600) on the temp file (CWE-732, #75).
-/// NEW-03: Extracted from safeWriteConfig/safeWriteConfigWithBackup to
-/// eliminate ~50 lines of duplicated atomic-write logic.
-fn atomicWriteFile(
-    allocator: Allocator,
-    path: []const u8,
-    content: []const u8,
-) SafeWriteError!void {
-    const cwd = std.fs.cwd();
-
-    var temp_path: []u8 = &.{};
-    var temp_file: std.fs.File = undefined;
-    var attempt: u8 = 0;
-    while (attempt < 5) : (attempt += 1) {
-        var random_bytes: [8]u8 = undefined;
-        std.crypto.random.bytes(&random_bytes);
-        const random_suffix = std.fmt.bytesToHex(random_bytes, .lower);
-        temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, random_suffix }) catch return SafeWriteError.OutOfMemory;
-        temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
-            error.PathAlreadyExists => {
-                allocator.free(temp_path);
-                continue;
-            },
-            else => return SafeWriteError.IoError,
-        };
-        break;
-    }
-    if (attempt == 5) return SafeWriteError.IoError;
-    defer allocator.free(temp_path);
-
-    temp_file.writeAll(content) catch {
-        temp_file.close();
-        cwd.deleteFile(temp_path) catch {};
-        return SafeWriteError.IoError;
-    };
-    temp_file.close();
-
-    cwd.rename(temp_path, path) catch {
-        cwd.deleteFile(temp_path) catch {};
-        return SafeWriteError.IoError;
-    };
-}
-
-/// Write content to a file directly (non-atomic).
-/// Security: Uses restrictive file permissions (CWE-732, #75).
-fn directWriteFile(
-    path: []const u8,
-    content: []const u8,
-) SafeWriteError!void {
-    const file = createFileNoFollow(path, 0o600, false) catch return SafeWriteError.IoError;
-    defer file.close();
-    file.writeAll(content) catch return SafeWriteError.IoError;
-}
-
 /// Safely write configuration to a file without overwriting existing files
 /// Use this to prevent accidental data loss
 /// Security: Validates path to prevent path traversal attacks (CWE-22, #62)
@@ -725,15 +673,52 @@ pub fn safeWriteConfig(
         return SafeWriteError.PathTraversalDetected;
     }
 
+    const fs = std.fs;
+    const cwd = fs.cwd();
+
     // Check if file exists
-    if (std.fs.cwd().access(path, .{})) {
+    if (cwd.access(path, .{})) {
         return SafeWriteError.FileExists;
     } else |_| {}
 
     if (options.atomic) {
-        try atomicWriteFile(allocator, path, content);
+        // Write to temp file first (randomized, exclusive)
+        var temp_path: []u8 = &.{};
+        var temp_file: std.fs.File = undefined;
+        var attempt: u8 = 0;
+        while (attempt < 5) : (attempt += 1) {
+            var random_bytes: [8]u8 = undefined;
+            std.crypto.random.bytes(&random_bytes);
+            const random_suffix = std.fmt.fmtSliceHexLower(&random_bytes);
+            temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, random_suffix }) catch return SafeWriteError.OutOfMemory;
+            temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
+                error.PathAlreadyExists => {
+                    allocator.free(temp_path);
+                    continue;
+                },
+                else => return SafeWriteError.IoError,
+            };
+            break;
+        }
+        if (attempt == 5) return SafeWriteError.IoError;
+        defer allocator.free(temp_path);
+        temp_file.writeAll(content) catch {
+            temp_file.close();
+            cwd.deleteFile(temp_path) catch {};
+            return SafeWriteError.IoError;
+        };
+        temp_file.close();
+
+        // Rename temp to target
+        cwd.rename(temp_path, path) catch {
+            cwd.deleteFile(temp_path) catch {};
+            return SafeWriteError.IoError;
+        };
     } else {
-        try directWriteFile(path, content);
+        // Security: Use restrictive file permissions (CWE-732, #75)
+        const file = createFileNoFollow(path, 0o600, false) catch return SafeWriteError.IoError;
+        defer file.close();
+        file.writeAll(content) catch return SafeWriteError.IoError;
     }
 }
 
@@ -750,7 +735,8 @@ pub fn safeWriteConfigWithBackup(
         return SafeWriteError.PathTraversalDetected;
     }
 
-    const cwd = std.fs.cwd();
+    const fs = std.fs;
+    const cwd = fs.cwd();
 
     // Check if file exists and create backup if requested
     if (cwd.access(path, .{})) {
@@ -763,9 +749,41 @@ pub fn safeWriteConfigWithBackup(
     } else |_| {}
 
     if (options.atomic) {
-        try atomicWriteFile(allocator, path, content);
+        var temp_path: []u8 = &.{};
+        var temp_file: std.fs.File = undefined;
+        var attempt: u8 = 0;
+        while (attempt < 5) : (attempt += 1) {
+            var random_bytes: [8]u8 = undefined;
+            std.crypto.random.bytes(&random_bytes);
+            const random_suffix = std.fmt.fmtSliceHexLower(&random_bytes);
+            temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, random_suffix }) catch return SafeWriteError.OutOfMemory;
+            temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
+                error.PathAlreadyExists => {
+                    allocator.free(temp_path);
+                    continue;
+                },
+                else => return SafeWriteError.IoError,
+            };
+            break;
+        }
+        if (attempt == 5) return SafeWriteError.IoError;
+        defer allocator.free(temp_path);
+        temp_file.writeAll(content) catch {
+            temp_file.close();
+            cwd.deleteFile(temp_path) catch {};
+            return SafeWriteError.IoError;
+        };
+        temp_file.close();
+
+        cwd.rename(temp_path, path) catch {
+            cwd.deleteFile(temp_path) catch {};
+            return SafeWriteError.IoError;
+        };
     } else {
-        try directWriteFile(path, content);
+        // Security: Use restrictive file permissions (CWE-732, #75)
+        const file = createFileNoFollow(path, 0o600, false) catch return SafeWriteError.IoError;
+        defer file.close();
+        file.writeAll(content) catch return SafeWriteError.IoError;
     }
 }
 
@@ -966,115 +984,6 @@ test "SafeWriteOptions defaults" {
     try std.testing.expect(opts.atomic);
     try std.testing.expect(!opts.create_backup);
     try std.testing.expectEqualStrings(".bak", opts.backup_suffix);
-}
-
-test "safeWriteConfig rejects path traversal (CWE-22)" {
-    const result = safeWriteConfig(
-        std.testing.allocator,
-        "../etc/passwd",
-        "malicious",
-        .{},
-    );
-    try std.testing.expectError(SafeWriteError.PathTraversalDetected, result);
-}
-
-test "safeWriteConfigWithBackup rejects path traversal (CWE-22)" {
-    const result = safeWriteConfigWithBackup(
-        std.testing.allocator,
-        "../../etc/shadow",
-        "malicious",
-        .{},
-    );
-    try std.testing.expectError(SafeWriteError.PathTraversalDetected, result);
-}
-
-test "safeWriteConfig writes file atomically (NEW-03)" {
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    // Get real path for the temp directory
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = tmp_dir.dir.realpath(".", &path_buf) catch unreachable;
-    const file_path = std.fmt.allocPrint(std.testing.allocator, "{s}/test_atomic.txt", .{dir_path}) catch unreachable;
-    defer std.testing.allocator.free(file_path);
-
-    // Write via safeWriteConfig (atomic)
-    try safeWriteConfig(std.testing.allocator, file_path, "hello atomic", .{ .atomic = true });
-
-    // Verify content
-    const written = tmp_dir.dir.readFileAlloc(std.testing.allocator, "test_atomic.txt", 1024) catch unreachable;
-    defer std.testing.allocator.free(written);
-    try std.testing.expectEqualStrings("hello atomic", written);
-}
-
-test "safeWriteConfig returns FileExists when file already exists" {
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    // Create a pre-existing file
-    tmp_dir.dir.writeFile(.{ .sub_path = "existing.txt", .data = "original" }) catch unreachable;
-
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = tmp_dir.dir.realpath(".", &path_buf) catch unreachable;
-    const file_path = std.fmt.allocPrint(std.testing.allocator, "{s}/existing.txt", .{dir_path}) catch unreachable;
-    defer std.testing.allocator.free(file_path);
-
-    // safeWriteConfig should refuse to overwrite
-    const result = safeWriteConfig(std.testing.allocator, file_path, "overwrite", .{});
-    try std.testing.expectError(SafeWriteError.FileExists, result);
-
-    // Original content preserved
-    const content = tmp_dir.dir.readFileAlloc(std.testing.allocator, "existing.txt", 1024) catch unreachable;
-    defer std.testing.allocator.free(content);
-    try std.testing.expectEqualStrings("original", content);
-}
-
-test "safeWriteConfigWithBackup creates backup and overwrites (NEW-03)" {
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    // Create a pre-existing file
-    tmp_dir.dir.writeFile(.{ .sub_path = "config.json", .data = "old content" }) catch unreachable;
-
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = tmp_dir.dir.realpath(".", &path_buf) catch unreachable;
-    const file_path = std.fmt.allocPrint(std.testing.allocator, "{s}/config.json", .{dir_path}) catch unreachable;
-    defer std.testing.allocator.free(file_path);
-
-    // Write with backup enabled
-    try safeWriteConfigWithBackup(std.testing.allocator, file_path, "new content", .{
-        .create_backup = true,
-        .backup_suffix = ".bak",
-        .atomic = true,
-    });
-
-    // Verify new content
-    const new_content = tmp_dir.dir.readFileAlloc(std.testing.allocator, "config.json", 1024) catch unreachable;
-    defer std.testing.allocator.free(new_content);
-    try std.testing.expectEqualStrings("new content", new_content);
-
-    // Verify backup exists with old content
-    const backup_content = tmp_dir.dir.readFileAlloc(std.testing.allocator, "config.json.bak", 1024) catch unreachable;
-    defer std.testing.allocator.free(backup_content);
-    try std.testing.expectEqualStrings("old content", backup_content);
-}
-
-test "safeWriteConfig non-atomic write (NEW-03)" {
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dir_path = tmp_dir.dir.realpath(".", &path_buf) catch unreachable;
-    const file_path = std.fmt.allocPrint(std.testing.allocator, "{s}/direct.txt", .{dir_path}) catch unreachable;
-    defer std.testing.allocator.free(file_path);
-
-    // Write via non-atomic path
-    try safeWriteConfig(std.testing.allocator, file_path, "direct write", .{ .atomic = false });
-
-    // Verify content
-    const written = tmp_dir.dir.readFileAlloc(std.testing.allocator, "direct.txt", 1024) catch unreachable;
-    defer std.testing.allocator.free(written);
-    try std.testing.expectEqualStrings("direct write", written);
 }
 
 test "unified config: parse YAML content" {

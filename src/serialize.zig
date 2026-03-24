@@ -451,6 +451,14 @@ fn writeEnvScalar(comptime T: type, value: T, writer: anytype) !void {
 
 /// Write a config struct to a file
 /// Security: Validates path to prevent path traversal attacks (CWE-22, #62)
+/// Write a config struct directly to a file (non-atomic).
+///
+/// P3-A1: Error contract -- this function may return:
+/// - `SecretError.PathTraversalDetected` -- path contains `..` or similar
+/// - `error.OutOfMemory` -- serialization or I/O buffer allocation failed
+/// - Any `std.fs.File` open/write error (e.g., `AccessDenied`, `FileNotFound`)
+///
+/// For crash-safe writes, prefer `safeWriteToFile` which uses atomic rename.
 pub fn writeToFile(comptime T: type, value: T, path: []const u8, allocator: Allocator, options: SerializeOptions) !void {
     // Security: Validate path does not contain traversal sequences
     if (!secret.isPathSafe(path)) {
@@ -466,10 +474,20 @@ pub fn writeToFile(comptime T: type, value: T, path: []const u8, allocator: Allo
     try file.writeAll(content);
 }
 
-/// Atomically write a config struct to a file (safe write)
-/// This writes to a temporary file first, then atomically renames to the target path.
-/// This prevents corruption if the write is interrupted (power failure, crash, etc.)
-/// Security: Validates path to prevent path traversal attacks (CWE-22, #62)
+/// Atomically write a config struct to a file (safe write).
+/// This writes to a temporary file first, syncs to disk, then atomically
+/// renames to the target path.  This prevents corruption if the write is
+/// interrupted (power failure, crash, etc.)
+///
+/// P3-A1: Error contract -- this function may return:
+/// - `SecretError.PathTraversalDetected` -- path contains `..` or similar
+/// - `error.OutOfMemory` -- serialization or path allocation failed
+/// - `error.PathAlreadyExists` -- temp file collision after 5 retries
+/// - Any `std.fs.File` open/write/sync/rename error
+///
+/// Security: Validates path to prevent path traversal attacks (CWE-22, #62).
+/// The atomic-write pattern in this function is the canonical implementation;
+/// `config.zig`'s `atomicWriteFile` uses the same logic (P3-M4).
 pub fn safeWriteToFile(comptime T: type, value: T, path: []const u8, allocator: Allocator, options: SerializeOptions) !void {
     // Security: Validate path does not contain traversal sequences
     if (!secret.isPathSafe(path)) {
@@ -501,6 +519,9 @@ pub fn safeWriteToFile(comptime T: type, value: T, path: []const u8, allocator: 
     if (attempt == 5) return error.PathAlreadyExists;
     defer allocator.free(temp_path);
     errdefer std.fs.cwd().deleteFile(temp_path) catch {};
+    // P3-R5: Ensure the temp file handle is closed on write/sync failure
+    // so the fd is not leaked before the errdefer cleanup deletes the file.
+    errdefer temp_file.close();
 
     try temp_file.writeAll(content);
     try temp_file.sync(); // Ensure data is flushed to disk

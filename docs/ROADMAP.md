@@ -26,7 +26,7 @@ readiness.
 - Configuration diffing
 - SafeWriteConfig to prevent overwriting
 - Parallel file loading
-- Array indexing in key paths, case-insensitive keys, key aliases
+- Array indexing in key paths (dot-notation numeric indices e.g. `servers.0.host`, bracket-to-dot normalization e.g. `servers[0].host` → `servers.0.host`; negative indexing and array slicing are not supported), case-insensitive keys, key aliases
 - Multiple search paths via addConfigPath
 - Files without extension (content-based format detection)
 - Nested YAML parsing via recursive applyJsonValue

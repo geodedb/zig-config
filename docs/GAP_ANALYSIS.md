@@ -1,22 +1,22 @@
 # GAP Analysis
 
-Last updated: 2026-03-24
-Review commit: fe9d0f6 (HEAD of main) + working tree
+Last updated: 2026-03-24 (Wave 9 closure)
+Review commit: 65f3c93 (HEAD of main) + working tree
 Reviewed by: Security Code Review Agent (adversarial)
 
 ## Summary
 
 ### Severity Breakdown
 
-| Severity | Count | Open | Closed | Description |
-|----------|-------|------|--------|-------------|
-| Critical | 0 | 0 | 0 | No critical vulnerabilities found |
-| High | 1 | 0 | 1 | Local code execution / high-impact secrets risk |
-| Medium | 9 | 0 | 9 | Auth gaps, DoS risks, symlink race conditions, SSRF edge cases |
-| Low | 4 | 0 | 4 | Hardening and policy alignment |
-| **Total** | **14** | **0** | **14** | |
+| Severity | Count | Open | Closed | Blocked | Description |
+|----------|-------|------|--------|---------|-------------|
+| Critical | 0 | 0 | 0 | 0 | No critical vulnerabilities found |
+| High | 1 | 0 | 1 | 0 | Local code execution / high-impact secrets risk |
+| Medium | 12 | 0 | 11 | 1 | Auth gaps, DoS risks, symlink race conditions, SSRF edge cases |
+| Low | 9 | 0 | 7 | 2 | Hardening and policy alignment |
+| **Total** | **22** | **0** | **19** | **3** | |
 
-All 14 original security findings have been resolved. Resolution evidence is tracked in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
+All 14 original security findings have been resolved. 8 additional findings from Wave 9 review: 5 closed (SEC-01, SEC-03, SEC-07, SEC-08, SEC-09), 3 blocked (SEC-02, SEC-04, SEC-05/SEC-06). Resolution evidence is tracked in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
 
 ### Top 5 Risks (all resolved)
 
@@ -113,3 +113,37 @@ All items resolved. See [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md) for
 - ~~Replace CLI-based secret providers with direct SDK/API integrations for stronger auth/TLS controls (#76, #77, #79).~~ **Closed** (PATH allowlist + env map + timeout watchdog)
 - ~~Implement DNS rebinding mitigation (resolve and pin IPs) in SSRF checks (#68).~~ **Closed**
 - ~~Add full build/test gating in CI with required approvals before release (#82).~~ **Closed**
+
+---
+
+## Wave 9 Security Findings
+
+### Closed
+
+| ID | Severity | Finding | Component | Resolution | Status |
+|----|----------|---------|-----------|------------|--------|
+| SEC-01 | Medium | ~~HTTP status code not checked in remote~~ | remote.zig | Verified: `makeRequest` checks status >= 400 (implemented Wave 6 as GAP-0037) | **Closed** |
+| SEC-03 | Medium | ~~Case-insensitive hostname checks~~ | remote.zig | Hostname comparison uses `std.ascii.eqlIgnoreCase` per RFC 4343 | **Closed** |
+| SEC-07 | Low | ~~isValidOpPath too permissive~~ | encrypted_secrets.zig | Tightened to reject null bytes, control chars, shell metacharacters | **Closed** |
+| SEC-08 | Low | ~~stdout/stderr not secureZero'd~~ | encrypted_secrets.zig | `secureZero` on stdout/stderr buffers before free in `execCommand` | **Closed** |
+| SEC-09 | Low | ~~@constCast in encrypted_secrets~~ | encrypted_secrets.zig | Replaced with proper mutable allocation | **Closed** |
+
+### Blocked
+
+| ID | Severity | Finding | Component | Blocker | Unblock Steps | Status |
+|----|----------|---------|-----------|---------|---------------|--------|
+| SEC-02 | Medium | HTTP timeout not enforced | remote.zig | Zig 0.15 `http.Client` has no timeout API; `fetch()` does not expose underlying connection | Wait for Zig version with timeout support in http.Client | **Blocked** |
+| SEC-04 | Low | spice dependency not pinned (GAP-0043) | build.zig.zon | Upstream spice package has no version tag; hash-only pinning in place | Request upstream version tag or fork with explicit versioning | **Blocked** |
+| SEC-05/SEC-06 | Low | Windows POSIX guards untested | xdg.zig, environ.zig | No Windows CI runner configured (GAP-0058) | Configure Windows CI runner or cross-compilation testing | **Blocked** |
+
+---
+
+## Deferred/Won't Do Items
+
+| ID | Finding | Reason | Status |
+|----|---------|--------|--------|
+| P3-M2 | Consul request consolidation | Refactoring too aggressive; breaks 44 tests | **Deferred** |
+| P3-M3 | URL builder extraction | Deferred to future refactoring pass | **Deferred** |
+| P3-R1/PERF-46 | Bounded response writer | Needs design work; current `limits.MAX_REMOTE_RESPONSE_SIZE` check sufficient | **Deferred** |
+| PERF-47 | Etcd endpoint failover enhancements | Feature addition, not gap closure | **Deferred** |
+| GAP-0058 | Windows CI infrastructure | Infrastructure; out of scope for gap closure | **Won't Do** |

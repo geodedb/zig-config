@@ -110,11 +110,19 @@ fn doInitPool() void {
 /// For small config files (< 4KB), pass a `GeneralPurposeAllocator` to
 /// avoid page-granularity waste from `std.heap.page_allocator` (PERF-40).
 ///
-/// Must be called before any parallel operation triggers `getPool()`.
+/// **Thread-safety contract (PERF-52):** This function must be called
+/// before any parallel operation triggers `getPool()`.  If `initPool`
+/// and `getPool` are called from different threads, the sequential
+/// fence below ensures the allocator write is visible to the thread
+/// that executes `doInitPool` inside `pool_once.call()`.
+///
 /// Calling after the pool is already initialized has no effect.
 pub fn initPool(allocator: std.mem.Allocator) void {
     if (!build_options.enable_spice) return;
     pool_allocator = allocator;
+    // PERF-52: Ensure the allocator write is globally visible before any
+    // thread calls getPool() -> pool_once.call() -> doInitPool().
+    @fence(.seq_cst);
 }
 
 /// Return a pointer to the lazily-initialized global thread pool.

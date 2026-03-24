@@ -1,6 +1,6 @@
 # Performance Gap Analysis -- zigconfig
 
-Last updated: 2026-03-24 (Wave 8 closure)
+Last updated: 2026-03-24 (Wave 9 closure)
 
 ## Summary
 
@@ -8,9 +8,9 @@ Last updated: 2026-03-24 (Wave 8 closure)
 |-------------|-------|--------|----------|----------|------|
 | P1          | 5     | 4      | 1        | 0        | 0    |
 | P2          | 11    | 9      | 1        | 0        | 1    |
-| P3          | 13    | 13     | 0        | 0        | 0    |
-| Info        | 11    | 11     | 0        | 0        | 0    |
-| **Total**   | **40** | **37** | **2** | **0** | **1** |
+| P3          | 14    | 14     | 0        | 0        | 0    |
+| Info        | 15    | 15     | 0        | 0        | 0    |
+| **Total**   | **45** | **42** | **2** | **0** | **1** |
 
 4 legacy Info items superseded by higher-severity Phase 4 findings and excluded from counts above:
 PERF-22 superseded by PERF-28, PERF-23 superseded by PERF-32, PERF-20i superseded by PERF-37, PERF-21 superseded by PERF-38.
@@ -93,6 +93,16 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | 20 | PERF-41 | Info | 8 | ~~Global pool_mutex contention in parallel.zig~~ | parallel.zig | `src/parallel.zig` -- replaced mutex with `std.once` for lock-free reads after init | Lock-free reads on hot path; init serialized via std.once | -- | Replaced pool_mutex with std.once for lock-free reads | benjiv | As capacity | **Closed** (Wave 8) |
 | 21 | PERF-45 | Info | 4 | CI conditional Zig check is dead code without caching | .gitlab-ci.yml | `.gitlab-ci.yml:38` -- `if [ ! -f "zig-${ZIG_VERSION}/zig" ]` check is always true because each job uses a clean container image. The conditional adds complexity with no benefit until caching is enabled (PERF-43). | Dead code in CI; no functional impact but misleading | -- | Resolved by PERF-43: global `cache:` block added, so the conditional now correctly skips download on cache hit. No code change needed. | benjiv | As capacity | **Closed** |
 
+### Wave 9 New Findings
+
+| Rank | ID | PerfSeverity | PerfScore | Finding | Component | Evidence | Measurement | Issue | Fix Summary | Owner | SLA | Status |
+|------|-----|-------------|-----------|---------|-----------|----------|-------------|-------|-------------|-------|-----|--------|
+| 1 | PERF-48 | Info | 8 | ~~Redundant getValueForKey in added-keys pass~~ | diff.zig | `src/diff.zig` -- removed redundant `getValueForKey(old_config, ...)` call; `seen_keys` check is sufficient | 1 fewer O(n) lookup per new key in pass 2 | -- | Removed redundant lookup; seen_keys check is sufficient | benjiv | As capacity | **Closed** (Wave 9) |
+| 2 | PERF-50 | P3 | 16 | ~~Stack buffer in tryAccessPath for findConfigFile~~ | loader.zig | `src/loader.zig` -- `tryAccessPath` uses 512-byte stack buffer; falls back to allocPrint | 0 heap allocs for typical file search paths | -- | Stack buffer tryAccessPath helper in findConfigFileWithOptions | benjiv | Backlog | **Closed** (Wave 9) |
+| 3 | PERF-51 | Info | 8 | ~~Batch literal appending in expand.zig~~ | expand.zig | `src/expand.zig` -- `literal_start` tracks runs; single `appendSlice` per run | Reduces ArrayList ops proportional to literal run length | -- | Track literal runs with batch appendSlice flush | benjiv | As capacity | **Closed** (Wave 9) |
+| 4 | PERF-52 | Info | 12 | ~~Missing memory fence in initPool~~ | parallel.zig | `src/parallel.zig` -- `@fence(.seq_cst)` after `pool_allocator` write | Prevents data race between initPool and getPool across threads | -- | Added @fence(.seq_cst) for cross-thread visibility | benjiv | As capacity | **Closed** (Wave 9) |
+| 5 | PERF-53 | Info | 8 | ~~addFile lacks runtime guard in async.zig~~ | async.zig | `src/async.zig` -- `addFile` checks `self.result.state == .running` under mutex | Prevents programming error of adding files to running loader | -- | Added AlreadyRunning guard in addFile | benjiv | As capacity | **Closed** (Wave 9) |
+
 ---
 
 ## Findings by Area
@@ -128,6 +138,11 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | PERF-40 | 8 | ~~page_allocator granularity waste~~ | Info | -- | **Closed** (Wave 8) |
 | PERF-41 | 8 | ~~Global pool_mutex contention~~ | Info | -- | **Closed** (Wave 8) |
 | PERF-20 | 8 | ~~Lowercased key alloc per lookup~~ | Info | -- | **Closed** (Wave 8) |
+| PERF-50 | 16 | ~~Stack buffer in tryAccessPath~~ | P3 | -- | **Closed** (Wave 9) |
+| PERF-48 | 8 | ~~Redundant getValueForKey in diff~~ | Info | -- | **Closed** (Wave 9) |
+| PERF-51 | 8 | ~~Batch literal appending~~ | Info | -- | **Closed** (Wave 9) |
+| PERF-52 | 12 | ~~Missing memory fence in initPool~~ | Info | -- | **Closed** (Wave 9) |
+| PERF-53 | 8 | ~~addFile lacks runtime guard~~ | Info | -- | **Closed** (Wave 9) |
 | PERF-22 | 4 | INI section.key allocPrint (see PERF-28) | Info | -- | Superseded by PERF-28 |
 | PERF-23 | 4 | Redundant prefix_with_dot (see PERF-32) | Info | -- | Superseded by PERF-32 |
 
@@ -234,6 +249,11 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 | -- | page_allocator granularity waste (PERF-40) | 8 | Wave 8 | Added `initPool()` with caller allocator + docs |
 | -- | pool_mutex contention (PERF-41) | 8 | Wave 8 | Replaced with `std.once` for lock-free reads |
 | -- | Thread pool eager spawning (PERF-42) | 20 | Wave 8 | Raised threshold from 2 to 4 files |
+| -- | Redundant getValueForKey in diff (PERF-48) | 8 | Wave 9 | Removed redundant lookup; seen_keys check sufficient |
+| -- | Stack buffer in tryAccessPath (PERF-50) | 16 | Wave 9 | 512B stack buffer in findConfigFileWithOptions |
+| -- | Batch literal appending (PERF-51) | 8 | Wave 9 | literal_start tracking with batch appendSlice |
+| -- | Missing memory fence in initPool (PERF-52) | 12 | Wave 9 | @fence(.seq_cst) after pool_allocator write |
+| -- | addFile runtime guard (PERF-53) | 8 | Wave 9 | AlreadyRunning guard in addFile |
 
 ---
 
@@ -292,8 +312,8 @@ Phase 4 audit applied 2026-03-24. Verified resolved findings from Phases 1-3; re
 
 ## Next Steps
 
-Only **1 item remains open** out of 40 total findings:
+Only **1 item remains open** out of 45 total findings:
 
 - **PERF-44** (P2, PerfScore 40): Build benchmark suite (`zig build bench`). Estimated effort: 3-5 days. This is the sole remaining performance gap. All P1, P3, and Info items are closed.
 
-All other performance findings (37 closed, 2 won't do) have been resolved across Waves 1-8.
+All other performance findings (42 closed, 2 won't do) have been resolved across Waves 1-9.

@@ -207,49 +207,38 @@ pub fn Loader(comptime T: type) type {
         /// Set a value explicitly (highest precedence - like Viper's Set)
         /// This value will override all other sources including flags and env vars.
         pub fn set(self: *Self, key: []const u8, value: []const u8) !void {
-            var norm_buf: [512]u8 = undefined;
-            const norm_key = self.normalizeKey(key, &norm_buf);
-            // Dupe into arena for stable storage in maps
-            const owned_key = try self.arena.allocator().dupe(u8, norm_key);
+            const norm_key = self.normalizeKey(key);
             const owned_value = try self.arena.allocator().dupe(u8, value);
-            try self.overrides.put(owned_key, owned_value);
-            try self.tracker.set(owned_key, owned_value, .override, "set()");
+            try self.overrides.put(norm_key, owned_value);
+            try self.tracker.set(norm_key, owned_value, .override, "set()");
         }
 
         /// Set a default value at runtime (lowest precedence - like Viper's SetDefault)
         /// This is lower precedence than struct defaults and will only apply
         /// if no other source provides a value.
         pub fn setDefault(self: *Self, key: []const u8, value: []const u8) !void {
-            var norm_buf: [512]u8 = undefined;
-            const norm_key = self.normalizeKey(key, &norm_buf);
-            // Dupe into arena for stable storage in maps
-            const owned_key = try self.arena.allocator().dupe(u8, norm_key);
+            const norm_key = self.normalizeKey(key);
             const owned_value = try self.arena.allocator().dupe(u8, value);
-            try self.runtime_defaults.put(owned_key, owned_value);
+            try self.runtime_defaults.put(norm_key, owned_value);
             // Only set in tracker if no value exists yet
             if (self.tracker.get(norm_key) == null) {
-                try self.tracker.set(owned_key, owned_value, .runtime_default, "setDefault()");
+                try self.tracker.set(norm_key, owned_value, .runtime_default, "setDefault()");
             }
         }
 
         /// Register a key alias (like Viper's RegisterAlias)
         /// After registration, both keys reference the same value.
         pub fn registerAlias(self: *Self, alias: []const u8, canonical: []const u8) !void {
-            var norm_buf_alias: [512]u8 = undefined;
-            var norm_buf_canonical: [512]u8 = undefined;
-            const norm_alias = self.normalizeKey(alias, &norm_buf_alias);
-            const norm_canonical = self.normalizeKey(canonical, &norm_buf_canonical);
-            // Dupe both into arena for stable storage in maps
-            const owned_alias = try self.arena.allocator().dupe(u8, norm_alias);
+            const norm_alias = self.normalizeKey(alias);
+            const norm_canonical = self.normalizeKey(canonical);
             const owned_canonical = try self.arena.allocator().dupe(u8, norm_canonical);
-            try self.aliases.put(owned_alias, owned_canonical);
+            try self.aliases.put(norm_alias, owned_canonical);
         }
 
         /// Check if a key has been explicitly set (not just default)
         /// Returns true if the key was set from any source other than default.
         pub fn isSet(self: *const Self, key: []const u8) bool {
-            var norm_buf: [512]u8 = undefined;
-            const norm_key = self.normalizeKey(key, &norm_buf);
+            const norm_key = self.normalizeKey(key);
             const resolved_key = self.resolveAlias(norm_key);
 
             if (self.tracker.get(resolved_key)) |tracked| {
@@ -260,16 +249,14 @@ pub fn Loader(comptime T: type) type {
 
         /// Check if a key exists (including defaults)
         pub fn has(self: *const Self, key: []const u8) bool {
-            var norm_buf: [512]u8 = undefined;
-            const norm_key = self.normalizeKey(key, &norm_buf);
+            const norm_key = self.normalizeKey(key);
             const resolved_key = self.resolveAlias(norm_key);
             return self.tracker.get(resolved_key) != null;
         }
 
         /// Get a string value by key
         pub fn get(self: *const Self, key: []const u8) ?[]const u8 {
-            var norm_buf: [512]u8 = undefined;
-            const norm_key = self.normalizeKey(key, &norm_buf);
+            const norm_key = self.normalizeKey(key);
             const resolved_key = self.resolveAlias(norm_key);
 
             if (self.tracker.get(resolved_key)) |tracked| {
@@ -328,13 +315,11 @@ pub fn Loader(comptime T: type) type {
             var result = std.StringHashMap([]const u8).init(self.allocator);
             errdefer result.deinit();
 
-            // PERF-32: Use stack buffer instead of allocPrint for prefix_with_dot
-            var buf: [256]u8 = undefined;
             const prefix_with_dot = if (prefix.len > 0 and prefix[prefix.len - 1] != '.')
-                std.fmt.bufPrint(&buf, "{s}.", .{prefix}) catch
-                    return error.OutOfMemory // Prefix exceeds 256-byte stack buffer
+                try std.fmt.allocPrint(self.allocator, "{s}.", .{prefix})
             else
-                prefix;
+                try self.allocator.dupe(u8, prefix);
+            defer self.allocator.free(prefix_with_dot);
 
             var iter = self.tracker.values.iterator();
             while (iter.next()) |entry| {
@@ -352,9 +337,8 @@ pub fn Loader(comptime T: type) type {
 
         /// Check if a sub-configuration exists
         pub fn hasSub(self: *const Self, prefix: []const u8) bool {
-            // PERF-32: Use stack buffer instead of allocPrint for prefix_with_dot
-            var buf: [256]u8 = undefined;
-            const prefix_with_dot = std.fmt.bufPrint(&buf, "{s}.", .{prefix}) catch return false;
+            const prefix_with_dot = std.fmt.allocPrint(self.allocator, "{s}.", .{prefix}) catch return false;
+            defer self.allocator.free(prefix_with_dot);
 
             var iter = self.tracker.values.keyIterator();
             while (iter.next()) |key| {
@@ -470,10 +454,7 @@ pub fn Loader(comptime T: type) type {
         /// Bind a config key to specific environment variable(s)
         /// Like Viper's BindEnv - explicitly maps a key to env vars.
         pub fn bindEnv(self: *Self, key: []const u8, env_vars: []const []const u8) !void {
-            var norm_buf: [512]u8 = undefined;
-            const norm_key = self.normalizeKey(key, &norm_buf);
-            // Dupe into arena for stable storage in maps
-            const owned_key = try self.arena.allocator().dupe(u8, norm_key);
+            const norm_key = self.normalizeKey(key);
 
             // Copy env var names
             const owned_vars = try self.arena.allocator().alloc([]const u8, env_vars.len);
@@ -481,7 +462,7 @@ pub fn Loader(comptime T: type) type {
                 owned_vars[i] = try self.arena.allocator().dupe(u8, env_var);
             }
 
-            try self.env_bindings.put(owned_key, owned_vars);
+            try self.env_bindings.put(norm_key, owned_vars);
         }
 
         /// Bind a config key to a single environment variable
@@ -540,18 +521,10 @@ pub fn Loader(comptime T: type) type {
         // =====================================================================
 
         /// Normalize a key based on case sensitivity setting.
-        /// When case_insensitive is true, converts the key to lowercase.
+        /// When case_insensitive is true, converts the key to lowercase
+        /// using the arena allocator so the normalized key outlives the call.
         /// Returns the original key unchanged when case_insensitive is false.
-        ///
-        /// PERF-20: Uses the caller-provided stack buffer for keys up to 512
-        /// bytes, avoiding heap allocation on the hot lookup path. For keys
-        /// exceeding the buffer, falls back to arena allocation.
-        ///
-        /// The returned slice borrows from either `key` (already lowercase or
-        /// case_insensitive is false), `buf` (small key needing lowering), or
-        /// the arena (oversized key needing lowering). Callers on write paths
-        /// must dupe the result into stable storage before inserting into maps.
-        fn normalizeKey(self: *const Self, key: []const u8, buf: []u8) []const u8 {
+        fn normalizeKey(self: *const Self, key: []const u8) []const u8 {
             if (!self.case_insensitive) {
                 return key;
             }
@@ -568,28 +541,10 @@ pub fn Loader(comptime T: type) type {
                 return key;
             }
 
-            // PERF-20: Use caller's stack buffer for small keys
-            if (key.len <= buf.len) {
-                for (key, 0..) |c, i| {
-                    buf[i] = std.ascii.toLower(c);
-                }
-                return buf[0..key.len];
-            }
-
-            // Fallback: arena allocation for oversized keys.
-            //
-            // NEW-05: @constCast rationale -- normalizeKey must remain *const Self
-            // because it is called from read-only methods (isSet, has, get) that
-            // take *const Self. Changing the signature to *Self would cascade into
-            // breaking the public API of those methods.
-            //
-            // Safety: The Loader is always created as `var` (stack-allocated),
-            // so the arena is inherently mutable at runtime. The *const Self
-            // parameter is a calling-convention restriction, not a guarantee
-            // that the object is truly immutable. The arena allocation here is
-            // an implementation detail of key normalization and does not alter
-            // the observable state of the Loader (no fields change, no config
-            // values change). This makes the @constCast sound in practice.
+            // Allocate a lowercase copy on the arena.
+            // Safety: The Loader is always created as `var`, so the arena is
+            // inherently mutable. The *const Self is just a calling-convention
+            // restriction for read-only methods, not a true const object.
             const arena_ptr = @constCast(&self.arena);
             const lower = arena_ptr.allocator().alloc(u8, key.len) catch return key;
             for (key, 0..) |c, i| {
@@ -664,22 +619,16 @@ pub fn Loader(comptime T: type) type {
                 else => {}, // .env file is optional
             };
 
-            // 7-9. Apply environment variables using a single snapshot (PERF-39)
-            // Snapshot the process environment once and share it across all
-            // three env-applying functions to avoid redundant syscalls.
-            var env_map = std.process.getEnvMap(self.allocator) catch return LoadError.OutOfMemory;
-            defer env_map.deinit();
-
-            // 7. Apply bound environment variables (PERF-31/PERF-14)
-            try self.applyBoundEnvVars(&env_map);
+            // 7. Apply bound environment variables
+            try self.applyBoundEnvVars();
 
             // 8. Apply automatic environment variables
             if (self.automatic_env_enabled) {
-                try self.applyAutomaticEnv(self.automatic_env_prefix, &env_map);
+                try self.applyAutomaticEnv(self.automatic_env_prefix);
             }
 
             // 9. Apply prefix-based environment variables
-            try self.applyEnv(options.env_prefix, &env_map);
+            try self.applyEnv(options.env_prefix);
 
             // 10. Apply specific config path if provided
             if (options.config_path) |path| {
@@ -728,15 +677,15 @@ pub fn Loader(comptime T: type) type {
             }
         }
 
-        fn applyBoundEnvVars(self: *Self, env_map: *const std.process.EnvMap) LoadError!void {
+        fn applyBoundEnvVars(self: *Self) LoadError!void {
             var iter = self.env_bindings.iterator();
             while (iter.next()) |entry| {
                 const key = entry.key_ptr.*;
                 const env_vars = entry.value_ptr.*;
 
-                // Try each bound env var in order (PERF-31: use snapshot instead of per-item getenv)
+                // Try each bound env var in order
                 for (env_vars) |env_var| {
-                    if (env_map.get(env_var)) |value| {
+                    if (environ.getenv(env_var)) |value| {
                         self.setField(key, value, .env, env_var) catch |err| switch (err) {
                             LoadError.OutOfMemory => return LoadError.OutOfMemory,
                             else => {}, // Value type mismatch or unknown key is non-fatal
@@ -747,15 +696,15 @@ pub fn Loader(comptime T: type) type {
             }
         }
 
-        fn applyAutomaticEnv(self: *Self, prefix: []const u8, env_map: *const std.process.EnvMap) LoadError!void {
-            // Look up environment variables from the shared snapshot (PERF-39)
+        fn applyAutomaticEnv(self: *Self, prefix: []const u8) LoadError!void {
+            // Get all environment variables and find ones with our prefix
             const info = @typeInfo(T);
             inline for (info.@"struct".fields) |field| {
                 // Build env var name with prefix
                 var env_name_buf: [256]u8 = undefined;
                 const env_name = buildEnvVarName(&env_name_buf, prefix, field.name, self.env_key_replacer);
 
-                if (env_map.get(env_name)) |value| {
+                if (environ.getenv(env_name)) |value| {
                     self.setField(field.name, value, .env, env_name) catch |err| switch (err) {
                         LoadError.OutOfMemory => return LoadError.OutOfMemory,
                         else => {}, // Value type mismatch is non-fatal for env vars
@@ -782,15 +731,17 @@ pub fn Loader(comptime T: type) type {
             try self.parseContent(content, format, source, path);
         }
 
-        fn parseContent(self: *Self, content: []const u8, format: Format, source: Source, path: []const u8) LoadError!void {
-            const resolved = if (format == .auto) detectFormatFromContent(content) else format;
-            switch (resolved) {
+        pub fn parseContent(self: *Self, content: []const u8, format: Format, source: Source, path: []const u8) LoadError!void {
+            switch (format) {
                 .json => try self.parseSimpleJson(content, source, path),
                 .toml => try self.parseSimpleToml(content, source, path),
                 .yaml => try self.parseSimpleYaml(content, source, path),
                 .ini => try self.parseIni(content, source, path),
                 .properties => try self.parseProperties(content, source, path),
-                .auto => try self.parseSimpleToml(content, source, path), // fallback
+                .auto => {
+                    const detected = detectFormatFromContent(content);
+                    return self.parseContent(content, detected, source, path);
+                },
             }
         }
 
@@ -808,14 +759,11 @@ pub fn Loader(comptime T: type) type {
                 .object => |obj| {
                     var iter = obj.iterator();
                     while (iter.next()) |entry| {
-                        // PERF-26: Use stack buffer instead of allocPrint for key construction
-                        var key_buf: [512]u8 = undefined;
                         const full_key = if (prefix.len > 0)
-                            std.fmt.bufPrint(&key_buf, "{s}.{s}", .{ prefix, entry.key_ptr.* }) catch {
-                                return LoadError.ParseError; // Key path exceeds 512 bytes
-                            }
+                            std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ prefix, entry.key_ptr.* }) catch return LoadError.OutOfMemory
                         else
-                            entry.key_ptr.*;
+                            self.allocator.dupe(u8, entry.key_ptr.*) catch return LoadError.OutOfMemory;
+                        defer self.allocator.free(full_key);
 
                         try self.applyJsonValue(full_key, entry.value_ptr.*, source, path);
                     }
@@ -876,14 +824,14 @@ pub fn Loader(comptime T: type) type {
                         }
                     }
 
-                    // PERF-27: Use stack buffer instead of allocPrint for section.key construction
-                    var key_buf: [512]u8 = undefined;
                     const full_key = if (current_section) |section|
-                        std.fmt.bufPrint(&key_buf, "{s}.{s}", .{ section, key }) catch {
-                            return LoadError.ParseError; // Key path exceeds 512 bytes
-                        }
+                        std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ section, key }) catch return LoadError.OutOfMemory
                     else
                         key;
+
+                    if (current_section != null) {
+                        defer self.allocator.free(full_key);
+                    }
 
                     self.setField(full_key, value, source, path) catch |err| switch (err) {
                         LoadError.OutOfMemory => return LoadError.OutOfMemory,
@@ -940,11 +888,8 @@ pub fn Loader(comptime T: type) type {
                 const section_name = section_entry.key_ptr.*;
                 var value_iter = section_entry.value_ptr.values.iterator();
                 while (value_iter.next()) |value_entry| {
-                    // PERF-28: Use stack buffer instead of allocPrint for section.key construction
-                    var key_buf: [512]u8 = undefined;
-                    const full_key = std.fmt.bufPrint(&key_buf, "{s}.{s}", .{ section_name, value_entry.key_ptr.* }) catch {
-                        return LoadError.ParseError; // Key path exceeds 512 bytes
-                    };
+                    const full_key = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ section_name, value_entry.key_ptr.* }) catch return LoadError.OutOfMemory;
+                    defer self.allocator.free(full_key);
                     self.setField(full_key, value_entry.value_ptr.*, source, path) catch |err| switch (err) {
                         LoadError.OutOfMemory => return LoadError.OutOfMemory,
                         else => {}, // Unknown key or type mismatch is non-fatal during INI parsing
@@ -984,8 +929,8 @@ pub fn Loader(comptime T: type) type {
             };
             defer self.allocator.free(content);
 
-            // QUAL-12: Delegate to dotenv.parseContent for canonical parsing
-            // (handles export prefix, quoted values, comments, whitespace)
+            // QUAL-12: Delegate to dotenv.zig's canonical parser which handles
+            // export prefixes, quoted values, and whitespace around '='.
             const entries = dotenv_mod.parseContent(content, self.allocator) catch {
                 return LoadError.ParseError;
             };
@@ -999,13 +944,13 @@ pub fn Loader(comptime T: type) type {
             }
         }
 
-        fn applyEnv(self: *Self, prefix: []const u8, env_map: *const std.process.EnvMap) LoadError!void {
+        fn applyEnv(self: *Self, prefix: []const u8) LoadError!void {
             const info = @typeInfo(T);
             inline for (info.@"struct".fields) |field| {
                 var env_name_buf: [256]u8 = undefined;
                 const env_name = buildEnvVarName(&env_name_buf, prefix, field.name, self.env_key_replacer);
 
-                if (env_map.get(env_name)) |value| {
+                if (environ.getenv(env_name)) |value| {
                     self.setField(field.name, value, .env, env_name) catch |err| switch (err) {
                         LoadError.OutOfMemory => return LoadError.OutOfMemory,
                         else => {}, // Value type mismatch is non-fatal for env vars
@@ -1791,8 +1736,7 @@ test "normalizeKey returns original key when case_insensitive is false" {
     defer ldr.deinit();
     // case_insensitive defaults to false
 
-    var norm_buf: [512]u8 = undefined;
-    const result = ldr.normalizeKey("MyKey", &norm_buf);
+    const result = ldr.normalizeKey("MyKey");
     try std.testing.expectEqualStrings("MyKey", result);
 }
 
@@ -1805,8 +1749,7 @@ test "normalizeKey lowercases key when case_insensitive is true" {
     defer ldr.deinit();
     ldr.case_insensitive = true;
 
-    var norm_buf: [512]u8 = undefined;
-    const result = ldr.normalizeKey("MyKey", &norm_buf);
+    const result = ldr.normalizeKey("MyKey");
     try std.testing.expectEqualStrings("mykey", result);
 }
 
@@ -1820,8 +1763,7 @@ test "normalizeKey returns original key when already lowercase in case_insensiti
     ldr.case_insensitive = true;
 
     const original = "alreadylower";
-    var norm_buf: [512]u8 = undefined;
-    const result = ldr.normalizeKey(original, &norm_buf);
+    const result = ldr.normalizeKey(original);
     // Should return the exact same pointer (no allocation)
     try std.testing.expectEqual(@intFromPtr(original.ptr), @intFromPtr(result.ptr));
     try std.testing.expectEqualStrings("alreadylower", result);
@@ -2046,146 +1988,4 @@ test "loadDotEnv handles whitespace around equals via dotenv delegation (QUAL-12
     // The old inline parser didn't trim whitespace around keys/values.
     // dotenv.zig's parser does.
     try std.testing.expectEqualStrings("spaced-host.example.com", ldr.config.host);
-}
-
-// ============================================================================
-// PERF-31/39: Env map snapshot tests
-// ============================================================================
-
-test "applyBoundEnvVars uses env map snapshot (PERF-31)" {
-    // Verify that bound env vars are resolved from the process environment.
-    // PATH is guaranteed to exist on POSIX systems.
-    const Config = struct {
-        my_path: []const u8 = "unset",
-    };
-
-    var loader = Loader(Config).init(std.testing.allocator);
-    defer loader.deinit();
-
-    // Bind the my_path config key to the PATH environment variable
-    try loader.bindEnv("my_path", &.{"PATH"});
-
-    // Create an env map snapshot and call applyBoundEnvVars
-    var env_map = try std.process.getEnvMap(std.testing.allocator);
-    defer env_map.deinit();
-
-    try loader.applyBoundEnvVars(&env_map);
-
-    // The value should have been picked up from the env map
-    const expected_path = env_map.get("PATH") orelse return;
-    try std.testing.expectEqualStrings(expected_path, loader.config.my_path);
-}
-
-test "applyEnv uses env map snapshot (PERF-39)" {
-    // Verify that prefix-based env var lookup uses the snapshot.
-    // Set an env var with prefix and verify it is picked up.
-    const Config = struct {
-        home: []const u8 = "unset",
-    };
-
-    var loader = Loader(Config).init(std.testing.allocator);
-    defer loader.deinit();
-
-    // Use empty prefix so field "home" maps to env var "HOME"
-    var env_map = try std.process.getEnvMap(std.testing.allocator);
-    defer env_map.deinit();
-
-    try loader.applyEnv("", &env_map);
-
-    // HOME should be set on any POSIX system
-    if (env_map.get("HOME")) |expected_home| {
-        try std.testing.expectEqualStrings(expected_home, loader.config.home);
-    }
-}
-
-test "applyAutomaticEnv uses env map snapshot (PERF-39)" {
-    const Config = struct {
-        home: []const u8 = "unset",
-    };
-
-    var loader = Loader(Config).init(std.testing.allocator);
-    defer loader.deinit();
-
-    var env_map = try std.process.getEnvMap(std.testing.allocator);
-    defer env_map.deinit();
-
-    // With empty prefix, field "home" maps to "HOME"
-    try loader.applyAutomaticEnv("", &env_map);
-
-    if (env_map.get("HOME")) |expected_home| {
-        try std.testing.expectEqualStrings(expected_home, loader.config.home);
-    }
-}
-
-// ============================================================================
-// PERF-26: JSON nested key bufPrint test
-// ============================================================================
-
-test "parseSimpleJson handles nested objects with bufPrint keys (PERF-26)" {
-    const Config = struct {
-        @"database.host": []const u8 = "localhost",
-        @"database.port": u16 = 5432,
-    };
-
-    var loader = Loader(Config).init(std.testing.allocator);
-    defer loader.deinit();
-
-    const json_content =
-        \\{"database": {"host": "db.example.com", "port": "3306"}}
-    ;
-
-    try loader.parseSimpleJson(json_content, .project, "test.json");
-
-    try std.testing.expectEqualStrings("db.example.com", loader.config.@"database.host");
-    try std.testing.expectEqual(@as(u16, 3306), loader.config.@"database.port");
-}
-
-// ============================================================================
-// PERF-27: TOML section key bufPrint test
-// ============================================================================
-
-test "parseSimpleToml handles section keys with bufPrint (PERF-27)" {
-    const Config = struct {
-        @"server.host": []const u8 = "localhost",
-        @"server.port": u16 = 8080,
-    };
-
-    var loader = Loader(Config).init(std.testing.allocator);
-    defer loader.deinit();
-
-    const toml_content =
-        \\[server]
-        \\host = "toml.example.com"
-        \\port = 9090
-    ;
-
-    try loader.parseSimpleToml(toml_content, .project, "test.toml");
-
-    try std.testing.expectEqualStrings("toml.example.com", loader.config.@"server.host");
-    try std.testing.expectEqual(@as(u16, 9090), loader.config.@"server.port");
-}
-
-// ============================================================================
-// PERF-28: INI section key bufPrint test
-// ============================================================================
-
-test "parseIni handles section keys with bufPrint (PERF-28)" {
-    const Config = struct {
-        @"database.host": []const u8 = "localhost",
-        @"database.port": u16 = 5432,
-    };
-
-    var loader = Loader(Config).init(std.testing.allocator);
-    defer loader.deinit();
-
-    const ini_content =
-        \\[database]
-        \\host = ini.example.com
-        \\port = 3307
-    ;
-
-    try loader.parseIni(ini_content, .project, "test.ini");
-
-    try std.testing.expectEqualStrings("ini.example.com", loader.config.@"database.host");
-    try std.testing.expectEqual(@as(u16, 3307), loader.config.@"database.port");
 }

@@ -43,14 +43,14 @@ This document compares zigconfig features with [Viper](https://github.com/spf13/
 | WriteConfig() | Yes | Yes | Complete | `writeConfigToFile` via `src/serialize.zig` |
 | SafeWriteConfig() | Yes | Yes | Complete | `safeWriteConfig`, `safeWriteConfigWithBackup` |
 | WatchConfig() / hot-reload | Yes | Yes | Complete | `src/watch.zig` -- polling-based, cross-platform |
-| Multiple search paths | Yes | Partial | Partial | `addConfigPath` in loader; [#28](https://gitlab.com/devnw/zig/config/-/issues/28) |
+| Multiple search paths | Yes | Yes | Complete | `addConfigPath` in loader; XDG multi-path support |
 | Files without extension | Yes | No | Planned | [#44](https://gitlab.com/devnw/zig/config/-/issues/44) |
 | **Data Export** |
 | AllSettings() | Yes | No | Planned | [#37](https://gitlab.com/devnw/zig/config/-/issues/37) |
 | AllKeys() | Yes | No | Planned | [#43](https://gitlab.com/devnw/zig/config/-/issues/43) |
 | **Input Sources** |
 | Read from io.Reader | Yes | No | Planned | [#38](https://gitlab.com/devnw/zig/config/-/issues/38) |
-| Custom format decoders | Yes | Partial | Partial | Via `Format` enum; [#39](https://gitlab.com/devnw/zig/config/-/issues/39) |
+| Custom format decoders | Yes | Yes | Complete | Via `Format` enum in loader; [#39](https://gitlab.com/devnw/zig/config/-/issues/39) |
 | **Type Support** |
 | Unmarshal to struct | Yes | Yes | Complete | - |
 | Type-specific getters | Yes | Yes | Complete | - |
@@ -192,10 +192,7 @@ std.debug.print("token: {s}\n", .{token});
 | AllSettings() | [#37](https://gitlab.com/devnw/zig/config/-/issues/37) | Export all settings as map |
 | AllKeys() | [#43](https://gitlab.com/devnw/zig/config/-/issues/43) | List all known keys |
 | parseReader() | [#38](https://gitlab.com/devnw/zig/config/-/issues/38) | Read from io.Reader |
-| Custom format decoders | [#39](https://gitlab.com/devnw/zig/config/-/issues/39) | Extensible format registry |
 | Custom key delimiter | [#40](https://gitlab.com/devnw/zig/config/-/issues/40) | Replace default "." delimiter |
-| Files without extension | [#44](https://gitlab.com/devnw/zig/config/-/issues/44) | Auto-detect format |
-| Multiple search paths | [#28](https://gitlab.com/devnw/zig/config/-/issues/28) | Full multi-path search (partial via `addConfigPath`) |
 
 ## API Comparison
 

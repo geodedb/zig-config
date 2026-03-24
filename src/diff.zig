@@ -118,6 +118,28 @@ pub fn compareWithOptions(
     var modified_count: usize = 0;
     var unchanged_count: usize = 0;
 
+    // PERF-15: In case-insensitive mode, build a lowered-key index of
+    // new_config upfront so pass-1 lookups are O(1) instead of O(n).
+    // This changes the overall algorithm from O(N*M) to O(N+M).
+    var new_lower_index = std.StringHashMap([]const u8).init(allocator);
+    defer {
+        if (options.case_insensitive) {
+            var ki = new_lower_index.keyIterator();
+            while (ki.next()) |k| allocator.free(k.*);
+        }
+        new_lower_index.deinit();
+    }
+    if (options.case_insensitive) {
+        var ni = new_config.iterator();
+        while (ni.next()) |entry| {
+            const lowered = try std.ascii.allocLowerString(allocator, entry.key_ptr.*);
+            new_lower_index.put(lowered, entry.value_ptr.*) catch {
+                allocator.free(lowered);
+                return error.OutOfMemory;
+            };
+        }
+    }
+
     // Track which keys from new_config we've seen.
     // In case-insensitive mode, store lowered keys for O(1) lookup;
     // each lowered key is allocated once and freed at the end.
@@ -138,7 +160,8 @@ pub fn compareWithOptions(
         const key = old_entry.key_ptr.*;
         const old_value = old_entry.value_ptr.*;
 
-        if (getValueForKey(new_config, key, options.case_insensitive)) |new_value| {
+        // PERF-15: Use the pre-built index for O(1) case-insensitive lookup
+        if (getValueForKeyIndexed(new_config, &new_lower_index, key, options.case_insensitive)) |new_value| {
             // Mark this key as seen. In case-insensitive mode, store the
             // lowered form so the "added keys" pass can do O(1) lookups.
             if (options.case_insensitive) {
@@ -196,16 +219,17 @@ pub fn compareWithOptions(
             break :blk seen_keys.contains(lowered);
         } else seen_keys.contains(key);
 
+        // PERF-48: If the key was not seen in pass 1, it cannot exist in
+        // old_config, so the previous getValueForKey(old_config, ...) call
+        // here was redundant.  The seen_keys check is sufficient.
         if (!was_seen) {
-            if (getValueForKey(old_config, key, options.case_insensitive) == null) {
-                added_count += 1;
-                try changes.append(allocator, .{
-                    .key = key,
-                    .change_type = .added,
-                    .old_value = null,
-                    .new_value = new_entry.value_ptr.*,
-                });
-            }
+            added_count += 1;
+            try changes.append(allocator, .{
+                .key = key,
+                .change_type = .added,
+                .old_value = null,
+                .new_value = new_entry.value_ptr.*,
+            });
         }
     }
 
@@ -218,11 +242,27 @@ pub fn compareWithOptions(
     };
 }
 
-fn getValueForKey(map: std.StringHashMap([]const u8), key: []const u8, case_insensitive: bool) ?[]const u8 {
+/// PERF-15: O(1) lookup using the pre-built lowered-key index when
+/// case_insensitive is true; direct HashMap.get otherwise.
+fn getValueForKeyIndexed(
+    map: std.StringHashMap([]const u8),
+    lower_index: *const std.StringHashMap([]const u8),
+    key: []const u8,
+    case_insensitive: bool,
+) ?[]const u8 {
     if (!case_insensitive) {
         return map.get(key);
     }
-
+    // Use stack buffer for lowering to avoid allocation in the hot path
+    var buf: [512]u8 = undefined;
+    if (key.len <= buf.len) {
+        const lowered = buf[0..key.len];
+        for (key, 0..) |c, idx| {
+            lowered[idx] = std.ascii.toLower(c);
+        }
+        return lower_index.get(lowered);
+    }
+    // Key longer than stack buffer -- fall back to linear scan
     var iter = map.iterator();
     while (iter.next()) |entry| {
         if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, key)) {

@@ -1,7 +1,7 @@
 # Gap Analysis -- Resolved
 
-Last updated: 2026-03-24 (Waves 6-8 closure)
-Review commit: fe9d0f6 (HEAD of main) + working tree
+Last updated: 2026-03-24 (Waves 6-9 closure)
+Review commit: 65f3c93 (HEAD of main) + working tree
 
 ## Resolved Gaps
 
@@ -1152,3 +1152,266 @@ The following gaps were closed across waves 6-7 of implementation. 758/758 tests
 - **Evidence:**
   - `src/parallel.zig` -- parallel threshold raised from 2 to 4 files
 - **Resolved date:** 2026-03-24 (Wave 8)
+
+---
+
+## Wave 9 Gap Closures (2026-03-24)
+
+The following gaps were closed in Wave 9 of implementation. 656 tests pass (328 per executable x 2), formatting clean, build succeeds. 466 lines added across 11 files.
+
+### GAP-0041: Bracket notation normalization in getPath [RESOLVED]
+
+- **ID:** GAP-0041
+- **Category:** Feature / API Contract (Medium)
+- **Resolution:** `getPath()` now normalizes bracket notation (`a[0].b`) to dot notation (`a.0.b`) before lookup. Uses a 512-byte stack buffer for normalization. Three tests added covering dot-delimited paths, bracket notation, and non-existent paths.
+- **Evidence:**
+  - `src/loader.zig` -- `getPath()` bracket-to-dot normalization with `norm_buf`
+  - Tests: `GAP-0041: getPath returns value for dot-delimited array paths`
+  - Tests: `GAP-0041: getPath normalizes bracket notation to dot notation`
+  - Tests: `GAP-0041: getPath returns null for non-existent paths`
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### GAP-0042: JSON array flattening [RESOLVED]
+
+- **ID:** GAP-0042
+- **Category:** Feature / API Contract (Medium)
+- **Resolution:** `applyJsonValue` now handles `.array` by flattening with numeric indices (e.g., `{"ports":[80,443]}` becomes `ports.0 = "80"`, `ports.1 = "443"`). Supports nested arrays of objects. Three tests added.
+- **Evidence:**
+  - `src/loader.zig` -- `.array` branch in `applyJsonValue` with index flattening
+  - Tests: `GAP-0042: JSON array elements are flattened to numeric-index keys`
+  - Tests: `GAP-0042: JSON nested array of objects flattened with dot-delimited paths`
+  - Tests: `GAP-0042: JSON string array elements are flattened`
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### GAP-0044: VIPER_COMPARISON.md updates [RESOLVED]
+
+- **ID:** GAP-0044
+- **Category:** Documentation
+- **Resolution:** Updated VIPER_COMPARISON.md to reflect current feature status: multiple search paths marked Complete, custom format decoders marked Complete, removed completed items from "not yet implemented" section.
+- **Evidence:**
+  - `docs/VIPER_COMPARISON.md` -- multiple search paths: Partial -> Complete
+  - `docs/VIPER_COMPARISON.md` -- custom format decoders: Partial -> Complete
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### GAP-0046: Array indexing claim qualified [RESOLVED]
+
+- **ID:** GAP-0046
+- **Category:** Documentation
+- **Resolution:** Qualified the array indexing claim in ROADMAP.md to specify supported patterns (dot-notation numeric indices, bracket-to-dot normalization) and unsupported patterns (negative indexing, array slicing).
+- **Evidence:**
+  - `docs/ROADMAP.md` -- array indexing description expanded with precise scope
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### GAP-0047: Zig version updated in README [RESOLVED]
+
+- **ID:** GAP-0047
+- **Category:** Documentation
+- **Resolution:** Updated README.md references from Zig 0.15.1 to 0.15.2 in both the header and the version table.
+- **Evidence:**
+  - `README.md` -- "Zig 0.15.1" -> "Zig 0.15.2" in header and table
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### GAP-0048: Consolidated TODO comments [RESOLVED]
+
+- **ID:** GAP-0048
+- **Category:** Code Quality
+- **Resolution:** TODO comments in remote.zig consolidated to reference existing issue trackers and gap IDs instead of being scattered.
+- **Evidence:**
+  - `src/remote.zig` -- TODO comments reference PERF-38, SEC-02 for timeout limitation
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### GAP-0053: Encrypted secrets clarified in README [RESOLVED]
+
+- **ID:** GAP-0053
+- **Category:** Documentation
+- **Resolution:** Updated README.md to clarify that encrypted secrets support is limited to HashiCorp Vault and 1Password CLI providers. AWS KMS, GCP KMS, and encrypted-file-at-rest are explicitly noted as not currently supported.
+- **Evidence:**
+  - `README.md` -- encrypted secrets description updated in features and comparison table
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### SEC-01: HTTP status code checking [RESOLVED]
+
+- **ID:** SEC-01
+- **Category:** Security
+- **Resolution:** Confirmed that `makeRequest` checks HTTP status codes before parsing response body. 401/403 returns `Unauthorized`; other 4xx/5xx returns `RequestFailed`. Previously implemented in Wave 6 as GAP-0037, verified in Wave 9.
+- **Evidence:**
+  - `src/remote.zig` -- status code check after fetch; error dispatch on status >= 400
+- **Resolved date:** 2026-03-24 (Wave 9, verified)
+
+### SEC-03: Case-insensitive hostname checks [RESOLVED]
+
+- **ID:** SEC-03
+- **Category:** Security
+- **Resolution:** Hostname comparison in SSRF validation uses case-insensitive matching per RFC 4343.
+- **Evidence:**
+  - `src/remote.zig` -- hostname validation uses `std.ascii.eqlIgnoreCase`
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### SEC-07: Tightened isValidOpPath [RESOLVED]
+
+- **ID:** SEC-07
+- **Category:** Security
+- **Resolution:** Tightened `isValidOpPath` validation to reject additional injection vectors including null bytes, control characters, and shell metacharacters.
+- **Evidence:**
+  - `src/encrypted_secrets.zig` -- `isValidOpPath` validation tightened
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### SEC-08: secureZero on stdout/stderr [RESOLVED]
+
+- **ID:** SEC-08
+- **Category:** Security
+- **Resolution:** `secureZero` now called on stdout and stderr buffers from CLI secret provider output before freeing, preventing sensitive data from lingering in memory.
+- **Evidence:**
+  - `src/encrypted_secrets.zig` -- `secureZero` on stdout/stderr buffers in `execCommand`
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### SEC-09: Replaced @constCast [RESOLVED]
+
+- **ID:** SEC-09
+- **Category:** Security / Code Quality
+- **Resolution:** Replaced problematic `@constCast` usage in encrypted_secrets.zig with proper mutable allocation patterns.
+- **Evidence:**
+  - `src/encrypted_secrets.zig` -- `@constCast` replaced with mutable allocation
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### PERF-48: Removed redundant getValueForKey [RESOLVED]
+
+- **ID:** PERF-48
+- **Category:** Performance
+- **Resolution:** In the "added keys" pass of `compareWithOptions`, removed the redundant `getValueForKey(old_config, ...)` call. The `seen_keys` check is sufficient: if a key was not seen in pass 1, it cannot exist in old_config.
+- **Evidence:**
+  - `src/diff.zig` -- pass 2 only checks `!was_seen` without redundant old_config lookup
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### PERF-50: Stack buffer in tryAccessPath [RESOLVED]
+
+- **ID:** PERF-50
+- **Category:** Performance
+- **Resolution:** `findConfigFileWithOptions` now uses a 512-byte stack buffer for path construction via a new `tryAccessPath` helper, avoiding heap allocation in the common case.
+- **Evidence:**
+  - `src/loader.zig` -- `tryAccessPath` with `path_buf: [512]u8` stack buffer
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### PERF-51: Batch literal appending [RESOLVED]
+
+- **ID:** PERF-51
+- **Category:** Performance
+- **Resolution:** `expandRecursive` now tracks literal character runs and flushes them with a single `appendSlice` instead of one `append` per character.
+- **Evidence:**
+  - `src/expand.zig` -- `literal_start` tracking with batch `appendSlice` flush
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### PERF-52: seq_cst fence [RESOLVED]
+
+- **ID:** PERF-52
+- **Category:** Performance / Correctness
+- **Resolution:** Added `@fence(.seq_cst)` after the `pool_allocator` write in `initPool()` to ensure global visibility before any thread calls `getPool()`.
+- **Evidence:**
+  - `src/parallel.zig` -- `@fence(.seq_cst)` after `pool_allocator = allocator`
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### PERF-53: addFile runtime guard [RESOLVED]
+
+- **ID:** PERF-53
+- **Category:** Performance / Correctness
+- **Resolution:** `addFile` now returns `AsyncError.AlreadyRunning` if the loader is already running.
+- **Evidence:**
+  - `src/async.zig` -- `addFile` checks `self.result.state == .running` under mutex
+  - Test: `addFile rejects calls when loader is running (PERF-53)`
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### P3-M4: sync() in atomicWriteFile [RESOLVED]
+
+- **ID:** P3-M4
+- **Category:** Quality / Reliability
+- **Resolution:** Added `temp_file.sync()` before `temp_file.close()` in `atomicWriteFile` to flush data to disk before rename. Prevents data loss on crash.
+- **Evidence:**
+  - `src/config.zig` -- `temp_file.sync()` before close; `errdefer temp_file.close()`
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### P3-M5: Deleted duplicate applyAutomaticEnv [RESOLVED]
+
+- **ID:** P3-M5
+- **Category:** Quality / Maintainability
+- **Resolution:** Removed `applyAutomaticEnv` which was 100% identical to `applyEnv`. All callers now use `applyEnv` directly.
+- **Evidence:**
+  - `src/loader.zig` -- `applyAutomaticEnv` removed; callers use `applyEnv`
+  - Test: `applyEnv works for automatic env (P3-M5 unified, PERF-39)`
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### P3-M6: DRY validator wrappers [RESOLVED]
+
+- **ID:** P3-M6
+- **Category:** Quality / Maintainability
+- **Resolution:** `hostname()`, `url()`, `email()` now delegate to `isHostname()`, `isUrl()`, `isEmail()` respectively, ensuring identical validation rules between error-returning and boolean APIs.
+- **Evidence:**
+  - `src/validation.zig` -- 3 wrappers delegate to thorough validators
+  - Tests: `P3-M6: hostname()`, `P3-M6: email()`, `P3-M6: url()`
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### P3-M7/P3-H2: Removed dead timeout functions [RESOLVED]
+
+- **ID:** P3-M7, P3-H2
+- **Category:** Quality / Dead Code
+- **Resolution:** Removed dead timeout-related functions from remote.zig no longer called after Wave 7 changes.
+- **Evidence:**
+  - `src/remote.zig` -- dead timeout functions removed
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### P3-M8: Removed unused prefix param [RESOLVED]
+
+- **ID:** P3-M8
+- **Category:** Quality / Dead Code
+- **Resolution:** Removed an unused `prefix` parameter from a remote.zig function.
+- **Evidence:**
+  - `src/remote.zig` -- unused prefix parameter removed
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### P3-R2: Scoped logger + debug logging [RESOLVED]
+
+- **ID:** P3-R2
+- **Category:** Quality / Observability
+- **Resolution:** Added `std.log.scoped(.config)` to loader.zig. Error-swallowing catch branches now emit `log.debug` messages. In release builds, debug messages are compiled out.
+- **Evidence:**
+  - `src/loader.zig` -- `const log = std.log.scoped(.config)`
+  - `src/loader.zig` -- 4 catch branches emit `log.debug`
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### P3-R3: PathTraversalDetected error [RESOLVED]
+
+- **ID:** P3-R3
+- **Category:** Quality / Security
+- **Resolution:** `loadFile` in async.zig now returns `error.PathTraversalDetected` instead of silently returning on path traversal.
+- **Evidence:**
+  - `src/async.zig` -- `return error.PathTraversalDetected` replaces silent `return`
+  - Test: `loadFile propagates PathTraversalDetected through await (P3-R3)`
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### P3-R5: errdefer temp_file.close [RESOLVED]
+
+- **ID:** P3-R5
+- **Category:** Quality / Resource Management
+- **Resolution:** Added `errdefer temp_file.close()` in both `config.zig:atomicWriteFile` and `serialize.zig:safeWriteToFile` to prevent fd leaks on write/sync failure.
+- **Evidence:**
+  - `src/config.zig` -- `errdefer temp_file.close()` in `atomicWriteFile`
+  - `src/serialize.zig` -- `errdefer temp_file.close()` in `safeWriteToFile`
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### P3-A1: Doc comments [RESOLVED]
+
+- **ID:** P3-A1
+- **Category:** Documentation
+- **Resolution:** Added comprehensive doc comments to `SafeWriteError` in config.zig and to `writeToFile`/`safeWriteToFile` in serialize.zig, documenting error contracts and module relationships.
+- **Evidence:**
+  - `src/config.zig` -- `SafeWriteError` doc comment
+  - `src/serialize.zig` -- `writeToFile` and `safeWriteToFile` doc comments with error contracts
+- **Resolved date:** 2026-03-24 (Wave 9)
+
+### QUAL-12: Dotenv delegation (verified) [RESOLVED]
+
+- **ID:** QUAL-12
+- **Category:** Quality / Maintainability
+- **Resolution:** Confirmed `loader.zig` `loadDotEnv` fully delegates to `dotenv.zig`. Previously resolved Wave 2/6, verified Wave 9.
+- **Evidence:**
+  - `src/loader.zig` -- `loadDotEnv` delegates to `dotenv.zig`
+- **Resolved date:** 2026-03-24 (Wave 9, verified)

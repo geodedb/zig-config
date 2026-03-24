@@ -61,8 +61,16 @@ fn expandRecursive(input: []const u8, allocator: Allocator, options: ExpandOptio
     errdefer result.deinit();
 
     var i: usize = 0;
+    // PERF-51: Track start of literal runs so we can flush with a single
+    // appendSlice instead of one append per character.
+    var literal_start: usize = 0;
     while (i < input.len) {
         if (input[i] == '$') {
+            // Flush any accumulated literal characters
+            if (i > literal_start) {
+                try result.appendSlice(input[literal_start..i]);
+            }
+
             if (i + 1 < input.len and input[i + 1] == '{') {
                 // ${VAR} syntax
                 const start = i + 2;
@@ -84,6 +92,7 @@ fn expandRecursive(input: []const u8, allocator: Allocator, options: ExpandOptio
                 }
 
                 i = end + 1;
+                literal_start = i;
             } else if (i + 1 < input.len and isVarStartChar(input[i + 1])) {
                 // $VAR syntax
                 const start = i + 1;
@@ -96,19 +105,26 @@ fn expandRecursive(input: []const u8, allocator: Allocator, options: ExpandOptio
                 const value = getEnvValue(var_name, options);
                 try result.appendSlice(value);
                 i = end;
+                literal_start = i;
             } else if (i + 1 < input.len and input[i + 1] == '$') {
                 // $$ escape sequence - literal $
                 try result.append('$');
                 i += 2;
+                literal_start = i;
             } else {
                 // Just a $ character
                 try result.append('$');
                 i += 1;
+                literal_start = i;
             }
         } else {
-            try result.append(input[i]);
             i += 1;
         }
+    }
+
+    // Flush remaining literal characters
+    if (i > literal_start) {
+        try result.appendSlice(input[literal_start..i]);
     }
 
     return result.toOwnedSlice();

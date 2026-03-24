@@ -35,7 +35,6 @@
 //! ```
 
 const std = @import("std");
-const builtin = @import("builtin");
 const mem = std.mem;
 const http = std.http;
 const net = std.net;
@@ -285,8 +284,8 @@ fn isPrivateAddress(host: []const u8) bool {
         return isPrivateAddress(inner);
     }
 
-    // Block localhost variants
-    if (mem.eql(u8, host, "localhost")) return true;
+    // Block localhost variants (case-insensitive per RFC 4343, SEC-03)
+    if (std.ascii.eqlIgnoreCase(host, "localhost")) return true;
     if (mem.eql(u8, host, "::1")) return true;
     if (mem.eql(u8, host, "0.0.0.0")) return true; // INADDR_ANY
 
@@ -297,13 +296,13 @@ fn isPrivateAddress(host: []const u8) bool {
     // Check IPv4 private ranges
     if (isPrivateIPv4(host)) return true;
 
-    // Block metadata service IPs (cloud provider internal)
-    if (mem.eql(u8, host, "metadata.google.internal")) return true;
+    // Block metadata service IPs (case-insensitive per RFC 4343, SEC-03)
+    if (std.ascii.eqlIgnoreCase(host, "metadata.google.internal")) return true;
 
-    // Block common internal hostnames
-    if (mem.endsWith(u8, host, ".local")) return true;
-    if (mem.endsWith(u8, host, ".internal")) return true;
-    if (mem.endsWith(u8, host, ".localhost")) return true;
+    // Block common internal hostnames (case-insensitive per RFC 4343, SEC-03)
+    if (std.ascii.endsWithIgnoreCase(host, ".local")) return true;
+    if (std.ascii.endsWithIgnoreCase(host, ".internal")) return true;
+    if (std.ascii.endsWithIgnoreCase(host, ".localhost")) return true;
 
     return false;
 }
@@ -540,40 +539,9 @@ fn isValidKeyChar(c: u8) bool {
     return false;
 }
 
-fn mapRequestError(err: anyerror) RemoteError {
-    return switch (err) {
-        error.OutOfMemory => RemoteError.OutOfMemory,
-        error.WouldBlock, error.ConnectionTimedOut => RemoteError.Timeout,
-        else => RemoteError.RequestFailed,
-    };
-}
-
-fn applyRequestTimeouts(request: *http.Client.Request, timeout_ms: u32) RemoteError!void {
-    if (timeout_ms == 0) return;
-    const connection = request.connection orelse return RemoteError.ConnectionFailed;
-    const stream = connection.stream_reader.getStream();
-    try setSocketTimeout(stream.handle, timeout_ms);
-}
-
-fn setSocketTimeout(handle: net.Stream.Handle, timeout_ms: u32) RemoteError!void {
-    if (timeout_ms == 0) return;
-
-    if (builtin.os.tag == .windows) {
-        var timeout_val: u32 = timeout_ms;
-        const buf = std.mem.asBytes(&timeout_val);
-        std.posix.setsockopt(handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, buf) catch return RemoteError.RequestFailed;
-        std.posix.setsockopt(handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, buf) catch return RemoteError.RequestFailed;
-        return;
-    }
-
-    var tv = std.posix.timeval{
-        .sec = @intCast(timeout_ms / 1000),
-        .usec = @intCast((timeout_ms % 1000) * 1000),
-    };
-    const buf = std.mem.asBytes(&tv);
-    std.posix.setsockopt(handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, buf) catch return RemoteError.RequestFailed;
-    std.posix.setsockopt(handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, buf) catch return RemoteError.RequestFailed;
-}
+// NOTE: timeout_ms is accepted by EtcdOptions/ConsulOptions but NOT enforced.
+// Zig 0.15's http.Client.fetch() has no timeout configuration.
+// See GAP-0048. Will be wired when Zig's http.Client gains timeout support.
 
 fn buildBasicAuthHeader(
     allocator: Allocator,
@@ -701,6 +669,12 @@ pub const Etcd = struct {
         self.allocator.free(self.cached_uris);
         self.client.deinit();
         self.arena.deinit();
+    }
+
+    /// Reset the arena allocator to reclaim memory without full deinit (PERF-12).
+    /// Useful for long-lived clients that fetch config repeatedly.
+    pub fn resetArena(self: *Etcd) void {
+        _ = self.arena.reset(.retain_capacity);
     }
 
     /// Get a value by key from etcd
@@ -1079,6 +1053,12 @@ pub const Consul = struct {
         self.arena.deinit();
     }
 
+    /// Reset the arena allocator to reclaim memory without full deinit (PERF-12).
+    /// Useful for long-lived clients that fetch config repeatedly.
+    pub fn resetArena(self: *Consul) void {
+        _ = self.arena.reset(.retain_capacity);
+    }
+
     /// Get a value by key from Consul KV store
     /// Security: Validates key to prevent path injection (CWE-74, #73)
     pub fn get(self: *Consul, key: []const u8) RemoteError!?[]const u8 {
@@ -1160,7 +1140,7 @@ pub const Consul = struct {
         const response = self.makeGetRequest(uri) catch return RemoteError.RequestFailed;
         defer self.allocator.free(response);
 
-        return self.parseConsulKVList(response, prefix);
+        return self.parseConsulKVList(response);
     }
 
     /// List all keys with a prefix (keys only, no values)
@@ -1344,8 +1324,7 @@ pub const Consul = struct {
     /// Parse a Consul KV list response using std.json (NEW-07, GAP-0038).
     /// Consul returns: [{"Key":"...","Value":"base64..."},...]
     /// Value is base64-encoded; null Value means empty.
-    fn parseConsulKVList(self: *Consul, response: []const u8, prefix: []const u8) RemoteError!std.StringHashMap([]const u8) {
-        _ = prefix;
+    fn parseConsulKVList(self: *Consul, response: []const u8) RemoteError!std.StringHashMap([]const u8) {
         var result_map = std.StringHashMap([]const u8).init(self.allocator);
         errdefer result_map.deinit();
 
@@ -1540,33 +1519,6 @@ test "Etcd makeRequest includes auth header when credentials set (#81)" {
 // ============================================================================
 // Timeout Tests (#80)
 // ============================================================================
-
-test "setSocketTimeout sets socket-level timeouts (#80)" {
-    // Create a real socket to test timeout setting
-    const stream = net.tcpConnectToAddress(net.Address.initIp4(.{ 127, 0, 0, 1 }, 0)) catch {
-        // If we can't connect, test with a listening socket instead
-        const server = net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
-        const sock = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0) catch return;
-        defer std.posix.close(sock);
-        std.posix.bind(sock, @ptrCast(&server.in.sa), @sizeOf(@TypeOf(server.in.sa))) catch return;
-        // Verify setting timeout does not error
-        setSocketTimeout(sock, 3000) catch |err| {
-            try std.testing.expect(err != RemoteError.RequestFailed);
-            return;
-        };
-        return;
-    };
-    defer stream.close();
-
-    // Setting a non-zero timeout should succeed
-    try setSocketTimeout(stream.handle, 3000);
-}
-
-test "setSocketTimeout zero timeout is a no-op (#80)" {
-    // Zero timeout should return immediately without error
-    // Pass a dummy handle since it should never be used
-    try setSocketTimeout(@as(net.Stream.Handle, 0), 0);
-}
 
 test "Etcd default timeout_ms is 5000" {
     var etcd = try Etcd.init(std.testing.allocator, .{
@@ -2702,4 +2654,41 @@ test "EtcdOptions timeout_ms defaults to 5000 with limitation documented (NEW-08
 test "ConsulOptions timeout_ms defaults to 5000 with limitation documented (NEW-16)" {
     const opts = ConsulOptions{};
     try std.testing.expectEqual(@as(u32, 5000), opts.timeout_ms);
+}
+
+// ============================================================================
+// SEC-03: Case-insensitive hostname blocking (RFC 4343)
+// ============================================================================
+
+test "isPrivateAddress blocks case-insensitive hostnames (SEC-03)" {
+    try std.testing.expect(isPrivateAddress("LOCALHOST"));
+    try std.testing.expect(isPrivateAddress("Localhost"));
+    try std.testing.expect(isPrivateAddress("host.LOCAL"));
+    try std.testing.expect(isPrivateAddress("host.Internal"));
+    try std.testing.expect(isPrivateAddress("METADATA.GOOGLE.INTERNAL"));
+    try std.testing.expect(isPrivateAddress("sub.LOCALHOST"));
+}
+
+// ============================================================================
+// PERF-12: resetArena tests
+// ============================================================================
+
+test "Etcd.resetArena can be called without error (PERF-12)" {
+    var etcd = try Etcd.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer etcd.deinit();
+
+    _ = etcd.arena.allocator().alloc(u8, 64) catch unreachable;
+    etcd.resetArena();
+}
+
+test "Consul.resetArena can be called without error (PERF-12)" {
+    var consul = try Consul.init(std.testing.allocator, .{
+        .security = .{ .block_private_ips = false },
+    });
+    defer consul.deinit();
+
+    _ = consul.arena.allocator().alloc(u8, 64) catch unreachable;
+    consul.resetArena();
 }

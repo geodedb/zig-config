@@ -1,6 +1,6 @@
 # zigconfig
 
-A comprehensive configuration management library for Zig 0.15.1, inspired by [Viper](https://github.com/spf13/viper).
+A comprehensive configuration management library for Zig 0.15.2, inspired by [Viper](https://github.com/spf13/viper).
 
 [![GitLab](https://img.shields.io/badge/GitLab-devnw%2Fzig%2Fconfig-orange)](https://gitlab.com/devnw/zig/config)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -10,7 +10,7 @@ A comprehensive configuration management library for Zig 0.15.1, inspired by [Vi
 | Aspect | Info |
 |--------|------|
 | API Stability | Beta |
-| Zig Version | 0.15.1+ |
+| Zig Version | 0.15.2 |
 | Platforms | Linux, macOS, Windows |
 
 ## Features
@@ -21,7 +21,7 @@ A comprehensive configuration management library for Zig 0.15.1, inspired by [Vi
 - **Cross-platform** - Native paths for Linux, macOS, and Windows
 - **Precedence rules** - override > flags > env > project > user > system > runtime_default > defaults
 - **Secure secrets** - File/stdin only, never flags/env (unlike Viper!)
-- **Encrypted secrets** - AWS KMS, HashiCorp Vault, 1Password integration
+- **Encrypted secrets** - HashiCorp Vault and 1Password CLI providers (AWS KMS, GCP KMS, and encrypted-file-at-rest are not currently supported)
 - **Validation** - Built-in validators for common patterns (email, URL, IPv4, port, etc.)
 - **Provenance tracking** - Know exactly where each value came from (unique to zigconfig)
 - **Command-line flags** - Full flag parsing with FlagParser
@@ -398,7 +398,7 @@ zigconfig has achieved feature parity with [Viper](https://github.com/spf13/vipe
 | | Platform paths | macOS ~/Library, Windows %APPDATA% |
 | | Multiple search paths | Search in multiple directories |
 | **Secrets** | File/stdin only | Secure secret sources |
-| | Encrypted secrets | AWS KMS, Vault, 1Password providers |
+| | Encrypted secrets | Vault, 1Password CLI providers (no AWS/GCP KMS or encrypted-file-at-rest) |
 | | Secure memory | Zeroing sensitive data |
 | **Validation** | Pattern matching | Email, URL, IPv4, hostname, port |
 | | Custom validators | User-defined validation functions |

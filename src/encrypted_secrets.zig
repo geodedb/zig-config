@@ -165,16 +165,21 @@ pub fn isValidOpPath(path: []const u8) bool {
         if (mem.eql(u8, path, allowed)) return true;
     }
 
-    // Allow paths in home directories: ~/.local/bin/op or ~/bin/op
-    // These must end with /op and not contain traversal
-    if (mem.endsWith(u8, path, "/op")) {
-        // Reject path traversal
-        if (mem.indexOf(u8, path, "..") != null) return false;
-
-        // Allow ~/bin/op or ~/.local/bin/op patterns
-        if (mem.startsWith(u8, path, "/home/") or mem.startsWith(u8, path, "/Users/")) {
-            // Ensure it's a bin directory
-            if (mem.indexOf(u8, path, "/bin/op") != null) {
+    // Allow paths in home directories: ~/bin/op or ~/.local/bin/op only.
+    // Security (SEC-07): Restrict to exactly /home/<user>/bin/op or
+    // /home/<user>/.local/bin/op to prevent matches like
+    // /home/user/projects/evil/bin/op.
+    if (mem.indexOf(u8, path, "..") != null) return false;
+    const prefixes = [_][]const u8{ "/home/", "/Users/" };
+    for (prefixes) |prefix| {
+        if (mem.startsWith(u8, path, prefix)) {
+            const after_prefix = path[prefix.len..];
+            const user_end = mem.indexOf(u8, after_prefix, "/") orelse continue;
+            if (user_end == 0) continue;
+            const after_user = after_prefix[user_end..];
+            if (mem.eql(u8, after_user, "/bin/op") or
+                mem.eql(u8, after_user, "/.local/bin/op"))
+            {
                 return true;
             }
         }
@@ -488,11 +493,18 @@ pub const SecretManager = struct {
     }
 
     /// Load a secret from a file
+    /// Security (SEC-09): Uses allocator.dupe instead of @constCast to avoid
+    /// UB on potentially read-only memory returned by readFromFile.
     fn loadFromFile(self: *Self, path: []const u8) SecretError![]u8 {
         const content = secret.readFromFile(path, self.allocator) catch {
             return SecretError.SecretNotFound;
         };
-        return @constCast(content);
+        const mutable = self.allocator.dupe(u8, content) catch {
+            self.allocator.free(content);
+            return SecretError.OutOfMemory;
+        };
+        self.allocator.free(content);
+        return mutable;
     }
 
     /// Load from encrypted file
@@ -704,8 +716,15 @@ pub const SecretManager = struct {
 
         var stdout_buf: std.ArrayList(u8) = .empty;
         var stderr_buf: std.ArrayList(u8) = .empty;
-        defer stdout_buf.deinit(self.allocator);
-        defer stderr_buf.deinit(self.allocator);
+        // Security (SEC-08): Zero buffers before freeing to prevent secret leakage (CWE-316)
+        defer {
+            if (stdout_buf.items.len > 0) secret.secureZero(stdout_buf.items);
+            stdout_buf.deinit(self.allocator);
+        }
+        defer {
+            if (stderr_buf.items.len > 0) secret.secureZero(stderr_buf.items);
+            stderr_buf.deinit(self.allocator);
+        }
 
         var done = std.atomic.Value(bool).init(false);
         var timed_out = std.atomic.Value(bool).init(false);

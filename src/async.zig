@@ -114,8 +114,17 @@ pub fn AsyncLoader(comptime T: type) type {
             self.arena.deinit();
         }
 
-        /// Add a file to load
+        /// Add a file to load.
+        ///
+        /// Must be called **before** `startAsync()`.  Adding files to a
+        /// running loader is a programming error and returns
+        /// `error.AlreadyRunning`.
         pub fn addFile(self: *Self, path: []const u8, format: Format) !void {
+            self.mutex.lock();
+            const state = self.result.state;
+            self.mutex.unlock();
+            if (state == .running) return AsyncError.AlreadyRunning;
+
             const owned_path = try self.arena.allocator().dupe(u8, path);
             try self.files.append(self.allocator, .{
                 .path = owned_path,
@@ -227,8 +236,10 @@ pub fn AsyncLoader(comptime T: type) type {
             _ = self;
 
             // Security: Validate path does not contain traversal sequences (CWE-22, #74)
+            // P3-R3: Return an error instead of silently skipping, so the caller
+            // (loadThreadFn) can surface it via result.state = .failed.
             if (!isPathSafe(path)) {
-                return; // Silently skip for security violations
+                return error.PathTraversalDetected;
             }
 
             const file = openFileReadNoFollow(path) catch {
@@ -496,6 +507,40 @@ test "AsyncResult failed state propagates error through await (NEW-11)" {
     // await() must surface the OOM error, not return a default config
     const result = loader.await();
     try std.testing.expectError(error.OutOfMemory, result);
+}
+
+test "loadFile propagates PathTraversalDetected through await (P3-R3)" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+    };
+
+    var loader = AsyncLoader(Config).init(std.testing.allocator);
+    defer loader.deinit();
+
+    // A path with ".." traversal causes loadFile to return an error,
+    // which loadThreadFn propagates into result.state = .failed.
+    try loader.addFile("../../../etc/passwd", .auto);
+    try loader.startAsync();
+
+    const result = loader.await();
+    try std.testing.expectError(error.PathTraversalDetected, result);
+}
+
+test "addFile rejects calls when loader is running (PERF-53)" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+    };
+
+    var loader = AsyncLoader(Config).init(std.testing.allocator);
+    defer loader.deinit();
+
+    // Simulate running state
+    loader.mutex.lock();
+    loader.result.state = .running;
+    loader.mutex.unlock();
+
+    const result = loader.addFile("/tmp/config.toml", .toml);
+    try std.testing.expectError(AsyncError.AlreadyRunning, result);
 }
 
 test "MAX_PARALLEL_THREADS bounds thread count" {

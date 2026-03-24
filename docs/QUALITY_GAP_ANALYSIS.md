@@ -2,7 +2,7 @@
 
 **Project:** devnw/zig/config
 **Last updated:** 2026-03-24
-**Review phase:** Phase 4 (quality-reviewer follow-up) + Waves 6-7 closure
+**Review phase:** Phase 4 (quality-reviewer follow-up) + Waves 6-9 closure
 **Scoring formula:** PriorityScore = Impact(1-5) x Likelihood(1-5) x 4
 
 ---
@@ -13,9 +13,9 @@
 |----------|-------|----------|----------|------|
 | Critical | 4     | 4        | 0        | 0    |
 | High     | 9     | 7        | 2        | 0    |
-| Medium   | 19    | 17       | 2        | 0    |
-| Low      | 6     | 6        | 0        | 0    |
-| **Total** | **38** | **34** | **4** | **0** |
+| Medium   | 25    | 23       | 2        | 0    |
+| Low      | 9     | 9        | 0        | 0    |
+| **Total** | **47** | **43** | **4** | **0** |
 
 ### Top 5 Risks (all resolved)
 
@@ -101,23 +101,34 @@
 | Medium | 36 | api-contract | Consul parseKeysList matches any quoted string | NEW-07 | Same std.json fix as NEW-02 | Wave 7 |
 | High | 48 | reliability | No timeout enforcement on Etcd/Consul HTTP requests | NEW-08 | Limitation documented in timeout_ms doc comments; TODO retained for future Zig version | Wave 7 |
 | Medium | 36 | documentation | timeout_ms option misleading | NEW-16 | Doc comment warns callers of non-enforcement; resolved with NEW-08 | Wave 7 |
+| Medium | 36 | reliability | sync() missing in atomicWriteFile | P3-M4 | Added `temp_file.sync()` before close to prevent data loss on crash | Wave 9 |
+| Medium | 36 | maintainability | Duplicate applyAutomaticEnv function | P3-M5 | Removed; all callers use unified applyEnv | Wave 9 |
+| Medium | 36 | maintainability | DRY validator wrappers (hostname/url/email) | P3-M6 | Error-returning wrappers now delegate to boolean validators | Wave 9 |
+| Medium | 32 | dead-code | Dead timeout functions in remote.zig | P3-M7/P3-H2 | Removed dead timeout-related functions | Wave 9 |
+| Medium | 32 | dead-code | Unused prefix param in remote.zig | P3-M8 | Removed unused parameter | Wave 9 |
+| Medium | 36 | observability | No debug logging in error-swallowing branches | P3-R2 | Added `std.log.scoped(.config)` with `log.debug` in 4 catch branches | Wave 9 |
+| Low | 24 | reliability | Path traversal silently ignored in async.zig | P3-R3 | Now returns `error.PathTraversalDetected` | Wave 9 |
+| Low | 24 | resource-mgmt | Missing errdefer temp_file.close | P3-R5 | Added `errdefer temp_file.close()` in config.zig and serialize.zig | Wave 9 |
+| Low | 16 | documentation | Missing doc comments on SafeWriteError and serialize write | P3-A1 | Added error contract doc comments | Wave 9 |
 
 ---
 
 ## Findings by Category
 
-### reliability (6 findings -- 6 resolved, 0 open)
+### reliability (8 findings -- 8 resolved, 0 open)
 
 | Score | Finding | Issue/ID | Status |
 |-------|---------|----------|--------|
 | 100 | ~~dotenv.load() returns dangling pointers (use-after-free)~~ | NEW-12 | **Resolved** (Wave 6) |
 | 48 | ~~No timeout enforcement on Etcd/Consul HTTP requests~~ | NEW-08 | **Resolved** (Wave 7, documented limitation) |
+| 36 | ~~sync() missing in atomicWriteFile~~ | P3-M4 | **Resolved** (Wave 9) |
 | 32 | ~~parseContent returns entries into caller-owned content (lifetime risk)~~ | NEW-13 | **Resolved** (Wave 6) |
 | 24 | ~~getPrefix range_end overflow on 0xFF last byte~~ | NEW-10 | **Resolved** (Wave 6) |
 | 24 | ~~async loadFile swallows OOM silently~~ | NEW-11 | **Resolved** (Wave 6) |
+| 24 | ~~Path traversal silently ignored in async.zig~~ | P3-R3 | **Resolved** (Wave 9) |
 | 48 | ~~7 remaining catch {} sites~~ | [#148](https://gitlab.com/devnw/zig/config/-/issues/148) | **Resolved** (Waves 1-2) |
 
-### maintainability (9 findings -- 7 resolved, 2 Won't Do, 0 open)
+### maintainability (14 findings -- 12 resolved, 2 Won't Do, 0 open)
 
 | Score | Finding | Issue/ID | Status |
 |-------|---------|----------|--------|
@@ -128,6 +139,10 @@
 | 48 | ~~8 magic number sites bypass limits.zig~~ | [#146](https://gitlab.com/devnw/zig/config/-/issues/146) | **Resolved** (Wave 2) |
 | 48 | ~~Hand-rolled JSON construction in remote.zig~~ | [#119](https://gitlab.com/devnw/zig/config/-/issues/119) | **Resolved** (Wave 2) |
 | 36 | ~~Dotenv parsing triplication across 3 files~~ | [#152](https://gitlab.com/devnw/zig/config/-/issues/152) | **Resolved** (Wave 2) |
+| 36 | ~~Duplicate applyAutomaticEnv function~~ | P3-M5 | **Resolved** (Wave 9) |
+| 36 | ~~DRY validator wrappers (hostname/url/email)~~ | P3-M6 | **Resolved** (Wave 9) |
+| 32 | ~~Dead timeout functions in remote.zig~~ | P3-M7/P3-H2 | **Resolved** (Wave 9) |
+| 32 | ~~Unused prefix param in remote.zig~~ | P3-M8 | **Resolved** (Wave 9) |
 | 24 | ~~safeWriteConfig/safeWriteConfigWithBackup near-duplicate~~ | NEW-03 | **Resolved** (Wave 6) |
 | 16 | ~~@constCast on arena in normalizeKey~~ | NEW-05 | **Resolved** (Wave 6) |
 
@@ -142,12 +157,13 @@
 | 60 | ~~parallel.loadFile stub returns fake success~~ | [#141](https://gitlab.com/devnw/zig/config/-/issues/141) | **Resolved** (Wave 3) |
 | 36 | ~~ConfigFormat duplicated between parallel.zig and loader.zig~~ | [#149](https://gitlab.com/devnw/zig/config/-/issues/149) | **Resolved** (Wave 3) |
 
-### documentation (2 findings -- 2 resolved, 0 open)
+### documentation (3 findings -- 3 resolved, 0 open)
 
 | Score | Finding | Issue/ID | Status |
 |-------|---------|----------|--------|
 | 36 | ~~parseContent lifetime constraint undocumented~~ | NEW-15 | **Resolved** (Wave 6) |
 | 36 | ~~timeout_ms option misleading -- configured but not enforced~~ | NEW-16 | **Resolved** (Wave 7, fixed with NEW-08) |
+| 16 | ~~Missing doc comments on SafeWriteError and serialize write~~ | P3-A1 | **Resolved** (Wave 9) |
 
 ### ci-cd (1 finding -- 1 resolved)
 
@@ -167,6 +183,18 @@
 |-------|---------|----------|--------|
 | 48 | ~~Consul HTTP method triplication~~ | [#123](https://gitlab.com/devnw/zig/config/-/issues/123) | **Resolved** (Wave 3) |
 | 24 | ~~Duplicate validate/validation import~~ | [#150](https://gitlab.com/devnw/zig/config/-/issues/150) | **Resolved** (Wave 1) |
+
+### observability (1 finding -- 1 resolved)
+
+| Score | Finding | Issue/ID | Status |
+|-------|---------|----------|--------|
+| 36 | ~~No debug logging in error-swallowing branches~~ | P3-R2 | **Resolved** (Wave 9) |
+
+### resource-mgmt (1 finding -- 1 resolved)
+
+| Score | Finding | Issue/ID | Status |
+|-------|---------|----------|--------|
+| 24 | ~~Missing errdefer temp_file.close~~ | P3-R5 | **Resolved** (Wave 9) |
 
 ### readability (2 findings -- 2 resolved)
 
@@ -243,7 +271,9 @@ The following items were re-verified during Phase 4 quality review:
 
 All 16 new findings (NEW-01 through NEW-16) are tagged `confidence::confirmed` -- verified by direct code inspection with file paths, line numbers, and code snippets during Phase 4 review. All 16 are now resolved (Waves 6-7).
 
-All 38 findings (34 resolved + 4 Won't Do) verified by code inspection, CI configuration review, or test execution.
+Wave 9 added 9 new findings (P3-M4, P3-M5, P3-M6, P3-M7/P3-H2, P3-M8, P3-R2, P3-R3, P3-R5, P3-A1), all closed immediately with code changes and tests.
+
+All 47 findings (43 resolved + 4 Won't Do) verified by code inspection, CI configuration review, or test execution.
 
 ## Unknowns
 
