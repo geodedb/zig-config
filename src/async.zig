@@ -242,7 +242,10 @@ pub fn AsyncLoader(comptime T: type) type {
             // Parse and apply to loader
             const detected_format = Format.fromExtension(path);
             loader.parseContent(content, detected_format, .project, path) catch |err| switch (err) {
-                error.OutOfMemory => return, // Cannot propagate from thread; bail
+                // NEW-11: Propagate OOM to loadThreadFn so it sets result.state = .failed.
+                // Previously this returned silently, causing the caller to see a config
+                // with missing data and no error indication.
+                error.OutOfMemory => return error.OutOfMemory,
                 else => {}, // Parse errors on optional sources are non-critical
             };
         }
@@ -471,6 +474,28 @@ test "AsyncLoaderWithCallback set callback" {
 
     loader.setCallback(TestCallback.callback, null);
     try std.testing.expect(loader.callback != null);
+}
+
+test "AsyncResult failed state propagates error through await (NEW-11)" {
+    // Verify that when a thread sets result.state = .failed with an OOM error,
+    // await() returns that error to the caller rather than silently succeeding.
+    const Config = struct {
+        host: []const u8 = "localhost",
+    };
+
+    var loader = AsyncLoader(Config).init(std.testing.allocator);
+    defer loader.deinit();
+
+    // Simulate what loadThreadFn does when loadFile returns OOM:
+    // it sets result.state = .failed and result.err = error.OutOfMemory.
+    loader.mutex.lock();
+    loader.result.state = .failed;
+    loader.result.err = error.OutOfMemory;
+    loader.mutex.unlock();
+
+    // await() must surface the OOM error, not return a default config
+    const result = loader.await();
+    try std.testing.expectError(error.OutOfMemory, result);
 }
 
 test "MAX_PARALLEL_THREADS bounds thread count" {

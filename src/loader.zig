@@ -43,6 +43,7 @@ const ini_mod = @import("ini.zig");
 const properties_mod = @import("properties.zig");
 const secret = @import("secret.zig");
 const limits = @import("limits.zig");
+const dotenv_mod = @import("dotenv.zig");
 
 // Security: Import no-follow open helper for symlink attack prevention (CWE-59, #69)
 const openFileReadNoFollow = secret.openFileReadNoFollow;
@@ -541,9 +542,19 @@ pub fn Loader(comptime T: type) type {
             }
 
             // Allocate a lowercase copy on the arena.
-            // Safety: The Loader is always created as `var`, so the arena is
-            // inherently mutable. The *const Self is just a calling-convention
-            // restriction for read-only methods, not a true const object.
+            //
+            // NEW-05: @constCast rationale -- normalizeKey must remain *const Self
+            // because it is called from read-only methods (isSet, has, get) that
+            // take *const Self. Changing the signature to *Self would cascade into
+            // breaking the public API of those methods.
+            //
+            // Safety: The Loader is always created as `var` (stack-allocated),
+            // so the arena is inherently mutable at runtime. The *const Self
+            // parameter is a calling-convention restriction, not a guarantee
+            // that the object is truly immutable. The arena allocation here is
+            // an implementation detail of key normalization and does not alter
+            // the observable state of the Loader (no fields change, no config
+            // values change). This makes the @constCast sound in practice.
             const arena_ptr = @constCast(&self.arena);
             const lower = arena_ptr.allocator().alloc(u8, key.len) catch return key;
             for (key, 0..) |c, i| {
@@ -618,16 +629,22 @@ pub fn Loader(comptime T: type) type {
                 else => {}, // .env file is optional
             };
 
-            // 7. Apply bound environment variables
-            try self.applyBoundEnvVars();
+            // 7-9. Apply environment variables using a single snapshot (PERF-39)
+            // Snapshot the process environment once and share it across all
+            // three env-applying functions to avoid redundant syscalls.
+            var env_map = std.process.getEnvMap(self.allocator) catch return LoadError.OutOfMemory;
+            defer env_map.deinit();
+
+            // 7. Apply bound environment variables (PERF-31/PERF-14)
+            try self.applyBoundEnvVars(&env_map);
 
             // 8. Apply automatic environment variables
             if (self.automatic_env_enabled) {
-                try self.applyAutomaticEnv(self.automatic_env_prefix);
+                try self.applyAutomaticEnv(self.automatic_env_prefix, &env_map);
             }
 
             // 9. Apply prefix-based environment variables
-            try self.applyEnv(options.env_prefix);
+            try self.applyEnv(options.env_prefix, &env_map);
 
             // 10. Apply specific config path if provided
             if (options.config_path) |path| {
@@ -676,15 +693,15 @@ pub fn Loader(comptime T: type) type {
             }
         }
 
-        fn applyBoundEnvVars(self: *Self) LoadError!void {
+        fn applyBoundEnvVars(self: *Self, env_map: *const std.process.EnvMap) LoadError!void {
             var iter = self.env_bindings.iterator();
             while (iter.next()) |entry| {
                 const key = entry.key_ptr.*;
                 const env_vars = entry.value_ptr.*;
 
-                // Try each bound env var in order
+                // Try each bound env var in order (PERF-31: use snapshot instead of per-item getenv)
                 for (env_vars) |env_var| {
-                    if (environ.getenv(env_var)) |value| {
+                    if (env_map.get(env_var)) |value| {
                         self.setField(key, value, .env, env_var) catch |err| switch (err) {
                             LoadError.OutOfMemory => return LoadError.OutOfMemory,
                             else => {}, // Value type mismatch or unknown key is non-fatal
@@ -695,15 +712,15 @@ pub fn Loader(comptime T: type) type {
             }
         }
 
-        fn applyAutomaticEnv(self: *Self, prefix: []const u8) LoadError!void {
-            // Get all environment variables and find ones with our prefix
+        fn applyAutomaticEnv(self: *Self, prefix: []const u8, env_map: *const std.process.EnvMap) LoadError!void {
+            // Look up environment variables from the shared snapshot (PERF-39)
             const info = @typeInfo(T);
             inline for (info.@"struct".fields) |field| {
                 // Build env var name with prefix
                 var env_name_buf: [256]u8 = undefined;
                 const env_name = buildEnvVarName(&env_name_buf, prefix, field.name, self.env_key_replacer);
 
-                if (environ.getenv(env_name)) |value| {
+                if (env_map.get(env_name)) |value| {
                     self.setField(field.name, value, .env, env_name) catch |err| switch (err) {
                         LoadError.OutOfMemory => return LoadError.OutOfMemory,
                         else => {}, // Value type mismatch is non-fatal for env vars
@@ -731,13 +748,14 @@ pub fn Loader(comptime T: type) type {
         }
 
         fn parseContent(self: *Self, content: []const u8, format: Format, source: Source, path: []const u8) LoadError!void {
-            switch (format) {
+            const resolved = if (format == .auto) detectFormatFromContent(content) else format;
+            switch (resolved) {
                 .json => try self.parseSimpleJson(content, source, path),
                 .toml => try self.parseSimpleToml(content, source, path),
                 .yaml => try self.parseSimpleYaml(content, source, path),
                 .ini => try self.parseIni(content, source, path),
                 .properties => try self.parseProperties(content, source, path),
-                .auto => try self.parseSimpleToml(content, source, path),
+                .auto => try self.parseSimpleToml(content, source, path), // fallback
             }
         }
 
@@ -755,11 +773,14 @@ pub fn Loader(comptime T: type) type {
                 .object => |obj| {
                     var iter = obj.iterator();
                     while (iter.next()) |entry| {
+                        // PERF-26: Use stack buffer instead of allocPrint for key construction
+                        var key_buf: [512]u8 = undefined;
                         const full_key = if (prefix.len > 0)
-                            std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ prefix, entry.key_ptr.* }) catch return LoadError.OutOfMemory
+                            std.fmt.bufPrint(&key_buf, "{s}.{s}", .{ prefix, entry.key_ptr.* }) catch {
+                                return LoadError.ParseError; // Key path exceeds 512 bytes
+                            }
                         else
-                            self.allocator.dupe(u8, entry.key_ptr.*) catch return LoadError.OutOfMemory;
-                        defer self.allocator.free(full_key);
+                            entry.key_ptr.*;
 
                         try self.applyJsonValue(full_key, entry.value_ptr.*, source, path);
                     }
@@ -820,14 +841,14 @@ pub fn Loader(comptime T: type) type {
                         }
                     }
 
+                    // PERF-27: Use stack buffer instead of allocPrint for section.key construction
+                    var key_buf: [512]u8 = undefined;
                     const full_key = if (current_section) |section|
-                        std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ section, key }) catch return LoadError.OutOfMemory
+                        std.fmt.bufPrint(&key_buf, "{s}.{s}", .{ section, key }) catch {
+                            return LoadError.ParseError; // Key path exceeds 512 bytes
+                        }
                     else
                         key;
-
-                    if (current_section != null) {
-                        defer self.allocator.free(full_key);
-                    }
 
                     self.setField(full_key, value, source, path) catch |err| switch (err) {
                         LoadError.OutOfMemory => return LoadError.OutOfMemory,
@@ -884,8 +905,11 @@ pub fn Loader(comptime T: type) type {
                 const section_name = section_entry.key_ptr.*;
                 var value_iter = section_entry.value_ptr.values.iterator();
                 while (value_iter.next()) |value_entry| {
-                    const full_key = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ section_name, value_entry.key_ptr.* }) catch return LoadError.OutOfMemory;
-                    defer self.allocator.free(full_key);
+                    // PERF-28: Use stack buffer instead of allocPrint for section.key construction
+                    var key_buf: [512]u8 = undefined;
+                    const full_key = std.fmt.bufPrint(&key_buf, "{s}.{s}", .{ section_name, value_entry.key_ptr.* }) catch {
+                        return LoadError.ParseError; // Key path exceeds 512 bytes
+                    };
                     self.setField(full_key, value_entry.value_ptr.*, source, path) catch |err| switch (err) {
                         LoadError.OutOfMemory => return LoadError.OutOfMemory,
                         else => {}, // Unknown key or type mismatch is non-fatal during INI parsing
@@ -925,29 +949,28 @@ pub fn Loader(comptime T: type) type {
             };
             defer self.allocator.free(content);
 
-            var lines = mem.splitScalar(u8, content, '\n');
-            while (lines.next()) |line| {
-                const trimmed = mem.trim(u8, line, " \t\r");
-                if (trimmed.len == 0 or trimmed[0] == '#') continue;
+            // QUAL-12: Delegate to dotenv.parseContent for canonical parsing
+            // (handles export prefix, quoted values, comments, whitespace)
+            const entries = dotenv_mod.parseContent(content, self.allocator) catch {
+                return LoadError.ParseError;
+            };
+            defer self.allocator.free(entries);
 
-                if (mem.indexOf(u8, trimmed, "=")) |eq_pos| {
-                    const key = trimmed[0..eq_pos];
-                    const value = trimmed[eq_pos + 1 ..];
-                    self.setFieldFromEnvKey(key, value, source, path) catch |err| switch (err) {
-                        LoadError.OutOfMemory => return LoadError.OutOfMemory,
-                        else => {}, // Unknown key or type mismatch is non-fatal for .env entries
-                    };
-                }
+            for (entries) |entry| {
+                self.setFieldFromEnvKey(entry.key, entry.value, source, path) catch |err| switch (err) {
+                    LoadError.OutOfMemory => return LoadError.OutOfMemory,
+                    else => {}, // Unknown key or type mismatch is non-fatal for .env entries
+                };
             }
         }
 
-        fn applyEnv(self: *Self, prefix: []const u8) LoadError!void {
+        fn applyEnv(self: *Self, prefix: []const u8, env_map: *const std.process.EnvMap) LoadError!void {
             const info = @typeInfo(T);
             inline for (info.@"struct".fields) |field| {
                 var env_name_buf: [256]u8 = undefined;
                 const env_name = buildEnvVarName(&env_name_buf, prefix, field.name, self.env_key_replacer);
 
-                if (environ.getenv(env_name)) |value| {
+                if (env_map.get(env_name)) |value| {
                     self.setField(field.name, value, .env, env_name) catch |err| switch (err) {
                         LoadError.OutOfMemory => return LoadError.OutOfMemory,
                         else => {}, // Value type mismatch is non-fatal for env vars
@@ -1985,4 +2008,146 @@ test "loadDotEnv handles whitespace around equals via dotenv delegation (QUAL-12
     // The old inline parser didn't trim whitespace around keys/values.
     // dotenv.zig's parser does.
     try std.testing.expectEqualStrings("spaced-host.example.com", ldr.config.host);
+}
+
+// ============================================================================
+// PERF-31/39: Env map snapshot tests
+// ============================================================================
+
+test "applyBoundEnvVars uses env map snapshot (PERF-31)" {
+    // Verify that bound env vars are resolved from the process environment.
+    // PATH is guaranteed to exist on POSIX systems.
+    const Config = struct {
+        my_path: []const u8 = "unset",
+    };
+
+    var loader = Loader(Config).init(std.testing.allocator);
+    defer loader.deinit();
+
+    // Bind the my_path config key to the PATH environment variable
+    try loader.bindEnv("my_path", &.{"PATH"});
+
+    // Create an env map snapshot and call applyBoundEnvVars
+    var env_map = try std.process.getEnvMap(std.testing.allocator);
+    defer env_map.deinit();
+
+    try loader.applyBoundEnvVars(&env_map);
+
+    // The value should have been picked up from the env map
+    const expected_path = env_map.get("PATH") orelse return;
+    try std.testing.expectEqualStrings(expected_path, loader.config.my_path);
+}
+
+test "applyEnv uses env map snapshot (PERF-39)" {
+    // Verify that prefix-based env var lookup uses the snapshot.
+    // Set an env var with prefix and verify it is picked up.
+    const Config = struct {
+        home: []const u8 = "unset",
+    };
+
+    var loader = Loader(Config).init(std.testing.allocator);
+    defer loader.deinit();
+
+    // Use empty prefix so field "home" maps to env var "HOME"
+    var env_map = try std.process.getEnvMap(std.testing.allocator);
+    defer env_map.deinit();
+
+    try loader.applyEnv("", &env_map);
+
+    // HOME should be set on any POSIX system
+    if (env_map.get("HOME")) |expected_home| {
+        try std.testing.expectEqualStrings(expected_home, loader.config.home);
+    }
+}
+
+test "applyAutomaticEnv uses env map snapshot (PERF-39)" {
+    const Config = struct {
+        home: []const u8 = "unset",
+    };
+
+    var loader = Loader(Config).init(std.testing.allocator);
+    defer loader.deinit();
+
+    var env_map = try std.process.getEnvMap(std.testing.allocator);
+    defer env_map.deinit();
+
+    // With empty prefix, field "home" maps to "HOME"
+    try loader.applyAutomaticEnv("", &env_map);
+
+    if (env_map.get("HOME")) |expected_home| {
+        try std.testing.expectEqualStrings(expected_home, loader.config.home);
+    }
+}
+
+// ============================================================================
+// PERF-26: JSON nested key bufPrint test
+// ============================================================================
+
+test "parseSimpleJson handles nested objects with bufPrint keys (PERF-26)" {
+    const Config = struct {
+        @"database.host": []const u8 = "localhost",
+        @"database.port": u16 = 5432,
+    };
+
+    var loader = Loader(Config).init(std.testing.allocator);
+    defer loader.deinit();
+
+    const json_content =
+        \\{"database": {"host": "db.example.com", "port": "3306"}}
+    ;
+
+    try loader.parseSimpleJson(json_content, .project, "test.json");
+
+    try std.testing.expectEqualStrings("db.example.com", loader.config.@"database.host");
+    try std.testing.expectEqual(@as(u16, 3306), loader.config.@"database.port");
+}
+
+// ============================================================================
+// PERF-27: TOML section key bufPrint test
+// ============================================================================
+
+test "parseSimpleToml handles section keys with bufPrint (PERF-27)" {
+    const Config = struct {
+        @"server.host": []const u8 = "localhost",
+        @"server.port": u16 = 8080,
+    };
+
+    var loader = Loader(Config).init(std.testing.allocator);
+    defer loader.deinit();
+
+    const toml_content =
+        \\[server]
+        \\host = "toml.example.com"
+        \\port = 9090
+    ;
+
+    try loader.parseSimpleToml(toml_content, .project, "test.toml");
+
+    try std.testing.expectEqualStrings("toml.example.com", loader.config.@"server.host");
+    try std.testing.expectEqual(@as(u16, 9090), loader.config.@"server.port");
+}
+
+// ============================================================================
+// PERF-28: INI section key bufPrint test
+// ============================================================================
+
+test "parseIni handles section keys with bufPrint (PERF-28)" {
+    const Config = struct {
+        @"database.host": []const u8 = "localhost",
+        @"database.port": u16 = 5432,
+    };
+
+    var loader = Loader(Config).init(std.testing.allocator);
+    defer loader.deinit();
+
+    const ini_content =
+        \\[database]
+        \\host = ini.example.com
+        \\port = 3307
+    ;
+
+    try loader.parseIni(ini_content, .project, "test.ini");
+
+    try std.testing.expectEqualStrings("ini.example.com", loader.config.@"database.host");
+    try std.testing.expectEqual(@as(u16, 3307), loader.config.@"database.port");
 }

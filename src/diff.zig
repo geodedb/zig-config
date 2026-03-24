@@ -118,9 +118,19 @@ pub fn compareWithOptions(
     var modified_count: usize = 0;
     var unchanged_count: usize = 0;
 
-    // Track which keys from new_config we've seen
+    // Track which keys from new_config we've seen.
+    // In case-insensitive mode, store lowered keys for O(1) lookup;
+    // each lowered key is allocated once and freed at the end.
     var seen_keys = std.StringHashMap(void).init(allocator);
-    defer seen_keys.deinit();
+    defer {
+        if (options.case_insensitive) {
+            var key_iter = seen_keys.keyIterator();
+            while (key_iter.next()) |k| {
+                allocator.free(k.*);
+            }
+        }
+        seen_keys.deinit();
+    }
 
     // Check old keys
     var old_iter = old_config.iterator();
@@ -129,7 +139,14 @@ pub fn compareWithOptions(
         const old_value = old_entry.value_ptr.*;
 
         if (getValueForKey(new_config, key, options.case_insensitive)) |new_value| {
-            try seen_keys.put(key, {});
+            // Mark this key as seen. In case-insensitive mode, store the
+            // lowered form so the "added keys" pass can do O(1) lookups.
+            if (options.case_insensitive) {
+                const lowered = try std.ascii.allocLowerString(allocator, key);
+                try seen_keys.put(lowered, {});
+            } else {
+                try seen_keys.put(key, {});
+            }
 
             const values_equal = if (options.ignore_whitespace)
                 trimmedEqual(old_value, new_value)
@@ -166,15 +183,18 @@ pub fn compareWithOptions(
         }
     }
 
-    // Check for added keys
+    // Check for added keys.
+    // In case-insensitive mode, lower the key once and use O(1) hash lookup
+    // against the lowered seen_keys map, instead of O(n) linear scan.
     var new_iter = new_config.iterator();
     while (new_iter.next()) |new_entry| {
         const key = new_entry.key_ptr.*;
 
-        const was_seen = if (options.case_insensitive)
-            containsKeyInsensitive(seen_keys, key)
-        else
-            seen_keys.contains(key);
+        const was_seen = if (options.case_insensitive) blk: {
+            const lowered = try std.ascii.allocLowerString(allocator, key);
+            defer allocator.free(lowered);
+            break :blk seen_keys.contains(lowered);
+        } else seen_keys.contains(key);
 
         if (!was_seen) {
             if (getValueForKey(old_config, key, options.case_insensitive) == null) {
@@ -210,16 +230,6 @@ fn getValueForKey(map: std.StringHashMap([]const u8), key: []const u8, case_inse
         }
     }
     return null;
-}
-
-fn containsKeyInsensitive(map: std.StringHashMap(void), key: []const u8) bool {
-    var iter = map.keyIterator();
-    while (iter.next()) |k| {
-        if (std.ascii.eqlIgnoreCase(k.*, key)) {
-            return true;
-        }
-    }
-    return false;
 }
 
 fn trimmedEqual(a: []const u8, b: []const u8) bool {
@@ -612,4 +622,116 @@ test "formatDiff" {
     try std.testing.expect(mem.indexOf(u8, report, "Configuration Diff Report") != null);
     try std.testing.expect(mem.indexOf(u8, report, "1 added") != null);
     try std.testing.expect(mem.indexOf(u8, report, "1 removed") != null);
+}
+
+test "case-insensitive compare matches keys with different casing" {
+    var old = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer old.deinit();
+
+    var new = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer new.deinit();
+
+    try old.put("Host", "localhost");
+    try new.put("HOST", "localhost");
+
+    const result = try compareWithOptions(std.testing.allocator, old, new, .{ .case_insensitive = true });
+    defer std.testing.allocator.free(result.changes);
+
+    try std.testing.expectEqual(@as(usize, 0), result.added_count);
+    try std.testing.expectEqual(@as(usize, 0), result.removed_count);
+    try std.testing.expectEqual(@as(usize, 0), result.modified_count);
+    try std.testing.expectEqual(@as(usize, 1), result.unchanged_count);
+}
+
+test "case-insensitive compare detects modifications across casing" {
+    var old = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer old.deinit();
+
+    var new = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer new.deinit();
+
+    try old.put("Host", "localhost");
+    try new.put("HOST", "example.com");
+
+    const result = try compareWithOptions(std.testing.allocator, old, new, .{ .case_insensitive = true });
+    defer std.testing.allocator.free(result.changes);
+
+    try std.testing.expectEqual(@as(usize, 0), result.added_count);
+    try std.testing.expectEqual(@as(usize, 0), result.removed_count);
+    try std.testing.expectEqual(@as(usize, 1), result.modified_count);
+    try std.testing.expectEqual(@as(usize, 0), result.unchanged_count);
+}
+
+test "case-insensitive compare detects additions correctly" {
+    var old = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer old.deinit();
+
+    var new = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer new.deinit();
+
+    try old.put("Host", "localhost");
+    try new.put("HOST", "localhost");
+    try new.put("PORT", "8080");
+
+    const result = try compareWithOptions(std.testing.allocator, old, new, .{ .case_insensitive = true });
+    defer std.testing.allocator.free(result.changes);
+
+    try std.testing.expectEqual(@as(usize, 1), result.added_count);
+    try std.testing.expectEqual(@as(usize, 0), result.removed_count);
+    try std.testing.expectEqual(@as(usize, 0), result.modified_count);
+    try std.testing.expectEqual(@as(usize, 1), result.unchanged_count);
+}
+
+test "case-insensitive compare detects removals correctly" {
+    var old = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer old.deinit();
+
+    var new = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer new.deinit();
+
+    try old.put("Host", "localhost");
+    try old.put("Port", "8080");
+    try new.put("HOST", "localhost");
+
+    const result = try compareWithOptions(std.testing.allocator, old, new, .{ .case_insensitive = true });
+    defer std.testing.allocator.free(result.changes);
+
+    try std.testing.expectEqual(@as(usize, 0), result.added_count);
+    try std.testing.expectEqual(@as(usize, 1), result.removed_count);
+    try std.testing.expectEqual(@as(usize, 0), result.modified_count);
+    try std.testing.expectEqual(@as(usize, 1), result.unchanged_count);
+}
+
+test "case-insensitive compare with mixed adds, removes, and modifications" {
+    var old = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer old.deinit();
+
+    var new = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer new.deinit();
+
+    // Matched (modified): Host/HOST
+    try old.put("Host", "localhost");
+    try new.put("HOST", "example.com");
+
+    // Removed: only in old
+    try old.put("Debug", "true");
+
+    // Added: only in new
+    try new.put("TIMEOUT", "30");
+
+    // Matched (unchanged): Port/port
+    try old.put("Port", "8080");
+    try new.put("port", "8080");
+
+    const result = try compareWithOptions(std.testing.allocator, old, new, .{
+        .case_insensitive = true,
+        .include_unchanged = true,
+    });
+    defer std.testing.allocator.free(result.changes);
+
+    try std.testing.expectEqual(@as(usize, 1), result.added_count);
+    try std.testing.expectEqual(@as(usize, 1), result.removed_count);
+    try std.testing.expectEqual(@as(usize, 1), result.modified_count);
+    try std.testing.expectEqual(@as(usize, 1), result.unchanged_count);
+    try std.testing.expectEqual(@as(usize, 4), result.changes.len);
 }

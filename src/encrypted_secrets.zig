@@ -80,10 +80,13 @@ pub const SensitiveString = struct {
         return self.value;
     }
 
-    /// Custom format function - always redacts
+    /// Custom format function - always redacts.
+    /// Conforms to the Zig 0.15 std.fmt {f} protocol so that
+    /// `std.fmt.bufPrint(&buf, "{f}", .{sensitive})` produces "[REDACTED]".
+    /// Security: Prevents credential exposure in logs (CWE-532).
     pub fn format(self: Self, w: *std.io.Writer) !void {
         _ = self;
-        try w.writeAll("***REDACTED***");
+        try w.writeAll("[REDACTED]");
     }
 
     /// Check if the value is set (non-empty)
@@ -1121,11 +1124,23 @@ test "VaultConfig defaults to HTTPS" {
 test "SensitiveString redacts on format" {
     const sensitive = SensitiveString.init("super-secret-token");
 
+    // Verify {f} format specifier triggers redaction (NEW-09)
     var buf: [100]u8 = undefined;
     const result = std.fmt.bufPrint(&buf, "{f}", .{sensitive}) catch unreachable;
 
     // Should never expose the actual value
-    try std.testing.expectEqualStrings("***REDACTED***", result);
+    try std.testing.expectEqualStrings("[REDACTED]", result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "super-secret") == null);
+}
+
+test "SensitiveString redacts via allocPrint" {
+    const sensitive = SensitiveString.init("super-secret-token");
+
+    // Verify std.fmt.allocPrint also triggers redaction (NEW-09)
+    const result = try std.fmt.allocPrint(std.testing.allocator, "{f}", .{sensitive});
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("[REDACTED]", result);
     try std.testing.expect(std.mem.indexOf(u8, result, "super-secret") == null);
 }
 
@@ -1170,7 +1185,7 @@ test "KmsConfig credentials use SensitiveString for redaction" {
     // Verify SensitiveString redacts credentials when formatted
     var buf: [200]u8 = undefined;
     const key_str = std.fmt.bufPrint(&buf, "{f}", .{config.access_key_id.?}) catch unreachable;
-    try std.testing.expectEqualStrings("***REDACTED***", key_str);
+    try std.testing.expectEqualStrings("[REDACTED]", key_str);
 
     // But expose() returns actual values
     try std.testing.expectEqualStrings("AKIAIOSFODNN7EXAMPLE", config.access_key_id.?.expose());
@@ -1185,7 +1200,7 @@ test "VaultConfig token uses SensitiveString for redaction" {
     // Verify token is redacted when formatted
     var buf: [100]u8 = undefined;
     const token_str = std.fmt.bufPrint(&buf, "{f}", .{config.token.?}) catch unreachable;
-    try std.testing.expectEqualStrings("***REDACTED***", token_str);
+    try std.testing.expectEqualStrings("[REDACTED]", token_str);
 
     // But expose() returns actual value
     try std.testing.expectEqualStrings("hvs.CAESIAE-super-secret-vault-token", config.token.?.expose());
@@ -1200,7 +1215,7 @@ test "OnePasswordConfig token uses SensitiveString for redaction" {
     // Verify token is redacted when formatted
     var buf: [100]u8 = undefined;
     const token_str = std.fmt.bufPrint(&buf, "{f}", .{config.service_account_token.?}) catch unreachable;
-    try std.testing.expectEqualStrings("***REDACTED***", token_str);
+    try std.testing.expectEqualStrings("[REDACTED]", token_str);
 }
 
 // ============================================================================

@@ -22,6 +22,15 @@ include:
 variables:
   ZIG_VERSION: "0.15.2"
 
+# Cache the Zig toolchain and build artifacts across pipeline jobs.
+# The existing install-zig conditional (if [ ! -f "zig-${ZIG_VERSION}/zig" ])
+# will skip the download when the cache is warm.
+cache:
+  key: "zig-${ZIG_VERSION}"
+  paths:
+    - zig-${ZIG_VERSION}/
+    - .zig-cache/
+
 stages:
   - lint
   - build
