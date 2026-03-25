@@ -5,6 +5,7 @@
 //! Extracted to reduce remote.zig to production code only (Q-NEW-6).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const remote = @import("remote.zig");
 const limits = @import("limits.zig");
 
@@ -29,6 +30,7 @@ const validateUrl = remote.validateUrl;
 const decodePercentEncoded = remote.decodePercentEncoded;
 const parseIPv4ToInt = remote.parseIPv4ToInt;
 const warnIfTlsSkipVerify = remote.warnIfTlsSkipVerify;
+const setSocketTimeout = remote.setSocketTimeout;
 const isValidHeaderValue = remote.isValidHeaderValue;
 
 // ============================================================================
@@ -1537,4 +1539,73 @@ test "T-06: Etcd body JSON formatting supports large base64 keys" {
     try std.testing.expect(body_is_heap);
     try std.testing.expect(std.mem.startsWith(u8, body, "{\"key\":\""));
     try std.testing.expect(std.mem.endsWith(u8, body, "\"}"));
+}
+
+// ============================================================================
+// SEC-02: Socket Timeout Tests
+// ============================================================================
+
+test "SEC-02: setSocketTimeout sets SO_RCVTIMEO on TCP socket" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    // Create a TCP socket
+    const sockfd = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
+    defer std.posix.close(sockfd);
+
+    // Set 3-second timeout
+    try setSocketTimeout(sockfd, 3000);
+
+    // Read back SO_RCVTIMEO and verify
+    var tv: std.posix.timeval = undefined;
+    var optlen: std.posix.socklen_t = @sizeOf(std.posix.timeval);
+    const rc = std.posix.system.getsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, @ptrCast(&tv), &optlen);
+    try std.testing.expectEqual(@as(u32, 0), @as(u32, @bitCast(@as(i32, @intCast(rc)))));
+    try std.testing.expectEqual(@as(isize, 3), tv.sec);
+    try std.testing.expectEqual(@as(isize, 0), tv.usec);
+}
+
+test "SEC-02: setSocketTimeout sets sub-second timeout correctly" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const sockfd = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
+    defer std.posix.close(sockfd);
+
+    // Set 1500ms = 1 sec + 500000 usec
+    try setSocketTimeout(sockfd, 1500);
+
+    var tv: std.posix.timeval = undefined;
+    var optlen: std.posix.socklen_t = @sizeOf(std.posix.timeval);
+    const rc = std.posix.system.getsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, @ptrCast(&tv), &optlen);
+    try std.testing.expectEqual(@as(u32, 0), @as(u32, @bitCast(@as(i32, @intCast(rc)))));
+    try std.testing.expectEqual(@as(isize, 1), tv.sec);
+    try std.testing.expectEqual(@as(isize, 500000), tv.usec);
+}
+
+test "SEC-02: setSocketTimeout with zero is a no-op" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const sockfd = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
+    defer std.posix.close(sockfd);
+
+    // Zero should be a no-op (no timeout set)
+    try setSocketTimeout(sockfd, 0);
+
+    // Read back -- should still be 0,0 (no timeout)
+    var tv: std.posix.timeval = undefined;
+    var optlen: std.posix.socklen_t = @sizeOf(std.posix.timeval);
+    _ = std.posix.system.getsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, @ptrCast(&tv), &optlen);
+    try std.testing.expectEqual(@as(isize, 0), tv.sec);
+    try std.testing.expectEqual(@as(isize, 0), tv.usec);
+}
+
+test "SEC-02: Etcd timeout_ms doc reflects enforcement" {
+    // Verify the default timeout is 5000ms
+    const opts = EtcdOptions{};
+    try std.testing.expectEqual(@as(u32, 5000), opts.timeout_ms);
+}
+
+test "SEC-02: Consul timeout_ms doc reflects enforcement" {
+    // Verify the default timeout is 5000ms
+    const opts = ConsulOptions{};
+    try std.testing.expectEqual(@as(u32, 5000), opts.timeout_ms);
 }

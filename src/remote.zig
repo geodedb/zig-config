@@ -38,6 +38,8 @@ const std = @import("std");
 const mem = std.mem;
 const http = std.http;
 const net = std.net;
+const posix = std.posix;
+const builtin = @import("builtin");
 const Uri = std.Uri;
 const Allocator = mem.Allocator;
 const SensitiveString = @import("encrypted_secrets.zig").SensitiveString;
@@ -571,9 +573,128 @@ fn isValidKeyChar(c: u8) bool {
     return false;
 }
 
-// NOTE: timeout_ms is accepted by EtcdOptions/ConsulOptions but NOT enforced.
-// Zig 0.15's http.Client.fetch() has no timeout configuration.
-// See GAP-0048. Will be wired when Zig's http.Client gains timeout support.
+// ============================================================================
+// Socket-Level Timeout Enforcement (SEC-02)
+//
+// Zig 0.15's http.Client.fetch() has no timeout field. We work around this by
+// using the lower-level client.request() API, which exposes the established
+// Connection. We then set SO_RCVTIMEO and SO_SNDTIMEO on the underlying socket
+// before sending the request body or reading the response. This gives us
+// kernel-enforced timeouts on all I/O operations.
+//
+// On timeout, the kernel returns EAGAIN which Zig surfaces as error.WouldBlock
+// or error.ReadFailed. fetchWithTimeout catches these and returns
+// RemoteError.Timeout.
+// ============================================================================
+
+/// Set SO_RCVTIMEO and SO_SNDTIMEO on a socket to enforce I/O deadlines.
+/// On POSIX: uses timeval (seconds + microseconds).
+/// On Windows: uses DWORD (milliseconds).
+pub fn setSocketTimeout(handle: net.Stream.Handle, timeout_ms: u32) !void {
+    if (timeout_ms == 0) return;
+
+    if (builtin.os.tag == .windows) {
+        // Windows SO_RCVTIMEO/SO_SNDTIMEO takes a DWORD in milliseconds.
+        const timeout_bytes = std.mem.asBytes(&timeout_ms);
+        const SOL_SOCKET = 0xFFFF;
+        const SO_RCVTIMEO_WIN = 0x1006;
+        const SO_SNDTIMEO_WIN = 0x1005;
+        _ = std.os.windows.ws2_32.setsockopt(handle, SOL_SOCKET, SO_RCVTIMEO_WIN, timeout_bytes, @intCast(timeout_bytes.len));
+        _ = std.os.windows.ws2_32.setsockopt(handle, SOL_SOCKET, SO_SNDTIMEO_WIN, timeout_bytes, @intCast(timeout_bytes.len));
+    } else {
+        // POSIX SO_RCVTIMEO/SO_SNDTIMEO takes struct timeval.
+        const tv = posix.timeval{
+            .sec = @intCast(timeout_ms / 1000),
+            .usec = @intCast(@as(u64, timeout_ms % 1000) * 1000),
+        };
+        const tv_bytes = std.mem.asBytes(&tv);
+        try posix.setsockopt(handle, posix.SOL.SOCKET, posix.SO.RCVTIMEO, tv_bytes);
+        try posix.setsockopt(handle, posix.SOL.SOCKET, posix.SO.SNDTIMEO, tv_bytes);
+    }
+}
+
+/// Perform an HTTP request with socket-level timeout enforcement (SEC-02).
+///
+/// Replicates the core logic of http.Client.fetch() but injects SO_RCVTIMEO
+/// and SO_SNDTIMEO on the connection socket after the TCP handshake completes,
+/// before any payload is sent or response read. This ensures that slow-read,
+/// slow-write, and unresponsive-server scenarios are bounded by timeout_ms.
+///
+/// Returns the response body as an owned slice (caller must free) and the HTTP
+/// status code, or RemoteError on failure.
+fn fetchWithTimeout(
+    client: *http.Client,
+    allocator: Allocator,
+    uri: std.Uri,
+    method: http.Method,
+    payload: ?[]const u8,
+    extra_headers: []const http.Header,
+    content_type: ?[]const u8,
+    timeout_ms: u32,
+) RemoteError!FetchResult {
+    // Open connection and prepare request headers (TCP + TLS handshake happens here).
+    var req = client.request(method, uri, .{
+        .redirect_behavior = .not_allowed,
+        .headers = .{
+            .content_type = if (content_type) |ct| .{ .override = ct } else .default,
+        },
+        .extra_headers = extra_headers,
+        .keep_alive = true,
+    }) catch return RemoteError.ConnectionFailed;
+    defer req.deinit();
+
+    // SEC-02: Set socket-level timeout on the established connection.
+    // This must happen AFTER request() (which connects) but BEFORE sending
+    // data, so both the send and receive paths are protected.
+    if (timeout_ms > 0) {
+        if (req.connection) |conn| {
+            setSocketTimeout(conn.stream_reader.getStream().handle, timeout_ms) catch |err| {
+                log.warn("SEC-02: failed to set socket timeout ({d}ms): {} — request will proceed without timeout", .{ timeout_ms, err });
+            };
+        }
+    }
+
+    // Send request body.
+    if (payload) |p| {
+        req.transfer_encoding = .{ .content_length = p.len };
+        var body = req.sendBodyUnflushed(&.{}) catch return RemoteError.RequestFailed;
+        body.writer.writeAll(p) catch return RemoteError.RequestFailed;
+        body.end() catch return RemoteError.RequestFailed;
+        if (req.connection) |conn| conn.flush() catch return RemoteError.RequestFailed;
+    } else {
+        req.sendBodiless() catch return RemoteError.RequestFailed;
+    }
+
+    // Receive response head. On socket timeout this returns ReadFailed.
+    var response = req.receiveHead(&.{}) catch return RemoteError.Timeout;
+
+    // Read response body into allocating writer.
+    var response_storage: std.Io.Writer.Allocating = .init(allocator);
+    errdefer response_storage.deinit();
+
+    // Use identity (no decompression) -- etcd/Consul APIs return uncompressed JSON.
+    var transfer_buf: [64]u8 = undefined;
+    const reader = response.reader(&transfer_buf);
+    _ = reader.streamRemaining(&response_storage.writer) catch {
+        response_storage.deinit();
+        // Socket timeout during body read
+        return RemoteError.Timeout;
+    };
+
+    return .{
+        .status = response.head.status,
+        .body = response_storage.toOwnedSlice() catch {
+            response_storage.deinit();
+            return RemoteError.OutOfMemory;
+        },
+    };
+}
+
+/// Result from fetchWithTimeout.
+const FetchResult = struct {
+    status: http.Status,
+    body: []u8,
+};
 
 pub fn buildBasicAuthHeader(
     allocator: Allocator,
@@ -612,12 +733,10 @@ pub const EtcdOptions = struct {
     /// etcd endpoints (e.g., "https://localhost:2379")
     /// SECURITY: Defaults to HTTPS. Use SecurityOptions.allow_insecure_http for HTTP.
     endpoints: []const []const u8 = &.{"https://localhost:2379"},
-    /// Request timeout in milliseconds.
-    /// NOTE (NEW-08, PERF-38): Not currently enforced by Zig 0.15's http.Client --
-    /// requests may block indefinitely on unresponsive servers. The fetch() API does
-    /// not expose socket-level or connect timeout configuration. Applications should
-    /// implement their own timeout wrapper (e.g. via async or a watchdog thread) if
-    /// hard timeout guarantees are required.
+    /// Request timeout in milliseconds (SEC-02). Enforced via SO_RCVTIMEO and
+    /// SO_SNDTIMEO on the underlying TCP socket. If an individual read or write
+    /// stalls longer than this, the request fails with RemoteError.Timeout.
+    /// Set to 0 to disable (not recommended for production).
     timeout_ms: u32 = 5000,
     /// Username for authentication (optional)
     username: ?[]const u8 = null,
@@ -656,12 +775,6 @@ pub const Etcd = struct {
 
         // Security: Warn when TLS certificate verification is disabled (CWE-295)
         warnIfTlsSkipVerify(options.security);
-
-        // T-05: Warn when timeout_ms is configured but cannot be enforced
-        if (options.timeout_ms != 5000) {
-            log.warn("timeout_ms ({d}ms) is configured but not enforced by Zig 0.15's http.Client; " ++
-                "requests may block indefinitely (see EtcdOptions.timeout_ms doc comment)", .{options.timeout_ms});
-        }
 
         // PERF-33: Build auth header once at init time instead of per request
         const auth_header = buildBasicAuthHeader(
@@ -895,6 +1008,7 @@ pub const Etcd = struct {
 
     /// PERF-37: Accepts a pre-parsed std.Uri instead of a URL string.
     /// PERF-33: Uses cached_auth_header instead of rebuilding per request.
+    /// SEC-02: Enforces timeout_ms via SO_RCVTIMEO/SO_SNDTIMEO.
     fn makeRequest(self: *Etcd, uri: std.Uri, body: []const u8) ![]u8 {
         // Build extra headers (User-Agent + optional Authorization)
         var extra_headers_buf: [2]http.Header = undefined;
@@ -917,30 +1031,32 @@ pub const Etcd = struct {
             extra_headers_len += 1;
         }
 
-        // NOTE (NEW-08, PERF-38): timeout_ms is NOT enforced here. Zig 0.15's
-        // http.Client.FetchOptions has no timeout field, and fetch() does not
-        // expose the underlying connection for socket-level setsockopt calls.
-        // TODO: Wire timeout_ms when Zig's http.Client gains timeout support.
-
-        var response_storage: std.Io.Writer.Allocating = .init(self.allocator);
-        errdefer response_storage.deinit();
-
-        const result = self.client.fetch(.{
-            .location = .{ .uri = uri },
-            .method = .POST,
-            .payload = body,
-            .extra_headers = extra_headers_buf[0..extra_headers_len],
-            // Security: Disable redirect following to prevent SSRF bypass (CWE-918, #70)
-            .redirect_behavior = .not_allowed,
-            .response_writer = &response_storage.writer,
-            .headers = .{ .content_type = .{ .override = "application/json" } },
-        }) catch return error.RequestFailed;
+        // SEC-02: Use fetchWithTimeout to enforce socket-level I/O deadline.
+        const result = fetchWithTimeout(
+            &self.client,
+            self.allocator,
+            uri,
+            .POST,
+            body,
+            extra_headers_buf[0..extra_headers_len],
+            "application/json",
+            self.options.timeout_ms,
+        ) catch |err| return switch (err) {
+            RemoteError.Timeout => error.Timeout,
+            RemoteError.ConnectionFailed => error.ConnectionFailed,
+            else => error.RequestFailed,
+        };
+        errdefer {
+            secret.secureZero(result.body);
+            self.allocator.free(result.body);
+        }
 
         // Security: Check HTTP status code before parsing response (GAP-0037)
         // A 401/403/500 response must not be silently parsed as if 200 OK.
         const status_int = @intFromEnum(result.status);
         if (status_int >= 400) {
-            response_storage.deinit();
+            secret.secureZero(result.body);
+            self.allocator.free(result.body);
             if (status_int == 401 or status_int == 403) {
                 return error.Unauthorized;
             }
@@ -948,13 +1064,14 @@ pub const Etcd = struct {
         }
 
         // Security: Enforce response size limit to prevent OOM (CWE-400, GAP-0034)
-        if (response_storage.writer.end > limits.MAX_REMOTE_RESPONSE_SIZE) {
-            log.warn("etcd response exceeded maximum size ({d} > {d})", .{ response_storage.writer.end, limits.MAX_REMOTE_RESPONSE_SIZE });
-            response_storage.deinit();
+        if (result.body.len > limits.MAX_REMOTE_RESPONSE_SIZE) {
+            log.warn("etcd response exceeded maximum size ({d} > {d})", .{ result.body.len, limits.MAX_REMOTE_RESPONSE_SIZE });
+            secret.secureZero(result.body);
+            self.allocator.free(result.body);
             return error.ResponseTooLarge;
         }
 
-        return response_storage.toOwnedSlice() catch return error.OutOfMemory;
+        return result.body;
     }
 
     /// Parse a single-key etcd v3 range response using std.json (NEW-02, GAP-0038).
@@ -1022,12 +1139,10 @@ pub const ConsulOptions = struct {
     /// ACL token (optional)
     /// Security: Uses SensitiveString to prevent accidental credential logging (#59)
     token: ?SensitiveString = null,
-    /// Request timeout in milliseconds.
-    /// NOTE (NEW-16, PERF-38): Not currently enforced by Zig 0.15's http.Client --
-    /// requests may block indefinitely on unresponsive servers. The fetch() API does
-    /// not expose socket-level or connect timeout configuration. Applications should
-    /// implement their own timeout wrapper (e.g. via async or a watchdog thread) if
-    /// hard timeout guarantees are required.
+    /// Request timeout in milliseconds (SEC-02). Enforced via SO_RCVTIMEO and
+    /// SO_SNDTIMEO on the underlying TCP socket. If an individual read or write
+    /// stalls longer than this, the request fails with RemoteError.Timeout.
+    /// Set to 0 to disable (not recommended for production).
     timeout_ms: u32 = 5000,
     /// Security options (TLS, SSRF protection)
     security: SecurityOptions = .{},
@@ -1056,12 +1171,6 @@ pub const Consul = struct {
 
         // Security: Warn when TLS certificate verification is disabled (CWE-295)
         warnIfTlsSkipVerify(options.security);
-
-        // T-05: Warn when timeout_ms is configured but cannot be enforced
-        if (options.timeout_ms != 5000) {
-            log.warn("timeout_ms ({d}ms) is configured but not enforced by Zig 0.15's http.Client; " ++
-                "requests may block indefinitely (see ConsulOptions.timeout_ms doc comment)", .{options.timeout_ms});
-        }
 
         // PERF-37: Parse address URI once at init time instead of per request
         const cached_uri = Uri.parse(options.address) catch return RemoteError.InvalidUrl;
@@ -1235,6 +1344,7 @@ pub const Consul = struct {
     /// request, validates the HTTP status code (SEC-01), enforces the response
     /// size limit (GAP-0034), and returns the owned response body.
     /// PERF-37: Accepts a pre-constructed std.Uri instead of a URL string.
+    /// SEC-02: Enforces timeout_ms via SO_RCVTIMEO/SO_SNDTIMEO.
     fn makeRequest(self: *Consul, method: http.Method, uri: std.Uri, body: ?[]const u8) ![]u8 {
         // Build extra headers for security
         var extra_headers_buf: [2]http.Header = undefined;
@@ -1258,25 +1368,29 @@ pub const Consul = struct {
             extra_headers_len += 1;
         }
 
-        // NOTE (NEW-16, PERF-38): timeout_ms is NOT enforced here. Zig 0.15's
-        // http.Client.FetchOptions has no timeout field. See ConsulOptions.timeout_ms.
-        // TODO: Wire timeout_ms when Zig's http.Client gains timeout support.
-
-        var response_storage: std.Io.Writer.Allocating = .init(self.allocator);
-        errdefer response_storage.deinit();
-
-        const result = self.client.fetch(.{
-            .location = .{ .uri = uri },
-            .method = method,
-            .payload = body,
-            .extra_headers = extra_headers_buf[0..extra_headers_len],
-            // Security: Disable redirect following to prevent SSRF bypass (CWE-918, #70)
-            .redirect_behavior = .not_allowed,
-            .response_writer = &response_storage.writer,
-        }) catch return error.RequestFailed;
+        // SEC-02: Use fetchWithTimeout to enforce socket-level I/O deadline.
+        const result = fetchWithTimeout(
+            &self.client,
+            self.allocator,
+            uri,
+            method,
+            body,
+            extra_headers_buf[0..extra_headers_len],
+            null,
+            self.options.timeout_ms,
+        ) catch |err| return switch (err) {
+            RemoteError.Timeout => error.Timeout,
+            RemoteError.ConnectionFailed => error.ConnectionFailed,
+            else => error.RequestFailed,
+        };
+        errdefer {
+            secret.secureZero(result.body);
+            self.allocator.free(result.body);
+        }
 
         if (result.status == .not_found) {
-            response_storage.deinit();
+            secret.secureZero(result.body);
+            self.allocator.free(result.body);
             return error.NotFound;
         }
 
@@ -1284,7 +1398,8 @@ pub const Consul = struct {
         // A 401/403/500 response must not be silently parsed as if 200 OK.
         const status_int = @intFromEnum(result.status);
         if (status_int >= 400) {
-            response_storage.deinit();
+            secret.secureZero(result.body);
+            self.allocator.free(result.body);
             if (status_int == 401 or status_int == 403) {
                 return error.Unauthorized;
             }
@@ -1292,13 +1407,14 @@ pub const Consul = struct {
         }
 
         // Security: Enforce response size limit to prevent OOM (CWE-400, GAP-0034)
-        if (response_storage.writer.end > limits.MAX_REMOTE_RESPONSE_SIZE) {
-            log.warn("consul response exceeded maximum size ({d} > {d})", .{ response_storage.writer.end, limits.MAX_REMOTE_RESPONSE_SIZE });
-            response_storage.deinit();
+        if (result.body.len > limits.MAX_REMOTE_RESPONSE_SIZE) {
+            log.warn("consul response exceeded maximum size ({d} > {d})", .{ result.body.len, limits.MAX_REMOTE_RESPONSE_SIZE });
+            secret.secureZero(result.body);
+            self.allocator.free(result.body);
             return error.ResponseTooLarge;
         }
 
-        return response_storage.toOwnedSlice() catch return error.OutOfMemory;
+        return result.body;
     }
 
     /// Thin wrapper: GET request without body. Returns error.NotFound for 404.

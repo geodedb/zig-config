@@ -13,14 +13,14 @@
 | Severity | Count | Open | Closed/Accepted/Blocked | Won't Do | Notes |
 |----------|-------|------|-------------------------|----------|-------|
 | Critical | 0     | 0    | 0               | 0 | No critical vulnerabilities found |
-| Medium   | 5     | 0    | 3 closed, 2 blocked | 0 | SEC-01/SEC-03 closed (Wave 10); ADV-01 closed (Wave 12 Batch 3); SEC-02 blocked (Zig 0.15); SEC-04 blocked (upstream) |
+| Medium   | 5     | 0    | 4 closed, 1 blocked | 0 | SEC-01/SEC-03 closed (Wave 10); ADV-01 closed (Wave 12 Batch 3); SEC-02 closed (Wave 13); SEC-04 blocked (upstream) |
 | Low      | 16    | 0    | 16 (1 FP, 1 accepted, 14 closed) | 0 | SEC-05-09/15-18 closed (Wave 10); SEC-10 FP; SEC-11 accepted; ADV-02/03/04/05/07 closed (Wave 12 Batch 3-4) |
 | Info     | 5     | 0    | 3 (info, no action) | 2 | SEC-12/13/14 sound patterns; ADV-06 Won't Do (info-level); ADV-08 Won't Do (architectural) |
-| **Total** | **26** | **0 open + 2 blocked** | **22** | **2** | All open items resolved in Wave 12. SEC-02/SEC-04 remain blocked. ADV-06/ADV-08 Won't Do. |
+| **Total** | **26** | **0 open + 1 blocked** | **23** | **2** | All open items resolved. SEC-02 closed (Wave 13). SEC-04 remains blocked (upstream). ADV-06/ADV-08 Won't Do. |
 
 ### Top 5 Risks (all resolved or blocked)
 
-1. **HTTP timeout not enforced (etcd/Consul)** (SEC-02) -- Medium, RiskScore 36. **Blocked**: Zig 0.15 http.Client has no timeout API. Slow-read/hang attacks can block indefinitely.
+1. ~~**HTTP timeout not enforced (etcd/Consul)**~~ (SEC-02) -- Medium, RiskScore 36. **Closed** (Wave 13): Implemented `setSocketTimeout()` with `SO_RCVTIMEO`/`SO_SNDTIMEO` via `fetchWithTimeout()`. Both etcd and Consul clients now enforce `timeout_ms` at the socket level.
 2. ~~**`unreachable` on `.auto` format causes panic/UB**~~ (ADV-01, #177) -- Medium, RiskScore 24. **Closed** (Wave 12 Batch 3): `.auto` now returns `error.UnsupportedFormat` instead of `unreachable`.
 3. **Spice dependency tracks main branch** (SEC-04) -- Medium, RiskScore 24. **Blocked**: Upstream `devnw/zig/spice` has no version tag; hash-only pinning in place.
 4. ~~**JSON serializer emits unescaped control chars**~~ (ADV-04, #184) -- Low, RiskScore 20. **Closed** (Wave 12 Batch 3): Added `\uXXXX` escaping for control chars per RFC 8259.
@@ -30,7 +30,7 @@
 
 | SEC Finding | Overlapping Item | Gap File | Notes |
 |-------------|-----------------|----------|-------|
-| SEC-02 (HTTP timeout) | QUAL NEW-08 (Resolved, documented limitation), PERF-38 (Closed, documented) | QUALITY_GAP_ANALYSIS.md, PERF_GAP_ANALYSIS.md | Both files mark this as resolved/documented, but no code-level timeout exists. SEC-02 tracks the remaining security risk. |
+| SEC-02 (HTTP timeout) | QUAL NEW-08 (Resolved, documented limitation), PERF-38 (Closed, documented) | QUALITY_GAP_ANALYSIS.md, PERF_GAP_ANALYSIS.md | **Closed** (Wave 13): Socket-level timeout now enforced via `setSocketTimeout()` + `fetchWithTimeout()`. |
 | SEC-06 (TOCTOU Windows symlink) | GAP_ANALYSIS.md #69, #109 (Closed, documented) | GAP_ANALYSIS.md | Original symlink TOCTOU was closed with documentation of the Windows limitation. SEC-06 re-tracks the residual Windows TOCTOU risk. |
 | SEC-10 (DNS rebinding residual) | GAP_ANALYSIS.md #68 (Closed, recheckDnsBinding) | GAP_ANALYSIS.md | **Closed (False Positive):** Vault token passed via env var, not CLI args. DNS rebinding mitigations remain active. |
 | SEC-07 (isValidOpPath permissive) | GAP_ANALYSIS.md #77 (Closed, PATH allowlist) | GAP_ANALYSIS.md | #77 added the allowlist; SEC-07 identifies a remaining overly-permissive pattern within that allowlist. |
@@ -50,7 +50,7 @@
 | Rank | Severity | RiskScore | Finding | Component | CWE/OWASP | Evidence (file:line) | Issue | Fix Guidance | Owner | SLA/Due | Status |
 |------|----------|-----------|---------|-----------|-----------|----------------------|-------|-------------|-------|---------|--------|
 | 1 | Medium | 36 | ~~Consul missing HTTP status code validation~~ | remote.zig | CWE-754 / A05:2021 Security Misconfiguration | src/remote.zig:1228,1274-1282,1325-1332 | SEC-01 | HTTP status validation added to `makeGetRequest`/`makePutRequest`/`makeDeleteRequest`; 4xx/5xx return typed errors | Maintainer | 2026-06-22 (90d) | **Closed** (Wave 10) |
-| 2 | Medium | 36 | HTTP timeout not enforced (etcd/Consul) | remote.zig | CWE-400 / A05:2021 Security Misconfiguration | src/remote.zig:616,1030 | SEC-02 | Blocked: Zig 0.15 http.Client has no timeout API; documented as known limitation | Maintainer | 2026-06-22 (90d) | **Blocked** |
+| 2 | Medium | 36 | ~~HTTP timeout not enforced (etcd/Consul)~~ | remote.zig | CWE-400 / A05:2021 Security Misconfiguration | src/remote.zig:616,1030 | SEC-02 | Implemented SO_RCVTIMEO/SO_SNDTIMEO via `fetchWithTimeout()` + `setSocketTimeout()`. Timeout enforced at socket level on both etcd and Consul clients. | Maintainer | 2026-06-22 (90d) | **Closed** (Wave 13) |
 | 3 | Medium | 24 | ~~Case-insensitive hostname bypass in isPrivateAddress~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:289 | SEC-03 | Hostname comparison uses `std.ascii.eqlIgnoreCase` per RFC 4343; case-insensitive `localhost` check implemented | Maintainer | 2026-06-22 (90d) | **Closed** (Wave 10) |
 | 4 | Medium | 24 | Spice dependency tracks main branch | build.zig.zon | CWE-829 / A06:2021 Vulnerable and Outdated Components | build.zig.zon:20 | SEC-04 | Blocked: Upstream spice has no version tag; hash-only pinning in place | Maintainer | 2026-06-22 (90d) | **Blocked** |
 | 5 | Medium | 24 | ~~`unreachable` on `.auto` format causes panic/UB~~ | config.zig | CWE-248 / A04:2021 Insecure Design | src/config.zig:328 | ADV-01 / [#177](https://gitlab.com/devnw/zig/config/-/issues/177) | Replaced `unreachable` with `return error.UnsupportedFormat`; tests added | Maintainer | 2026-06-23 (90d) | **Closed** (Wave 12 Batch 3) |
@@ -89,15 +89,14 @@
 - **How to verify:** Send a PUT to Consul KV that returns HTTP 403. Observe that `makePutRequest` does not return an error and the caller proceeds as if the write succeeded. Similarly, send a GET that returns HTTP 500 and observe the response body is returned as config data.
 - **Confidence:** `confidence::confirmed` -- code inspection shows PUT (line 1274) and DELETE (line 1325) never inspect `result.status`; GET (line 1228) only checks `.not_found`.
 
-### SEC-02: HTTP timeout not enforced (etcd/Consul)
+### SEC-02: HTTP timeout not enforced (etcd/Consul) -- CLOSED (Wave 13)
 
 - **Impact: 3** (Denial of service -- blocked thread/process)
 - **Likelihood: 3** (Remote, requires network access to etcd/Consul endpoint; trivial slow-read attack)
 - **RiskScore: 3 x 3 x 4 = 36**
 - **Exploit surface:** Internal network
-- **How to verify:** Configure etcd/Consul endpoint to a server that accepts connections but never responds. Observe the client blocks indefinitely despite `timeout_ms` being set.
-- **Confidence:** `confidence::confirmed` -- Zig 0.15 `http.Client.FetchOptions` has no timeout field. Code comments at lines 616 and 1030 acknowledge this.
-- **Note:** This was previously tracked as QUAL NEW-08 (resolved as documented limitation) and PERF-38 (closed as documented limitation). This entry tracks the remaining security risk of indefinite blocking.
+- **Resolution:** Implemented `setSocketTimeout()` in `remote.zig` which sets `SO_RCVTIMEO` and `SO_SNDTIMEO` on the TCP socket after connection establishment. Both `Etcd.makeRequest` and `Consul.makeRequest` now call `fetchWithTimeout()` which uses the lower-level `client.request()` API (instead of `client.fetch()`) to inject socket-level timeouts between connection and I/O. On timeout, `recv()`/`send()` return `EAGAIN` which propagates as `RemoteError.Timeout`. Cross-platform: POSIX uses `timeval`, Windows uses DWORD milliseconds.
+- **Tests:** 5 new tests in `remote_test.zig` verify socket timeout is correctly set (including sub-second precision and zero-is-noop).
 
 ### SEC-03: Case-insensitive hostname bypass in isPrivateAddress
 
@@ -341,7 +340,7 @@ JSON nesting depth is bounded by `std.json.parseFromSlice` defaults (`default_ma
 | Finding | RiskScore | Status | ID | Notes |
 |---------|-----------|--------|----|-------|
 | ~~Consul missing HTTP status code validation~~ | 36 | **Closed** (Wave 10) | SEC-01 | HTTP status validation added to all Consul methods |
-| HTTP timeout not enforced (etcd/Consul) | 36 | **Blocked** | SEC-02 | Zig 0.15 limitation |
+| ~~HTTP timeout not enforced (etcd/Consul)~~ | 36 | **Closed** (Wave 13) | SEC-02 | SO_RCVTIMEO/SO_SNDTIMEO via fetchWithTimeout() |
 | ~~Case-insensitive hostname bypass in isPrivateAddress~~ | 24 | **Closed** (Wave 10) | SEC-03 | Case-insensitive comparison implemented |
 | ~~Decimal/hex/octal IP SSRF bypass (residual)~~ | 8 | **Closed** (Wave 10) | SEC-15 | Case-insensitive `::ffff:` prefix check added |
 | ~~IPv4-mapped IPv6 SSRF bypass (::FFFF: case)~~ | 8 | **Closed** (Wave 10) | SEC-16 | Case-insensitive prefix check added |
@@ -437,7 +436,7 @@ The Phase 3 and Phase 3+ security reviews confirmed several strong security prop
 
 | Finding | RiskScore | ID | Effort | Notes |
 |---------|----------|-----|--------|-------|
-| HTTP timeout enforcement | 36 | SEC-02 | L | Requires watchdog-thread wrapper or upstream Zig http.Client timeout support. Pattern exists in execCommand (encrypted_secrets.zig:710-727) but adapting for generic HTTP fetch is non-trivial. |
+| ~~HTTP timeout enforcement~~ | 36 | SEC-02 | L | **Closed** (Wave 13): Implemented via SO_RCVTIMEO/SO_SNDTIMEO using fetchWithTimeout(). |
 | TOCTOU Windows symlink check | 16 | SEC-06 | M-L | Requires Windows-specific file open flags (FILE_FLAG_OPEN_REPARSE_POINT); or accept as documented limitation |
 
 ### Accepted Risks / Low-Priority Backlog
@@ -478,7 +477,7 @@ The Phase 3 and Phase 3+ security reviews confirmed several strong security prop
 
 - **Windows CI:** No Windows CI runner is configured. SEC-05 and SEC-06 cannot be fully verified without Windows testing.
 - **Spice release tagging:** SEC-04 fix depends on upstream `devnw/zig/spice` tagging a release. If no release exists, the fix is to pin to a specific commit hash instead of `main`.
-- **Zig http.Client timeout:** SEC-02 depends on either upstream Zig adding timeout support or implementing a watchdog-thread wrapper. The watchdog pattern from `execCommand` (encrypted_secrets.zig:710-727) could be adapted but requires careful thread-safety around the HTTP client.
+- ~~**Zig http.Client timeout:**~~ SEC-02 resolved in Wave 13 by setting SO_RCVTIMEO/SO_SNDTIMEO on the socket after connection establishment, before I/O. No watchdog thread needed.
 - **Consul status codes:** SEC-01 fix requires understanding which Consul API status codes should be treated as errors vs. expected conditions (e.g., 404 on GET is already handled; 200/204 are success for PUT/DELETE).
 - **IPv6 parseIp behavior (SEC-16):** Whether Zig's `net.Address.parseIp` recognizes uppercase `::FFFF:` prefix needs runtime verification. If it does, the string-level bypass is confirmed; if not, the input is rejected entirely and the risk is lower than assessed.
 - **Fuzzing for IP format edge cases (SEC-15):** `parseIPv4ToInt` handles standard formats but mixed-base octets (e.g., `0x7f.0.0.01`) need systematic testing. A fuzz harness targeting `isPrivateIPv4` would confirm or eliminate residual bypass risk.

@@ -123,7 +123,7 @@ Wave 12 closure complete: Batch 1+2 closed GAP-0062 and GAP-0067. Batch 6 closed
 
 | ID | Severity | Finding | Component | Blocker | Unblock Steps | Status |
 |----|----------|---------|-----------|---------|---------------|--------|
-| SEC-02 | Medium | HTTP timeout not enforced | remote.zig | Zig 0.15 `http.Client` has no timeout API; `fetch()` does not expose underlying connection | Wait for Zig version with timeout support in http.Client | **Blocked** |
+| ~~SEC-02~~ | Medium | ~~HTTP timeout not enforced~~ | remote.zig | ~~Zig 0.15 `http.Client` has no timeout API~~ | Implemented `setSocketTimeout()` + `fetchWithTimeout()` using SO_RCVTIMEO/SO_SNDTIMEO | **Closed** (Wave 13) |
 | SEC-04 | Low | spice dependency not pinned (GAP-0043) | build.zig.zon | Upstream spice package has no version tag; hash-only pinning in place | Request upstream version tag or fork with explicit versioning | **Blocked** |
 | GAP-0058 | Low | Windows CI infrastructure | CI/CD | Infrastructure; out of scope for gap closure | Add Windows CI runner | **Blocked** |
 
