@@ -536,15 +536,11 @@ pub const SecretManager = struct {
     fn loadFromVault(self: *Self, path: []const u8, field: ?[]const u8) SecretError![]u8 {
         const config = self.vault_config orelse return SecretError.ProviderNotConfigured;
 
-        const vault_path = try resolveVaultPath(self.allocator, config.vault_path);
-        defer self.allocator.free(vault_path);
-
-        // Security: Validate path_prefix to prevent injection attacks (#67)
+        // Security: Validate inputs BEFORE resolving provider path to ensure
+        // injection is caught even when the provider binary is not installed.
         if (!isValidSecretIdentifier(config.path_prefix)) {
             return SecretError.InvalidInputCharacters;
         }
-
-        // Security: Validate path to prevent command injection
         if (!isValidSecretIdentifier(path)) {
             return SecretError.InvalidInputCharacters;
         }
@@ -553,6 +549,9 @@ pub const SecretManager = struct {
                 return SecretError.InvalidInputCharacters;
             }
         }
+
+        const vault_path = try resolveVaultPath(self.allocator, config.vault_path);
+        defer self.allocator.free(vault_path);
 
         // Build vault CLI command
         var args: std.ArrayList([]const u8) = .empty;
@@ -581,16 +580,11 @@ pub const SecretManager = struct {
     fn loadFromOnePassword(self: *Self, item: []const u8, field: ?[]const u8) SecretError![]u8 {
         const config = self.onepassword_config orelse return SecretError.ProviderNotConfigured;
 
-        // Security: Resolve and validate op_path against allowlist (#66, #77)
-        const op_path = try resolveOpPath(self.allocator, config.op_path);
-        defer self.allocator.free(op_path);
-
-        // Security: Validate vault name to prevent injection attacks (#67)
+        // Security: Validate inputs BEFORE resolving provider path to ensure
+        // injection is caught even when the provider binary is not installed.
         if (!isValidSecretIdentifier(config.vault)) {
             return SecretError.InvalidInputCharacters;
         }
-
-        // Security: Validate item name to prevent command injection
         if (!isValidSecretIdentifier(item)) {
             return SecretError.InvalidInputCharacters;
         }
@@ -599,6 +593,10 @@ pub const SecretManager = struct {
                 return SecretError.InvalidInputCharacters;
             }
         }
+
+        // Security: Resolve and validate op_path against allowlist (#66, #77)
+        const op_path = try resolveOpPath(self.allocator, config.op_path);
+        defer self.allocator.free(op_path);
 
         // Build op CLI command
         var args: std.ArrayList([]const u8) = .empty;

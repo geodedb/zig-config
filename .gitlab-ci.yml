@@ -83,9 +83,20 @@ stages:
 
 # Override zig-format component to use the project's ZIG_VERSION.
 # The v1.2.1 component defaults to 0.14.0 and does not accept a version input.
+# Override both before_script (install) and script (run) to use our Zig.
 zig-format:
   before_script:
     - *install-zig
+  script:
+    - export PATH="$PWD/zig-${ZIG_VERSION}:$PATH"
+    - |
+      FMT_PATHS="${ZIG_FMT_PATHS:-src/}"
+      if zig fmt --check $FMT_PATHS; then
+        echo "No formatting issues found."
+      else
+        echo "Code formatting issues found. Run 'zig fmt $FMT_PATHS' to fix."
+        exit 1
+      fi
 
 # Build job
 build:
