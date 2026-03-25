@@ -9,7 +9,7 @@ Thank you for your interest in contributing to zigconfig!
    ```bash
    git clone git@gitlab.com:YOUR_USERNAME/zig/config.git
    ```
-3. Set up the development environment (Zig 0.15.1+)
+3. Set up the development environment (Zig 0.15.2+)
 4. Run tests to verify setup:
    ```bash
    zig build test

@@ -42,6 +42,8 @@ pub fn mergeMaps(
     options: MergeOptions,
 ) !std.StringHashMap(V) {
     var result = std.StringHashMap(V).init(allocator);
+    // PERF-59: Pre-allocate capacity to avoid O(log N) rehashes during insertion
+    try result.ensureTotalCapacity(@intCast(base.count() + overlay.count()));
     errdefer result.deinit();
 
     // Copy all base values
@@ -100,10 +102,14 @@ pub fn mergeEntries(
     comptime keyFn: fn (Entry) []const u8,
 ) ![]Entry {
     var result = std.ArrayList(Entry).init(allocator);
+    // PERF-59: Pre-allocate capacity to avoid incremental resizing
+    try result.ensureTotalCapacity(base.len + overlay.len);
     errdefer result.deinit();
 
     // Track which keys we've seen
     var seen = std.StringHashMap(void).init(allocator);
+    // PERF-59: Pre-allocate capacity to avoid incremental resizing
+    try seen.ensureTotalCapacity(@intCast(base.len + overlay.len));
     defer seen.deinit();
 
     // Add overlay entries first (higher priority)

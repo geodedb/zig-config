@@ -413,11 +413,14 @@ pub fn loadParallel(comptime T: type, allocator: Allocator, paths: []const []con
         }
     }
 
-    return loader.load(.{
-        .app_name = "parallel",
-        .use_xdg = false,
-        .optional = true,
-    });
+    // PERF-61: The parallel threads already populated the loader's config
+    // fields via parseContent(). Calling loader.load() would redundantly
+    // re-run the full loading pipeline (filesystem discovery for CWD config,
+    // .env file reading, env scanning) -- none of which is needed here since
+    // no env bindings, overrides, or search paths are configured on this
+    // temporary loader instance.  getConfig() returns the config as-is with
+    // struct defaults for any fields not set by the parsed files.
+    return loader.getConfig();
 }
 
 // ============================================================================

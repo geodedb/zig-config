@@ -123,7 +123,15 @@ pub const EnvKeyReplacer = struct {
     to_upper: bool = true,
 };
 
-/// Configuration loader with Viper-like features
+/// Configuration loader with Viper-like features.
+///
+/// `T` must be a struct type where every field has a default value.  The loader
+/// populates fields from configuration files, environment variables, flags, and
+/// runtime overrides using Viper-like precedence rules (overrides > flags > env
+/// > config file > defaults).  Field types supported: `bool`, integer types,
+/// float types, `[]const u8` (strings), and `?T` optionals wrapping any of
+/// these.  Struct fields without defaults will cause a compile error when the
+/// loader is instantiated.
 pub fn Loader(comptime T: type) type {
     return struct {
         allocator: Allocator,
@@ -265,17 +273,43 @@ pub fn Loader(comptime T: type) type {
             return null;
         }
 
-        /// Get a value with array index support (e.g., "servers.0.host")
-        /// Supports dot-separated paths with numeric indices for arrays
+        /// Look up a configuration value by a dot-delimited or bracket-notation path.
+        ///
+        /// Supports two notations:
+        ///   - Dot-delimited:  `"servers.0.host"` (native storage format)
+        ///   - Bracket:        `"servers[0].host"` (normalized to dot form before lookup)
+        ///
+        /// Returns `null` if the path does not match any stored key. Paths longer
+        /// than 512 bytes in bracket notation also return `null`.
+        ///
+        /// GAP-0041: JSON arrays are flattened into dot-delimited numeric-index
+        /// keys by applyJsonValue (e.g., "ports.0", "servers.1.host"), so a
+        /// direct `get()` call already matches the stored format.
         pub fn getPath(self: *const Self, path: []const u8) ?[]const u8 {
-            // First try direct lookup
+            // Direct lookup (handles dot-delimited paths natively)
             if (self.get(path)) |value| {
                 return value;
             }
 
-            // Parse path for array notation
-            // Currently, stored values use flattened keys, so this provides the interface
-            // for future array support
+            // Normalize bracket notation: "a[0].b" -> "a.0.b"
+            if (mem.indexOf(u8, path, "[")) |_| {
+                var norm_buf: [512]u8 = undefined;
+                var len: usize = 0;
+                for (path) |c| {
+                    if (len >= norm_buf.len) return null; // Path too long
+                    if (c == '[') {
+                        norm_buf[len] = '.';
+                        len += 1;
+                    } else if (c == ']') {
+                        // skip closing bracket
+                    } else {
+                        norm_buf[len] = c;
+                        len += 1;
+                    }
+                }
+                return self.get(norm_buf[0..len]);
+            }
+
             return null;
         }
 
@@ -315,38 +349,19 @@ pub fn Loader(comptime T: type) type {
             var result = std.StringHashMap([]const u8).init(self.allocator);
             errdefer result.deinit();
 
-            // PERF-32: Use stack buffer for prefix construction, heap fallback for oversized prefixes
+            // R-06: Use shared buildPrefixWithDot helper (stack buffer + heap fallback)
             var dot_buf: [256]u8 = undefined;
-            if (prefix.len > 0 and prefix[prefix.len - 1] != '.') {
-                var heap_dot: ?[]u8 = null;
-                defer if (heap_dot) |h| self.allocator.free(h);
-                const prefix_with_dot = std.fmt.bufPrint(&dot_buf, "{s}.", .{prefix}) catch blk: {
-                    const h = try self.allocator.alloc(u8, prefix.len + 1);
-                    @memcpy(h[0..prefix.len], prefix);
-                    h[prefix.len] = '.';
-                    heap_dot = h;
-                    break :blk @as([]u8, h);
-                };
+            const pwd = try buildPrefixWithDot(self.allocator, &dot_buf, prefix);
+            defer if (pwd.heap_alloc) |h| self.allocator.free(h);
+            const prefix_with_dot = pwd.slice;
 
-                var iter = self.tracker.values.iterator();
-                while (iter.next()) |entry| {
-                    const key = entry.key_ptr.*;
-                    if (mem.startsWith(u8, key, prefix_with_dot)) {
-                        const sub_key = key[prefix_with_dot.len..];
-                        if (sub_key.len > 0) {
-                            try result.put(sub_key, entry.value_ptr.value);
-                        }
-                    }
-                }
-            } else {
-                var iter = self.tracker.values.iterator();
-                while (iter.next()) |entry| {
-                    const key = entry.key_ptr.*;
-                    if (mem.startsWith(u8, key, prefix)) {
-                        const sub_key = key[prefix.len..];
-                        if (sub_key.len > 0) {
-                            try result.put(sub_key, entry.value_ptr.value);
-                        }
+            var iter = self.tracker.values.iterator();
+            while (iter.next()) |entry| {
+                const key = entry.key_ptr.*;
+                if (mem.startsWith(u8, key, prefix_with_dot)) {
+                    const sub_key = key[prefix_with_dot.len..];
+                    if (sub_key.len > 0) {
+                        try result.put(sub_key, entry.value_ptr.value);
                     }
                 }
             }
@@ -356,17 +371,11 @@ pub fn Loader(comptime T: type) type {
 
         /// Check if a sub-configuration exists
         pub fn hasSub(self: *const Self, prefix: []const u8) bool {
-            // PERF-32: Use stack buffer for prefix construction, heap fallback for oversized prefixes
+            // R-06: Use shared buildPrefixWithDot helper (stack buffer + heap fallback)
             var dot_buf: [256]u8 = undefined;
-            var heap_dot: ?[]u8 = null;
-            defer if (heap_dot) |h| self.allocator.free(h);
-            const prefix_with_dot = std.fmt.bufPrint(&dot_buf, "{s}.", .{prefix}) catch blk: {
-                const h = self.allocator.alloc(u8, prefix.len + 1) catch return false;
-                @memcpy(h[0..prefix.len], prefix);
-                h[prefix.len] = '.';
-                heap_dot = h;
-                break :blk @as([]u8, h);
-            };
+            const pwd = buildPrefixWithDot(self.allocator, &dot_buf, prefix) catch return false;
+            defer if (pwd.heap_alloc) |h| self.allocator.free(h);
+            const prefix_with_dot = pwd.slice;
 
             var iter = self.tracker.values.keyIterator();
             while (iter.next()) |key| {
@@ -419,6 +428,23 @@ pub fn Loader(comptime T: type) type {
         }
 
         /// Search for a config file with extensionless support (#44)
+        /// T-04: Check file existence using a stack buffer for path construction,
+        /// falling back to heap only when the path exceeds the buffer size.
+        fn tryAccessPath(self: *Self, comptime fmt: []const u8, args: anytype) ?[]const u8 {
+            var path_buf: [1024]u8 = undefined;
+            var heap_path: ?[]u8 = null;
+            defer if (heap_path) |h| self.allocator.free(h);
+            const full_path = std.fmt.bufPrint(&path_buf, fmt, args) catch blk: {
+                const h = std.fmt.allocPrint(self.allocator, fmt, args) catch return null;
+                heap_path = h;
+                break :blk h;
+            };
+            if (fs.cwd().access(full_path, .{})) {
+                return self.arena.allocator().dupe(u8, full_path) catch null;
+            } else |_| {}
+            return null;
+        }
+
         fn findConfigFileWithOptions(self: *Self, filename: []const u8, allow_extensionless: bool) ?[]const u8 {
             const extensions = [_][]const u8{ ".toml", ".yaml", ".yml", ".json", ".ini", ".properties" };
 
@@ -427,35 +453,19 @@ pub fn Loader(comptime T: type) type {
                 for (self.search_paths.items) |search_path| {
                     // Try with extensions first
                     for (extensions) |ext| {
-                        const full_path = std.fmt.allocPrint(self.allocator, "{s}/{s}{s}", .{ search_path, name, ext }) catch continue;
-                        defer self.allocator.free(full_path);
-
-                        if (fs.cwd().access(full_path, .{})) {
-                            // Return an owned copy
-                            return self.arena.allocator().dupe(u8, full_path) catch null;
-                        } else |_| {}
+                        if (self.tryAccessPath("{s}/{s}{s}", .{ search_path, name, ext })) |p| return p;
                     }
 
                     // Try extensionless if allowed (#44)
                     if (allow_extensionless) {
-                        const extensionless_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ search_path, name }) catch continue;
-                        defer self.allocator.free(extensionless_path);
-
-                        if (fs.cwd().access(extensionless_path, .{})) {
-                            return self.arena.allocator().dupe(u8, extensionless_path) catch null;
-                        } else |_| {}
+                        if (self.tryAccessPath("{s}/{s}", .{ search_path, name })) |p| return p;
                     }
                 }
             }
 
             // Otherwise, use the provided filename
             for (self.search_paths.items) |search_path| {
-                const full_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ search_path, filename }) catch continue;
-                defer self.allocator.free(full_path);
-
-                if (fs.cwd().access(full_path, .{})) {
-                    return self.arena.allocator().dupe(u8, full_path) catch null;
-                } else |_| {}
+                if (self.tryAccessPath("{s}/{s}", .{ search_path, filename })) |p| return p;
             }
 
             // Try extensionless in search paths (#44)
@@ -463,12 +473,7 @@ pub fn Loader(comptime T: type) type {
                 // Extract base name without extension from filename
                 const base_name = getBaseName(filename);
                 for (self.search_paths.items) |search_path| {
-                    const extensionless_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ search_path, base_name }) catch continue;
-                    defer self.allocator.free(extensionless_path);
-
-                    if (fs.cwd().access(extensionless_path, .{})) {
-                        return self.arena.allocator().dupe(u8, extensionless_path) catch null;
-                    } else |_| {}
+                    if (self.tryAccessPath("{s}/{s}", .{ search_path, base_name })) |p| return p;
                 }
             }
 
@@ -728,9 +733,11 @@ pub fn Loader(comptime T: type) type {
             // Get all environment variables and find ones with our prefix
             const info = @typeInfo(T);
             inline for (info.@"struct".fields) |field| {
-                // Build env var name with prefix
+                // A-02: Build env var name with heap fallback for long names
                 var env_name_buf: [256]u8 = undefined;
-                const env_name = buildEnvVarName(&env_name_buf, prefix, field.name, self.env_key_replacer);
+                var heap_env_name: ?[]u8 = null;
+                defer if (heap_env_name) |h| self.allocator.free(h);
+                const env_name = buildEnvVarNameAlloc(&env_name_buf, prefix, field.name, self.env_key_replacer, self.allocator, &heap_env_name);
 
                 if (environ.getenv(env_name)) |value| {
                     self.setField(field.name, value, .env, env_name) catch |err| switch (err) {
@@ -851,6 +858,29 @@ pub fn Loader(comptime T: type) type {
                         LoadError.OutOfMemory => return LoadError.OutOfMemory,
                         else => {}, // Unknown key or type mismatch is non-fatal during parsing
                     };
+                },
+                // GAP-0042: Flatten JSON arrays into dot-delimited numeric-index keys
+                // e.g. {"ports":[80,443]} -> "ports.0" = "80", "ports.1" = "443"
+                .array => |arr| {
+                    for (arr.items, 0..) |elem, idx| {
+                        var idx_buf: [20]u8 = undefined;
+                        const idx_str = std.fmt.bufPrint(&idx_buf, "{d}", .{idx}) catch continue;
+                        var key_buf: [512]u8 = undefined;
+                        var heap_key: ?[]u8 = null;
+                        defer if (heap_key) |h| self.allocator.free(h);
+                        const full_key = if (prefix.len > 0)
+                            std.fmt.bufPrint(&key_buf, "{s}.{s}", .{ prefix, idx_str }) catch blk: {
+                                const h = self.allocator.alloc(u8, prefix.len + 1 + idx_str.len) catch return LoadError.OutOfMemory;
+                                @memcpy(h[0..prefix.len], prefix);
+                                h[prefix.len] = '.';
+                                @memcpy(h[prefix.len + 1 ..], idx_str);
+                                heap_key = h;
+                                break :blk @as([]u8, h);
+                            }
+                        else
+                            idx_str;
+                        try self.applyJsonValue(full_key, elem, source, path);
+                    }
                 },
                 else => {},
             }
@@ -1023,8 +1053,11 @@ pub fn Loader(comptime T: type) type {
         fn applyEnv(self: *Self, prefix: []const u8) LoadError!void {
             const info = @typeInfo(T);
             inline for (info.@"struct".fields) |field| {
+                // A-02: Build env var name with heap fallback for long names
                 var env_name_buf: [256]u8 = undefined;
-                const env_name = buildEnvVarName(&env_name_buf, prefix, field.name, self.env_key_replacer);
+                var heap_env_name: ?[]u8 = null;
+                defer if (heap_env_name) |h| self.allocator.free(h);
+                const env_name = buildEnvVarNameAlloc(&env_name_buf, prefix, field.name, self.env_key_replacer, self.allocator, &heap_env_name);
 
                 if (environ.getenv(env_name)) |value| {
                     self.setField(field.name, value, .env, env_name) catch |err| switch (err) {
@@ -1041,10 +1074,28 @@ pub fn Loader(comptime T: type) type {
             inline for (info.@"struct".fields) |field| {
                 if (matchFieldName(field.name, resolved_name, self.case_insensitive)) {
                     try self.setFieldValue(field.type, field.name, value);
-                    // Copy value and path for provenance tracking
-                    const owned_value_for_tracker = self.arena.allocator().dupe(u8, value) catch return LoadError.OutOfMemory;
+                    // Copy key and path onto arena for provenance tracking so
+                    // they outlive transient stack/heap buffers from callers.
+                    const owned_key = self.arena.allocator().dupe(u8, resolved_name) catch return LoadError.OutOfMemory;
+                    // T-02: For []const u8 fields, setFieldValue already duped the value
+                    // into the arena (stored in the config struct). Reuse that pointer
+                    // instead of duping a second time.
+                    const owned_value_for_tracker = blk: {
+                        const FieldType = field.type;
+                        const finfo = @typeInfo(FieldType);
+                        if (FieldType == []const u8) {
+                            break :blk @field(self.config, field.name);
+                        } else if (finfo == .optional) {
+                            if (finfo.optional.child == []const u8) {
+                                if (@field(self.config, field.name)) |v| {
+                                    break :blk v;
+                                }
+                            }
+                        }
+                        break :blk self.arena.allocator().dupe(u8, value) catch return LoadError.OutOfMemory;
+                    };
                     const owned_path = self.arena.allocator().dupe(u8, path) catch return LoadError.OutOfMemory;
-                    self.tracker.set(resolved_name, owned_value_for_tracker, source, owned_path) catch return LoadError.OutOfMemory;
+                    self.tracker.set(owned_key, owned_value_for_tracker, source, owned_path) catch return LoadError.OutOfMemory;
                     return;
                 }
             }
@@ -1103,12 +1154,13 @@ pub fn Loader(comptime T: type) type {
                 if (matchFieldName(field.name, resolved_name, self.case_insensitive)) {
                     try self.setFieldValue(field.type, field.name, value);
                     // Force update tracker by removing existing and re-adding
-                    // Copy strings into arena for long-term storage
+                    // Copy key, value and path onto arena for long-term storage
+                    const owned_key = self.arena.allocator().dupe(u8, resolved_name) catch return LoadError.OutOfMemory;
                     const owned_value_for_tracker = self.arena.allocator().dupe(u8, value) catch return LoadError.OutOfMemory;
                     const owned_path = self.arena.allocator().dupe(u8, path) catch return LoadError.OutOfMemory;
                     _ = self.tracker.values.remove(resolved_name);
-                    self.tracker.values.put(resolved_name, .{
-                        .key = resolved_name,
+                    self.tracker.values.put(owned_key, .{
+                        .key = owned_key,
                         .value = owned_value_for_tracker,
                         .source = source,
                         .source_path = owned_path,
@@ -1119,14 +1171,25 @@ pub fn Loader(comptime T: type) type {
         }
 
         fn setFieldFromEnvKey(self: *Self, env_key: []const u8, value: []const u8, source: Source, path: []const u8) LoadError!void {
-            var lower_key: [256]u8 = undefined;
-            var i: usize = 0;
-            for (env_key) |c| {
-                if (i >= lower_key.len) break;
-                lower_key[i] = std.ascii.toLower(c);
-                i += 1;
+            // GAP-0067: Env keys from .env files are conventionally UPPERCASE
+            // while struct fields are lowercase. Instead of unconditionally
+            // lowercasing (which loses information for mixed-case field names),
+            // always use case-insensitive matching for env keys. This correctly
+            // maps HOST -> host, MYHOST -> myHost, etc. regardless of the global
+            // case_insensitive flag.
+            const resolved_name = self.resolveAlias(env_key);
+            const info = @typeInfo(T);
+            inline for (info.@"struct".fields) |field| {
+                // Always case-insensitive for env keys (convention: ENV=UPPER, fields=lower)
+                if (matchFieldName(field.name, resolved_name, true)) {
+                    try self.setFieldValue(field.type, field.name, value);
+                    const owned_key = self.arena.allocator().dupe(u8, resolved_name) catch return LoadError.OutOfMemory;
+                    const owned_value_for_tracker = self.arena.allocator().dupe(u8, value) catch return LoadError.OutOfMemory;
+                    const owned_path = self.arena.allocator().dupe(u8, path) catch return LoadError.OutOfMemory;
+                    self.tracker.set(owned_key, owned_value_for_tracker, source, owned_path) catch return LoadError.OutOfMemory;
+                    return;
+                }
             }
-            try self.setField(lower_key[0..i], value, source, path);
         }
 
         /// Get provenance tracker for reporting
@@ -1149,29 +1212,83 @@ pub fn matchFieldName(field_name: []const u8, key: []const u8, case_insensitive:
     return mem.eql(u8, field_name, key);
 }
 
+/// R-06: Build "prefix." string using stack buffer with heap fallback.
+/// Returns the prefix-with-dot slice and an optional heap allocation
+/// that the caller must free. If `prefix` already ends with '.', it
+/// is returned as-is (no allocation).
+const PrefixWithDot = struct {
+    slice: []const u8,
+    heap_alloc: ?[]u8,
+};
+
+fn buildPrefixWithDot(allocator: Allocator, buf: []u8, prefix: []const u8) error{OutOfMemory}!PrefixWithDot {
+    if (prefix.len > 0 and prefix[prefix.len - 1] == '.') {
+        return .{ .slice = prefix, .heap_alloc = null };
+    }
+    const result = std.fmt.bufPrint(buf, "{s}.", .{prefix}) catch {
+        const h = try allocator.alloc(u8, prefix.len + 1);
+        @memcpy(h[0..prefix.len], prefix);
+        h[prefix.len] = '.';
+        return .{ .slice = h, .heap_alloc = h };
+    };
+    return .{ .slice = result, .heap_alloc = null };
+}
+
 /// Build environment variable name from prefix and field name
 /// Produces PREFIX_FIELD format (e.g., "MYAPP" + "host" = "MYAPP_HOST")
+///
+/// Writes into `buf` when the result fits. The caller may pass a separate
+/// allocator via `buildEnvVarNameAlloc` when the name could exceed the
+/// buffer (A-02 fix).
 pub fn buildEnvVarName(buf: []u8, prefix: []const u8, field: []const u8, replacer: ?EnvKeyReplacer) []const u8 {
+    return buildEnvVarNameInto(buf, prefix, field, replacer) orelse buf[0..0];
+}
+
+/// Build environment variable name with heap fallback for long names (A-02).
+/// Returns the name in `buf` when it fits, or heap-allocated memory otherwise.
+/// Caller must free the heap slice (returned via `heap_out`) if non-null.
+pub fn buildEnvVarNameAlloc(
+    buf: []u8,
+    prefix: []const u8,
+    field: []const u8,
+    replacer: ?EnvKeyReplacer,
+    allocator: Allocator,
+    heap_out: *?[]u8,
+) []const u8 {
+    if (buildEnvVarNameInto(buf, prefix, field, replacer)) |result| {
+        return result;
+    }
+    // A-02: Stack buffer too small -- fall back to heap
+    const sep: usize = if (prefix.len > 0 and prefix[prefix.len - 1] != '_') 1 else 0;
+    const total = prefix.len + sep + field.len;
+    const heap_buf = allocator.alloc(u8, total) catch return buf[0..0];
+    _ = buildEnvVarNameInto(heap_buf, prefix, field, replacer);
+    heap_out.* = heap_buf;
+    return heap_buf[0..total];
+}
+
+/// Internal: build env var name into the given buffer.
+/// Returns null if the buffer is too small to hold the full result.
+fn buildEnvVarNameInto(buf: []u8, prefix: []const u8, field: []const u8, replacer: ?EnvKeyReplacer) ?[]u8 {
     var pos: usize = 0;
 
     // Add prefix (converted to uppercase)
     for (prefix) |c| {
-        if (pos >= buf.len) break;
+        if (pos >= buf.len) return null;
         buf[pos] = std.ascii.toUpper(c);
         pos += 1;
     }
 
     // Add underscore separator if prefix is non-empty and doesn't end with underscore
     if (prefix.len > 0 and prefix[prefix.len - 1] != '_') {
-        if (pos < buf.len) {
-            buf[pos] = '_';
-            pos += 1;
-        }
+        if (pos >= buf.len) return null;
+        buf[pos] = '_';
+        pos += 1;
     }
 
     // Add field name with transformations
     for (field) |c| {
-        if (pos >= buf.len) break;
+        if (pos >= buf.len) return null;
 
         var char_to_add = c;
 

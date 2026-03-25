@@ -1,8 +1,8 @@
 # Quality Gap Analysis
 
 **Project:** devnw/zig/config
-**Last updated:** 2026-03-24 (Wave 11 closure)
-**Review phase:** Phase 4 (quality-reviewer follow-up) + Waves 6-11 closure + Phase 3 addendum
+**Last updated:** 2026-03-25 (Wave 12 closure -- all Phase 3 quality-reviewer items resolved)
+**Review phase:** Phase 4 (quality-reviewer follow-up) + Waves 6-11 closure + Phase 3 addendum + Phase 3 quality-reviewer + Wave 12 closure
 **Scoring formula:** PriorityScore = Impact(1-5) x Likelihood(1-5) x 4
 
 ---
@@ -11,14 +11,22 @@
 
 | Severity | Count | Resolved | Won't Do | Open |
 |----------|-------|----------|----------|------|
-| Critical | 4     | 4        | 0        | 0    |
-| High     | 9     | 7        | 2        | 0    |
-| Medium   | 25    | 23       | 2        | 0    |
-| Low      | 13    | 13       | 0        | 0    |
-| Info     | 4     | 2        | 2        | 0    |
-| **Total** | **55** | **49** | **6** | **0** |
+| Critical | 5     | 5        | 0        | 0    |
+| High     | 11    | 9        | 2        | 0    |
+| Medium   | 27    | 25       | 2        | 0    |
+| Low      | 20    | 20       | 0        | 0    |
+| Info     | 9     | 7        | 2        | 0    |
+| **Total** | **72** | **66** | **6** | **0** |
 
-### Top 5 Risks (all resolved)
+### Top 5 Active Risks (all resolved in Wave 12)
+
+1. ~~**Atomic write in config.zig missing sync() and errdefer**~~ (R-01/T-01) -- Critical, PriorityScore 80. **Resolved** (Wave 12 Batch 1+2): Added sync() + errdefer matching serialize.zig pattern; tests added.
+2. ~~**buildEnvVarName silently truncates at 256 bytes**~~ (A-02) -- High, PriorityScore 48. **Resolved** (Wave 12 Batch 1+2): Added heap fallback on truncation.
+3. ~~**Etcd get/delete body_buf has no heap fallback**~~ (T-06) -- High, PriorityScore 48. **Resolved** (Wave 12 Batch 1+2): Added heap fallback matching put()/getPrefix() pattern.
+4. ~~**safeWriteConfig vs serialize.safeWriteToFile divergent error types**~~ (A-01) -- Medium, PriorityScore 36. **Resolved** (Wave 12 Batch 1+2): API docs aligned.
+5. ~~**Consul path_buf fixed at 512 bytes, misleading OutOfMemory**~~ (A-03) -- Medium, PriorityScore 36. **Resolved** (Wave 12 Batch 1+2): Added heap fallback.
+
+### Top 5 Risks (previously resolved)
 
 1. ~~**dotenv.load() returns dangling pointers** (NEW-12)~~ -- Critical, PriorityScore 100. **Resolved** (Wave 6): `load()` now dupes key/value from content before freeing; `parseContent` lifetime documented.
 2. ~~**Hand-rolled JSON response parsing in etcd/Consul** (NEW-02)~~ -- High, PriorityScore 48. **Resolved** (Wave 7): Replaced with `std.json.parseFromSlice` using typed structs.
@@ -71,6 +79,23 @@
 | 37 | Info | 8 | documentation | ~~Loader.parseContent made pub without doc comment~~ | loader.zig | `src/loader.zig:734` -- doc comment added describing format dispatch behavior, parameter semantics, and error conditions | Q-NEW-4 | Doc comment added to `Loader.parseContent` (Wave 10) | Maintainer | S | **Resolved** (Wave 10) |
 | 38 | Info | 8 | maintainability | Format dispatch duplication (config.zig + loader.zig) | config.zig, loader.zig | `src/config.zig:322` and `src/loader.zig:735` both switch on Format to dispatch to format-specific parsers; however they serve different purposes (Value tree vs key-value store) | Q-NEW-5 | Accepted -- different return types and semantics justify separate dispatch | Maintainer | -- | **Won't Do** (accepted) |
 | 39 | Info | 4 | maintainability | Env map construction pattern duplication (Vault + 1Password) | encrypted_secrets.zig | `src/encrypted_secrets.zig:649,683` -- `buildMinimalVaultEnvMap` and `buildMinimalOnePasswordEnvMap` share PATH/HOME setup pattern but differ in provider-specific env vars | Q-NEW-8 | Won't do -- only 2 callsites; extraction would obscure provider-specific logic | Maintainer | -- | **Won't Do** |
+| 40 | Critical | 80 | reliability | ~~Atomic write in config.zig missing sync() before rename AND missing errdefer~~ | config.zig | `config.zig:684-722, :751-781` -- sync() + errdefer added matching serialize.zig pattern; tests added | [#179](https://gitlab.com/devnw/zig/config/-/issues/179) | Added sync() + errdefer matching serialize.zig pattern; tests added | Maintainer | M | **Resolved** (Wave 12 Batch 1+2) |
+| 41 | High | 48 | reliability | ~~buildEnvVarName silently truncates at 256 bytes~~ | loader.zig | `loader.zig:1154-1201` -- heap fallback added on truncation | [#183](https://gitlab.com/devnw/zig/config/-/issues/183) | Added heap fallback on truncation | Maintainer | S | **Resolved** (Wave 12 Batch 1+2) |
+| 42 | High | 48 | reliability | ~~Etcd get/delete body_buf 1024-byte stack buffer has no heap fallback~~ | remote.zig | `remote.zig:720-721, :809-810` -- heap fallback added matching put()/getPrefix() pattern | [#185](https://gitlab.com/devnw/zig/config/-/issues/185) | Added heap fallback matching put()/getPrefix() pattern | Maintainer | S | **Resolved** (Wave 12 Batch 1+2) |
+| 43 | Medium | 36 | api-contract | ~~safeWriteConfig vs serialize.safeWriteToFile divergent error types and behavior~~ | config.zig, serialize.zig | `config.zig:644-788` and `serialize.zig:491` -- API docs aligned | [#187](https://gitlab.com/devnw/zig/config/-/issues/187) | API docs aligned to document divergence and intended usage | Maintainer | M | **Resolved** (Wave 12 Batch 1+2) |
+| 44 | Medium | 36 | reliability | ~~Consul path_buf fixed at 512 bytes, returns misleading OutOfMemory~~ | remote.zig | `remote.zig:1082,1109,1127,1145,1166` -- heap fallback added at all 5 sites | [#189](https://gitlab.com/devnw/zig/config/-/issues/189) | Added heap fallback at all 5 Consul path_buf sites | Maintainer | S | **Resolved** (Wave 12 Batch 1+2) |
+| 45 | Low | 32 | perf | ~~setField() double-dupes string values into arena~~ | loader.zig | `loader.zig:1038-1051` -- arena pointer reused for provenance tracking | [#196](https://gitlab.com/devnw/zig/config/-/issues/196) | Reused arena-duped value for provenance tracking; eliminated redundant dupe | Maintainer | S | **Resolved** (Wave 12 Batch 4) |
+| 46 | Low | 24 | readability | ~~Base64 stack-buffer pattern repeated 6x in remote.zig etcd methods~~ | remote.zig | `remote.zig:706-717, :746-768, :795-806, :828-869` -- extracted base64 encode helper | [#192](https://gitlab.com/devnw/zig/config/-/issues/192) | Extracted shared base64 encode helper | Maintainer | S | **Resolved** (Wave 12 Batch 4) |
+| 47 | Low | 24 | perf | ~~Consul parseKeysList dupes arena strings back into arena~~ | remote.zig | `remote.zig:1307` -- redundant dupe removed | [#197](https://gitlab.com/devnw/zig/config/-/issues/197) | Removed redundant arena dupe | Maintainer | S | **Resolved** (Wave 12 Batch 4) |
+| 48 | Low | 16 | maintainability | ~~isValidOpPath/isValidVaultPath and resolveOpPath/resolveVaultPath near-identical~~ | encrypted_secrets.zig | `encrypted_secrets.zig:160-272` -- deduplicated via parameterized helpers | [#191](https://gitlab.com/devnw/zig/config/-/issues/191) | Extracted parameterized isValidProviderPath/resolveProviderPath | Maintainer | S | **Resolved** (Wave 12 Batch 4) |
+| 49 | Low | 16 | maintainability | ~~sub()/hasSub() duplicate prefix-with-dot construction~~ | loader.zig | `loader.zig:318-337, :359-373` -- extracted buildPrefixWithDot helper | [#193](https://gitlab.com/devnw/zig/config/-/issues/193) | Extracted shared buildPrefixWithDot helper | Maintainer | S | **Resolved** (Wave 12 Batch 4) |
+| 50 | Low | 12 | readability | ~~build.zig has 5-6 inline import lists instead of shared constant~~ | build.zig | `build.zig:63-68, :79-83, :94-98, :110-114` -- consolidated into shared imports | [#194](https://gitlab.com/devnw/zig/config/-/issues/194) | Defined shared parser_imports constant | Maintainer | S | **Resolved** (Wave 12 Batch 4) |
+| 51 | Low | 8 | maintainability | ~~formatTomlDatetime/formatTomlDatetimeLocal identical functions~~ | config.zig | `config.zig:539-559` -- replaced with single generic function | [#195](https://gitlab.com/devnw/zig/config/-/issues/195) | Replaced with single generic formatTomlDatetimeGeneric(anytype) | Maintainer | S | **Resolved** (Wave 12 Batch 4) |
+| 52 | Info | 8 | maintainability | ~~validation.zig 1209 lines, tests not split to companion file~~ | validation.zig | Tests split into `validation_test.zig` companion file | [#198](https://gitlab.com/devnw/zig/config/-/issues/198) | Extracted tests into validation_test.zig | Maintainer | S | **Resolved** (Wave 12 Batch 7) |
+| 53 | Info | 8 | docs | ~~Missing doc comments on Loader(T) and getPath() stub~~ | loader.zig | `loader.zig:270-280` -- doc comments added | [#199](https://gitlab.com/devnw/zig/config/-/issues/199) | Added doc comments for Loader(T) and getPath() | Maintainer | S | **Resolved** (Wave 12 Batch 7) |
+| 54 | Info | 8 | perf | ~~findConfigFileWithOptions heap-allocates per candidate path~~ | loader.zig | `loader.zig:430-431` -- stack buffer with heap fallback added | [#201](https://gitlab.com/devnw/zig/config/-/issues/201) | Stack buffer with heap fallback for candidate path construction | Maintainer | S | **Resolved** (Wave 12 Batch 7) |
+| 55 | Info | 8 | reliability | ~~timeout_ms declared but not enforced, no warning logged~~ | remote.zig | `remote.zig:600, :1021` -- log warning added when non-default timeout_ms configured | [#202](https://gitlab.com/devnw/zig/config/-/issues/202) | Added log warning when non-default timeout_ms configured | Maintainer | S | **Resolved** (Wave 12 Batch 7) |
+| 56 | Info | 4 | docs | ~~serialize.zig:490 cross-reference comment is inaccurate~~ | serialize.zig | `serialize.zig:490` -- cross-reference comment fixed to reflect actual behavior | [#200](https://gitlab.com/devnw/zig/config/-/issues/200) | Updated comment to reflect actual sync/errdefer parity (now both have it) | Maintainer | S | **Resolved** (Wave 12 Batch 7) |
 
 ---
 
@@ -128,20 +153,25 @@
 
 ## Findings by Category
 
-### reliability (8 findings -- 8 resolved, 0 open)
+### reliability (13 findings -- 13 resolved, 0 open)
 
 | Score | Finding | Issue/ID | Status |
 |-------|---------|----------|--------|
 | 100 | ~~dotenv.load() returns dangling pointers (use-after-free)~~ | NEW-12 | **Resolved** (Wave 6) |
+| 80 | ~~Atomic write in config.zig missing sync() and errdefer~~ | [#179](https://gitlab.com/devnw/zig/config/-/issues/179) | **Resolved** (Wave 12 Batch 1+2) |
+| 48 | ~~buildEnvVarName silently truncates at 256 bytes~~ | [#183](https://gitlab.com/devnw/zig/config/-/issues/183) | **Resolved** (Wave 12 Batch 1+2) |
+| 48 | ~~Etcd get/delete body_buf has no heap fallback~~ | [#185](https://gitlab.com/devnw/zig/config/-/issues/185) | **Resolved** (Wave 12 Batch 1+2) |
 | 48 | ~~No timeout enforcement on Etcd/Consul HTTP requests~~ | NEW-08 | **Resolved** (Wave 7, documented limitation) |
+| 36 | ~~Consul path_buf fixed at 512 bytes, misleading OutOfMemory~~ | [#189](https://gitlab.com/devnw/zig/config/-/issues/189) | **Resolved** (Wave 12 Batch 1+2) |
 | 36 | ~~sync() missing in atomicWriteFile~~ | P3-M4 | **Resolved** (Wave 9) |
 | 32 | ~~parseContent returns entries into caller-owned content (lifetime risk)~~ | NEW-13 | **Resolved** (Wave 6) |
 | 24 | ~~getPrefix range_end overflow on 0xFF last byte~~ | NEW-10 | **Resolved** (Wave 6) |
 | 24 | ~~async loadFile swallows OOM silently~~ | NEW-11 | **Resolved** (Wave 6) |
 | 24 | ~~Path traversal silently ignored in async.zig~~ | P3-R3 | **Resolved** (Wave 9) |
 | 48 | ~~7 remaining catch {} sites~~ | [#148](https://gitlab.com/devnw/zig/config/-/issues/148) | **Resolved** (Waves 1-2) |
+| 8 | ~~timeout_ms declared but not enforced, no warning logged~~ | [#202](https://gitlab.com/devnw/zig/config/-/issues/202) | **Resolved** (Wave 12 Batch 7) |
 
-### maintainability (18 findings -- 14 resolved, 4 Won't Do, 0 open)
+### maintainability (23 findings -- 19 resolved, 4 Won't Do, 0 open)
 
 | Score | Finding | Issue/ID | Status |
 |-------|---------|----------|--------|
@@ -159,22 +189,27 @@
 | 24 | ~~Consul HTTP boilerplate duplication~~ | Q-NEW-1 | **Resolved** (Wave 11) |
 | 24 | ~~Large files: remote (2694), loader (1991), encrypted_secrets (1424)~~ | Q-NEW-6 | **Resolved** (Wave 11) |
 | 24 | ~~safeWriteConfig/safeWriteConfigWithBackup near-duplicate~~ | NEW-03 | **Resolved** (Wave 6) |
+| 16 | ~~isValidOpPath/isValidVaultPath and resolveOpPath/resolveVaultPath near-identical~~ | [#191](https://gitlab.com/devnw/zig/config/-/issues/191) | **Resolved** (Wave 12 Batch 4) |
+| 16 | ~~sub()/hasSub() duplicate prefix-with-dot construction~~ | [#193](https://gitlab.com/devnw/zig/config/-/issues/193) | **Resolved** (Wave 12 Batch 4) |
 | 16 | ~~@constCast on arena in normalizeKey~~ | NEW-05 | **Resolved** (Wave 6) |
 | 8 | Format dispatch duplication (config.zig + loader.zig) | Q-NEW-5 | **Won't Do** (accepted) |
+| 8 | ~~formatTomlDatetime/formatTomlDatetimeLocal identical functions~~ | [#195](https://gitlab.com/devnw/zig/config/-/issues/195) | **Resolved** (Wave 12 Batch 4) |
+| 8 | ~~validation.zig 1209 lines, tests not split~~ | [#198](https://gitlab.com/devnw/zig/config/-/issues/198) | **Resolved** (Wave 12 Batch 7) |
 | 4 | Env map construction pattern duplication (Vault + 1Password) | Q-NEW-8 | **Won't Do** |
 
-### api-contract (6 findings -- 6 resolved, 0 open)
+### api-contract (7 findings -- 7 resolved, 0 open)
 
 | Score | Finding | Issue/ID | Status |
 |-------|---------|----------|--------|
 | 48 | ~~Etcd response parser ignores JSON escaping~~ | NEW-06 | **Resolved** (Wave 7, fixed with NEW-02) |
+| 36 | ~~safeWriteConfig vs serialize.safeWriteToFile divergent error types~~ | [#187](https://gitlab.com/devnw/zig/config/-/issues/187) | **Resolved** (Wave 12 Batch 1+2) |
 | 36 | ~~Consul parseKeysList matches any quoted string~~ | NEW-07 | **Resolved** (Wave 7, fixed with NEW-02) |
 | 36 | ~~SensitiveString.format wrong signature for std.fmt protocol~~ | NEW-09 | **Resolved** (Wave 6) |
 | 60 | ~~Stale doc comment (10 MB vs 1 MB)~~ | [#139](https://gitlab.com/devnw/zig/config/-/issues/139) | **Resolved** (Wave 1) |
 | 60 | ~~parallel.loadFile stub returns fake success~~ | [#141](https://gitlab.com/devnw/zig/config/-/issues/141) | **Resolved** (Wave 3) |
 | 36 | ~~ConfigFormat duplicated between parallel.zig and loader.zig~~ | [#149](https://gitlab.com/devnw/zig/config/-/issues/149) | **Resolved** (Wave 3) |
 
-### documentation (5 findings -- 5 resolved, 0 Won't Do, 0 open)
+### documentation (8 findings -- 8 resolved, 0 Won't Do, 0 open)
 
 | Score | Finding | Issue/ID | Status |
 |-------|---------|----------|--------|
@@ -183,6 +218,8 @@
 | 16 | ~~Missing doc comments on SafeWriteError and serialize write~~ | P3-A1 | **Resolved** (Wave 9) |
 | 8 | ~~isPathSafeStrict potentially unused outside tests~~ | Q-NEW-2 | **Resolved** (Wave 10) |
 | 8 | ~~Loader.parseContent made pub without doc comment~~ | Q-NEW-4 | **Resolved** (Wave 10) |
+| 8 | ~~Missing doc comments on Loader(T) and getPath() stub~~ | [#199](https://gitlab.com/devnw/zig/config/-/issues/199) | **Resolved** (Wave 12 Batch 7) |
+| 4 | ~~serialize.zig:490 cross-reference comment is inaccurate~~ | [#200](https://gitlab.com/devnw/zig/config/-/issues/200) | **Resolved** (Wave 12 Batch 7) |
 
 ### ci-cd (1 finding -- 1 resolved)
 
@@ -217,12 +254,22 @@
 |-------|---------|----------|--------|
 | 24 | ~~Missing errdefer temp_file.close~~ | P3-R5 | **Resolved** (Wave 9) |
 
-### readability (2 findings -- 2 resolved)
+### readability (4 findings -- 4 resolved, 0 open)
 
 | Score | Finding | Issue/ID | Status |
 |-------|---------|----------|--------|
 | 36 | ~~matchPatternImpl 209-line recursive function~~ | [#120](https://gitlab.com/devnw/zig/config/-/issues/120) | **Resolved** (Wave 2) |
+| 24 | ~~Base64 stack-buffer pattern repeated 6x in remote.zig~~ | [#192](https://gitlab.com/devnw/zig/config/-/issues/192) | **Resolved** (Wave 12 Batch 4) |
 | 24 | ~~build.zig repeats imports 6 times~~ | [#153](https://gitlab.com/devnw/zig/config/-/issues/153) | **Resolved** (Wave 3) |
+| 12 | ~~build.zig has 5-6 inline import lists instead of shared constant~~ | [#194](https://gitlab.com/devnw/zig/config/-/issues/194) | **Resolved** (Wave 12 Batch 4) |
+
+### perf (3 findings -- 3 resolved, 0 open)
+
+| Score | Finding | Issue/ID | Status |
+|-------|---------|----------|--------|
+| 32 | ~~setField() double-dupes string values into arena~~ | [#196](https://gitlab.com/devnw/zig/config/-/issues/196) | **Resolved** (Wave 12 Batch 4) |
+| 24 | ~~Consul parseKeysList dupes arena strings back into arena~~ | [#197](https://gitlab.com/devnw/zig/config/-/issues/197) | **Resolved** (Wave 12 Batch 4) |
+| 8 | ~~findConfigFileWithOptions heap-allocates per candidate path~~ | [#201](https://gitlab.com/devnw/zig/config/-/issues/201) | **Resolved** (Wave 12 Batch 7) |
 
 ---
 
@@ -284,6 +331,38 @@ Items resolved: #141 (Wave 3), #123 (Wave 3), #119 (Wave 2), #120 (Wave 2), NEW-
 | Format dispatch duplication (config.zig + loader.zig) | 8 | Q-NEW-5 | Accepted -- different return types (Value tree vs key-value store) justify separate dispatch |
 | Env map construction pattern duplication | 4 | Q-NEW-8 | Only 2 callsites; extraction would obscure provider-specific logic |
 
+### Phase 3 Quality-Reviewer -- Quick Wins (< 1 day, 13 items)
+
+| Finding | Score | ID | Effort | Issue |
+|---------|-------|----|--------|-------|
+| Etcd get/delete body_buf no heap fallback | 48 | T-06 | S | [#185](https://gitlab.com/devnw/zig/config/-/issues/185) |
+| buildEnvVarName silent truncation | 48 | A-02 | S | [#183](https://gitlab.com/devnw/zig/config/-/issues/183) |
+| Consul path_buf 512 bytes, misleading OutOfMemory | 36 | A-03 | S | [#189](https://gitlab.com/devnw/zig/config/-/issues/189) |
+| setField() double-dupes strings | 32 | T-02 | S | [#196](https://gitlab.com/devnw/zig/config/-/issues/196) |
+| Base64 stack-buffer pattern 6x | 24 | R-05 | S | [#192](https://gitlab.com/devnw/zig/config/-/issues/192) |
+| Consul parseKeysList redundant arena dupe | 24 | T-03 | S | [#197](https://gitlab.com/devnw/zig/config/-/issues/197) |
+| isValid/resolve Op/Vault near-identical | 16 | R-03/R-04 | S | [#191](https://gitlab.com/devnw/zig/config/-/issues/191) |
+| sub()/hasSub() prefix duplication | 16 | R-06 | S | [#193](https://gitlab.com/devnw/zig/config/-/issues/193) |
+| build.zig inline import lists | 12 | R-07 | S | [#194](https://gitlab.com/devnw/zig/config/-/issues/194) |
+| formatTomlDatetime/Local identical | 8 | R-02 | S | [#195](https://gitlab.com/devnw/zig/config/-/issues/195) |
+| validation.zig test split | 8 | D-02 | S | [#198](https://gitlab.com/devnw/zig/config/-/issues/198) |
+| Missing doc comments Loader(T)/getPath() | 8 | D-01/D-03 | S | [#199](https://gitlab.com/devnw/zig/config/-/issues/199) |
+| serialize.zig:490 stale comment | 4 | D-04 | S | [#200](https://gitlab.com/devnw/zig/config/-/issues/200) |
+
+### Phase 3 Quality-Reviewer -- Medium (1-5 days, 2 items)
+
+| Finding | Score | ID | Effort | Issue |
+|---------|-------|----|--------|-------|
+| Atomic write missing sync()/errdefer + tests | 80 | R-01/T-01 | M | [#179](https://gitlab.com/devnw/zig/config/-/issues/179) |
+| safeWriteConfig vs safeWriteToFile divergent APIs | 36 | A-01 | M | [#187](https://gitlab.com/devnw/zig/config/-/issues/187) |
+
+### Phase 3 Quality-Reviewer -- Info (no immediate action, 2 items)
+
+| Finding | Score | ID | Issue | Notes |
+|---------|-------|-----|-------|-------|
+| findConfigFileWithOptions heap-allocates per candidate | 8 | T-04 | [#201](https://gitlab.com/devnw/zig/config/-/issues/201) | Startup-only, low impact |
+| timeout_ms not enforced, no warning | 8 | T-05 | [#202](https://gitlab.com/devnw/zig/config/-/issues/202) | Zig 0.15 limitation documented |
+
 ### Strategic (> 5 days) -- Won't Do
 
 | Finding | Score | Issue | Reason |
@@ -319,7 +398,9 @@ Wave 9 added 9 new findings (P3-M4, P3-M5, P3-M6, P3-M7/P3-H2, P3-M8, P3-R2, P3-
 
 Phase 3 addendum added 8 findings (Q-NEW-1 through Q-NEW-8), all tagged `confidence::confirmed` -- verified by direct code inspection with file paths and line numbers. Of these, 4 were resolved in Wave 10 (Q-NEW-2, Q-NEW-3, Q-NEW-4, Q-NEW-7), 2 resolved in Wave 11 (Q-NEW-1, Q-NEW-6), and 2 are Won't Do (Q-NEW-5, Q-NEW-8).
 
-All 55 findings (49 resolved + 6 Won't Do) verified by code inspection, CI configuration review, or test execution.
+Previous 55 findings (49 resolved + 6 Won't Do) verified by code inspection, CI configuration review, or test execution.
+
+Phase 3 quality-reviewer added 16 findings (R-01/T-01, A-02, T-06, A-01, A-03, R-03/R-04, R-05, R-06, R-07, R-02, T-02, T-03, D-02, D-01/D-03, D-04, T-04, T-05), all tagged `confidence::confirmed` -- verified by direct code inspection with file paths, line numbers, and code snippets. All 16 have GitLab issues created.
 
 ## Unknowns
 
@@ -330,3 +411,6 @@ All 55 findings (49 resolved + 6 Won't Do) verified by code inspection, CI confi
 - **getPrefix overflow**: Resolved (NEW-10, Wave 6). The 0xFF case appends a `0x00` sentinel byte per etcd convention.
 - ~~**isPathSafeStrict consumers** (Q-NEW-2)~~: **Resolved** (Wave 10). Doc comment added explaining intended use as stricter alternative to `isPathSafe`.
 - ~~**AsyncLoaderWithCallback integration coverage** (Q-NEW-3)~~: **Resolved** (Wave 10). Integration test added exercising the full load-then-callback flow.
+- **Consul path_buf 512 limit** (A-03): Confirmed by code inspection -- all 5 Consul methods use `var path_buf: [512]u8`. Would be confirmed as a runtime error with a key >505 bytes.
+- **setField double-dupe** (T-02): Confirmed by tracing `setField` -> `setFieldValue` -> `setNonOptionalValue` for `[]const u8` fields. Both `dupe` calls use the same arena allocator. Would be confirmed by adding an arena allocator byte counter in a test.
+- **parseKeysList arena redundancy** (T-03): Confirmed by std.json documentation -- `parseFromSliceLeaky` allocates into the provided allocator (arena). The subsequent `dupe` into the same arena is provably redundant.

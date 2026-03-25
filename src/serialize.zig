@@ -121,7 +121,17 @@ fn writeJsonValue(comptime T: type, value: T, writer: anytype, depth: usize, pre
                         '\n' => try writer.writeAll("\\n"),
                         '\r' => try writer.writeAll("\\r"),
                         '\t' => try writer.writeAll("\\t"),
-                        else => try writer.writeByte(c),
+                        // ADV-04: Escape backspace and form-feed per RFC 8259
+                        0x08 => try writer.writeAll("\\b"),
+                        0x0C => try writer.writeAll("\\f"),
+                        else => {
+                            // ADV-04: Escape remaining control chars < 0x20 as \uXXXX (RFC 8259 section 7)
+                            if (c < 0x20) {
+                                try writer.print("\\u{X:0>4}", .{c});
+                            } else {
+                                try writer.writeByte(c);
+                            }
+                        },
                     }
                 }
                 try writer.writeByte('"');
@@ -486,8 +496,13 @@ pub fn writeToFile(comptime T: type, value: T, path: []const u8, allocator: Allo
 /// - Any `std.fs.File` open/write/sync/rename error
 ///
 /// Security: Validates path to prevent path traversal attacks (CWE-22, #62).
-/// The atomic-write pattern in this function is the canonical implementation;
-/// `config.zig`'s `atomicWriteFile` uses the same logic (P3-M4).
+///
+/// A-01: This function always uses atomic write (temp + rename) with sync.
+/// `config.zig` provides two related functions with different semantics:
+///   - `safeWriteConfig`: prevents overwrite (returns FileExists), optionally atomic
+///   - `safeWriteConfigWithBackup`: allows overwrite with backup, optionally atomic
+/// Both share the same safety guarantees (sync, errdefer, path validation)
+/// but take raw content instead of typed values and use `SafeWriteError`.
 pub fn safeWriteToFile(comptime T: type, value: T, path: []const u8, allocator: Allocator, options: SerializeOptions) !void {
     // Security: Validate path does not contain traversal sequences
     if (!secret.isPathSafe(path)) {
@@ -505,8 +520,8 @@ pub fn safeWriteToFile(comptime T: type, value: T, path: []const u8, allocator: 
     while (attempt < 5) : (attempt += 1) {
         var random_bytes: [8]u8 = undefined;
         crypto.random.bytes(&random_bytes);
-        const random_suffix = std.fmt.fmtSliceHexLower(&random_bytes);
-        temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, random_suffix });
+        const random_suffix = std.fmt.bytesToHex(random_bytes, .lower);
+        temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, &random_suffix });
         temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
             error.PathAlreadyExists => {
                 allocator.free(temp_path);
@@ -571,6 +586,17 @@ pub fn writeToFileWithBackup(comptime T: type, value: T, path: []const u8, alloc
     // Create backup path
     const backup_path = try std.fmt.allocPrint(allocator, "{s}.bak", .{path});
     defer allocator.free(backup_path);
+
+    // ADV-05: Refuse to copy if source is a symlink to prevent symlink-following attacks (CWE-59)
+    // This matches the no-follow policy used by safeWriteToFile/createFileNoFollow.
+    if (secret.isSymlink(path)) {
+        return secret.SecretError.SymlinkNotAllowed;
+    }
+
+    // ADV-05: Also refuse if the backup target is a symlink (prevents overwriting arbitrary files)
+    if (secret.isSymlink(backup_path)) {
+        return secret.SecretError.SymlinkNotAllowed;
+    }
 
     // Copy existing file to backup (delete old backup first if exists)
     std.fs.cwd().deleteFile(backup_path) catch {};
@@ -760,4 +786,57 @@ test "writeToFileWithBackup rejects path traversal" {
 
     const result = writeToFileWithBackup(Config, .{}, "../backup_escape.json", std.testing.allocator, .{});
     try std.testing.expectError(secret.SecretError.PathTraversalDetected, result);
+}
+
+test "ADV-04: JSON escapes control characters per RFC 8259" {
+    const Config = struct {
+        value: []const u8 = "",
+    };
+
+    // String with backspace (0x08), form-feed (0x0C), and other control chars
+    const config = Config{ .value = "a\x08b\x0Cc\x01d\x1Fe" };
+    const json = try serialize(Config, config, std.testing.allocator, .{ .format = .json });
+    defer std.testing.allocator.free(json);
+
+    // Backspace should be escaped as \b
+    try std.testing.expect(mem.indexOf(u8, json, "\\b") != null);
+    // Form-feed should be escaped as \f
+    try std.testing.expect(mem.indexOf(u8, json, "\\f") != null);
+    // 0x01 should be escaped as \u0001
+    try std.testing.expect(mem.indexOf(u8, json, "\\u0001") != null);
+    // 0x1F should be escaped as \u001F
+    try std.testing.expect(mem.indexOf(u8, json, "\\u001F") != null);
+    // Regular chars should not be escaped
+    try std.testing.expect(mem.indexOf(u8, json, "a") != null);
+    try std.testing.expect(mem.indexOf(u8, json, "e") != null);
+}
+
+test "ADV-05: writeToFileWithBackup rejects symlink source" {
+    const builtin = @import("builtin");
+
+    // Symlink tests only applicable on POSIX (isSymlink uses fstatat)
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const Config = struct { value: []const u8 = "test" };
+    const allocator = std.testing.allocator;
+
+    // Create a real file and a symlink pointing to it
+    const real_path = "test_adv05_real.json";
+    const link_path = "test_adv05_link.json";
+
+    // Write something to the real file
+    {
+        const f = try std.fs.cwd().createFile(real_path, .{});
+        try f.writeAll("{\"value\":\"old\"}");
+        f.close();
+    }
+    defer std.fs.cwd().deleteFile(real_path) catch {};
+
+    // Create symlink
+    std.fs.cwd().symLink(real_path, link_path, .{}) catch return; // skip if symlinks not supported
+    defer std.fs.cwd().deleteFile(link_path) catch {};
+
+    // writeToFileWithBackup should reject the symlink source
+    const result = writeToFileWithBackup(Config, .{}, link_path, allocator, .{});
+    try std.testing.expectError(secret.SecretError.SymlinkNotAllowed, result);
 }

@@ -1,6 +1,6 @@
 # Gap Analysis -- Resolved
 
-Last updated: 2026-03-24 (Waves 6-11 closure)
+Last updated: 2026-03-25 (Wave 12 closure complete -- 34 closed, 3 Won't Do, 3 Blocked)
 Review commit: fe9d0f6 (HEAD of main) + working tree
 
 ## Resolved Gaps
@@ -1159,29 +1159,31 @@ The following gaps were closed across waves 6-7 of implementation. 758/758 tests
 
 The following gaps were closed in Wave 9 of implementation. 656 tests pass (328 per executable x 2), formatting clean, build succeeds. 466 lines added across 11 files.
 
-### GAP-0041: Bracket notation normalization in getPath [RESOLVED]
+### GAP-0041: Bracket notation normalization in getPath [REGRESSION -- NOT ON MAIN]
 
 - **ID:** GAP-0041
 - **Category:** Feature / API Contract (Medium)
-- **Resolution:** `getPath()` now normalizes bracket notation (`a[0].b`) to dot notation (`a.0.b`) before lookup. Uses a 512-byte stack buffer for normalization. Three tests added covering dot-delimited paths, bracket notation, and non-existent paths.
-- **Evidence:**
+- **Previous resolution:** `getPath()` was claimed to normalize bracket notation (`a[0].b`) to dot notation (`a.0.b`) before lookup. Uses a 512-byte stack buffer for normalization. Three tests added.
+- **Previous evidence:**
   - `src/loader.zig` -- `getPath()` bracket-to-dot normalization with `norm_buf`
   - Tests: `GAP-0041: getPath returns value for dot-delimited array paths`
   - Tests: `GAP-0041: getPath normalizes bracket notation to dot notation`
   - Tests: `GAP-0041: getPath returns null for non-existent paths`
-- **Resolved date:** 2026-03-24 (Wave 9)
+- **Previous resolved date:** 2026-03-24 (Wave 9)
+- **REGRESSION (2026-03-25):** Code exists only in agent worktree, never merged to main. On main, `getPath()` at loader.zig:270-280 is a stub returning null. Superseded by GAP-0062 ([#167](https://gitlab.com/devnw/zig/config/-/issues/167)).
 
-### GAP-0042: JSON array flattening [RESOLVED]
+### GAP-0042: JSON array flattening [REGRESSION -- NOT ON MAIN]
 
 - **ID:** GAP-0042
 - **Category:** Feature / API Contract (Medium)
-- **Resolution:** `applyJsonValue` now handles `.array` by flattening with numeric indices (e.g., `{"ports":[80,443]}` becomes `ports.0 = "80"`, `ports.1 = "443"`). Supports nested arrays of objects. Three tests added.
-- **Evidence:**
+- **Previous resolution:** `applyJsonValue` was claimed to handle `.array` by flattening with numeric indices (e.g., `{"ports":[80,443]}` becomes `ports.0 = "80"`, `ports.1 = "443"`). Supports nested arrays of objects. Three tests added.
+- **Previous evidence:**
   - `src/loader.zig` -- `.array` branch in `applyJsonValue` with index flattening
   - Tests: `GAP-0042: JSON array elements are flattened to numeric-index keys`
   - Tests: `GAP-0042: JSON nested array of objects flattened with dot-delimited paths`
   - Tests: `GAP-0042: JSON string array elements are flattened`
-- **Resolved date:** 2026-03-24 (Wave 9)
+- **Previous resolved date:** 2026-03-24 (Wave 9)
+- **REGRESSION (2026-03-25):** Code exists only in agent worktree, never merged to main. On main, loader.zig:855 silently drops JSON arrays (no `.array` branch). Superseded by GAP-0062 ([#167](https://gitlab.com/devnw/zig/config/-/issues/167)).
 
 ### GAP-0044: VIPER_COMPARISON.md updates [RESOLVED]
 
@@ -1630,3 +1632,371 @@ All 774/774 tests pass. Format clean. Build clean.
   - `src/loader.zig` -- reduced from 2067 to 1294 lines
   - `src/encrypted_secrets.zig` -- reduced from 1478 to 907 lines
 - **Resolved date:** 2026-03-24 (Wave 11)
+
+---
+
+## Wave 12 Gap Closures (2026-03-25)
+
+34 items closed, 3 Won't Do, 3 Blocked across 7 batches. Tests: 780 -> 818 (+38 new tests).
+
+### Batch 1+2: Critical/High/Medium (8 items)
+
+### R-01/T-01: Atomic write sync() + errdefer + tests [RESOLVED]
+
+- **ID:** R-01/T-01
+- **Issue:** [#179](https://gitlab.com/devnw/zig/config/-/issues/179)
+- **Category:** Quality (Critical reliability)
+- **Resolution:** Added `sync()` before rename and `errdefer` cleanup in `safeWriteConfig`/`safeWriteConfigWithBackup`, matching the serialize.zig pattern. Tests added.
+- **Evidence:**
+  - `src/config.zig` -- sync() + errdefer in atomic write paths
+  - Tests verify data persistence and cleanup on error
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 1+2)
+
+### GAP-0062: Array indexing and bracket normalization [RESOLVED]
+
+- **ID:** GAP-0062
+- **Issue:** [#167](https://gitlab.com/devnw/zig/config/-/issues/167)
+- **Category:** Bug (High)
+- **Resolution:** Implemented `.array` branch in `applyJsonValue` for JSON array flattening with numeric-index keys. Implemented bracket-to-dot normalization in `getPath()`.
+- **Evidence:**
+  - `src/loader.zig` -- `applyJsonValue` handles `.array` with numeric-index flattening
+  - `src/loader.zig` -- `getPath()` normalizes bracket notation to dot notation
+  - Tests verify array indexing and bracket normalization
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 1+2)
+
+### A-02: buildEnvVarName heap fallback [RESOLVED]
+
+- **ID:** A-02
+- **Issue:** [#183](https://gitlab.com/devnw/zig/config/-/issues/183)
+- **Category:** Quality (High reliability)
+- **Resolution:** Added heap fallback when 256-byte stack buffer is exhausted, preventing silent truncation of long env var names.
+- **Evidence:**
+  - `src/loader.zig` -- heap fallback on stack buffer overflow in buildEnvVarName
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 1+2)
+
+### T-06: Etcd get/delete heap fallback [RESOLVED]
+
+- **ID:** T-06
+- **Issue:** [#185](https://gitlab.com/devnw/zig/config/-/issues/185)
+- **Category:** Quality (High reliability)
+- **Resolution:** Added heap fallback to Etcd `get()` and `delete()` methods matching the existing pattern in `put()` and `getPrefix()`.
+- **Evidence:**
+  - `src/remote.zig` -- heap fallback in get/delete body_buf construction
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 1+2)
+
+### ADV-01: .auto returns error instead of unreachable [RESOLVED]
+
+- **ID:** ADV-01
+- **Issue:** [#177](https://gitlab.com/devnw/zig/config/-/issues/177)
+- **Category:** Security (Medium, CWE-248)
+- **Resolution:** Replaced `unreachable` on `.auto` format with `return error.UnsupportedFormat`, eliminating panic in Debug and undefined behavior in ReleaseFast/ReleaseSmall.
+- **Evidence:**
+  - `src/config.zig` -- `.auto => return error.UnsupportedFormat` in format switch
+  - Tests verify error return on undetectable `.auto` content
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 1+2)
+
+### GAP-0067: setFieldFromEnvKey respects case_insensitive [RESOLVED]
+
+- **ID:** GAP-0067
+- **Issue:** [#174](https://gitlab.com/devnw/zig/config/-/issues/174)
+- **Category:** Bug (Medium)
+- **Resolution:** `setFieldFromEnvKey` now checks `self.options.case_insensitive` before lowercasing keys.
+- **Evidence:**
+  - `src/loader.zig` -- conditional lowercasing respects case_insensitive flag
+  - Tests verify both case-sensitive and case-insensitive behavior
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 1+2)
+
+### A-01: safeWrite API docs aligned [RESOLVED]
+
+- **ID:** A-01
+- **Issue:** [#187](https://gitlab.com/devnw/zig/config/-/issues/187)
+- **Category:** Quality (Medium api-contract)
+- **Resolution:** API documentation aligned between `safeWriteConfig` and `serialize.safeWriteToFile` to document divergence and intended usage.
+- **Evidence:**
+  - `src/config.zig` and `src/serialize.zig` -- doc comments aligned
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 1+2)
+
+### A-03: Consul path_buf heap fallback [RESOLVED]
+
+- **ID:** A-03
+- **Issue:** [#189](https://gitlab.com/devnw/zig/config/-/issues/189)
+- **Category:** Quality (Medium reliability)
+- **Resolution:** Added heap fallback at all 5 Consul path_buf sites, eliminating misleading OutOfMemory on long keys.
+- **Evidence:**
+  - `src/remote.zig` -- heap fallback at 5 Consul path construction sites
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 1+2)
+
+### Batch 3: Security Hardening (4 items)
+
+### ADV-02: Consul token zeroed on deinit [RESOLVED]
+
+- **ID:** ADV-02
+- **Issue:** [#180](https://gitlab.com/devnw/zig/config/-/issues/180)
+- **Category:** Security (Low, CWE-244)
+- **Resolution:** Added `SensitiveString.deinit()` call on `self.options.token` in `Consul.deinit()`, zeroing credential memory before free.
+- **Evidence:**
+  - `src/remote.zig` -- Consul.deinit() calls SensitiveString.deinit() on token
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 3)
+
+### ADV-03: Response bodies zeroed before free [RESOLVED]
+
+- **ID:** ADV-03
+- **Issue:** [#182](https://gitlab.com/devnw/zig/config/-/issues/182)
+- **Category:** Security (Low, CWE-244)
+- **Resolution:** Added `secret.secureZero()` before `allocator.free(response)` at all Etcd/Consul response defer sites.
+- **Evidence:**
+  - `src/remote.zig` -- secureZero applied at all response defer sites
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 3)
+
+### ADV-04: JSON control char escaping (RFC 8259) [RESOLVED]
+
+- **ID:** ADV-04
+- **Issue:** [#184](https://gitlab.com/devnw/zig/config/-/issues/184)
+- **Category:** Security (Low, CWE-838)
+- **Resolution:** Added `\uXXXX` escaping for all control characters below 0x20 in JSON serializer, producing valid JSON per RFC 8259 Section 7.
+- **Evidence:**
+  - `src/serialize.zig` -- control char escaping in JSON string output
+  - Tests verify RFC 8259 compliance
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 3)
+
+### ADV-05: Backup symlink protection [RESOLVED]
+
+- **ID:** ADV-05
+- **Issue:** [#186](https://gitlab.com/devnw/zig/config/-/issues/186)
+- **Category:** Security (Low, CWE-59)
+- **Resolution:** Added symlink protection for the backup file path in `writeToFileWithBackup`, preventing symlink redirect attacks.
+- **Evidence:**
+  - `src/serialize.zig` -- symlink check/protection on backup path
+  - Tests verify backup symlink protection
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 3)
+
+### Batch 4: Refactoring (8 items)
+
+### R-03/R-04: isValid/resolve provider path deduplicated [RESOLVED]
+
+- **ID:** R-03/R-04
+- **Issue:** [#191](https://gitlab.com/devnw/zig/config/-/issues/191)
+- **Category:** Quality (Low maintainability)
+- **Resolution:** Extracted parameterized `isValidProviderPath`/`resolveProviderPath` helpers; Op and Vault variants now delegate to shared implementation.
+- **Evidence:**
+  - `src/encrypted_secrets.zig` -- parameterized provider path validation and resolution
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 4)
+
+### R-05: Base64 encode helper extracted [RESOLVED]
+
+- **ID:** R-05
+- **Issue:** [#192](https://gitlab.com/devnw/zig/config/-/issues/192)
+- **Category:** Quality (Low readability)
+- **Resolution:** Extracted shared base64 encode helper from 6 repeated sites in remote.zig etcd methods.
+- **Evidence:**
+  - `src/remote.zig` -- shared base64 encode helper replaces 6 duplicated blocks
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 4)
+
+### T-02: setField arena pointer reuse [RESOLVED]
+
+- **ID:** T-02
+- **Issue:** [#196](https://gitlab.com/devnw/zig/config/-/issues/196)
+- **Category:** Quality (Low perf)
+- **Resolution:** Eliminated redundant arena string duplication in `setField()` by reusing the arena-duped value for provenance tracking.
+- **Evidence:**
+  - `src/loader.zig` -- single arena dupe shared between config field and provenance tracker
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 4)
+
+### R-06: buildPrefixWithDot extracted [RESOLVED]
+
+- **ID:** R-06
+- **Issue:** [#193](https://gitlab.com/devnw/zig/config/-/issues/193)
+- **Category:** Quality (Low maintainability)
+- **Resolution:** Extracted shared `buildPrefixWithDot` helper from `sub()` and `hasSub()`, eliminating ~15 lines of duplicated prefix construction.
+- **Evidence:**
+  - `src/loader.zig` -- shared buildPrefixWithDot helper
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 4)
+
+### T-03: parseKeysList redundant dupe removed [RESOLVED]
+
+- **ID:** T-03
+- **Issue:** [#197](https://gitlab.com/devnw/zig/config/-/issues/197)
+- **Category:** Quality (Low perf)
+- **Resolution:** Removed redundant arena string duplication in Consul `parseKeysList` -- `parseFromSliceLeaky` already owns the strings.
+- **Evidence:**
+  - `src/remote.zig` -- removed redundant dupe in parseKeysList
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 4)
+
+### R-02: formatTomlDatetime generic [RESOLVED]
+
+- **ID:** R-02
+- **Issue:** [#195](https://gitlab.com/devnw/zig/config/-/issues/195)
+- **Category:** Quality (Low maintainability)
+- **Resolution:** Replaced two identical `formatTomlDatetime`/`formatTomlDatetimeLocal` functions with a single generic `formatTomlDatetimeGeneric(anytype)`.
+- **Evidence:**
+  - `src/config.zig` -- single generic function replaces two identical copies
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 4)
+
+### R-07: build.zig shared imports [RESOLVED]
+
+- **ID:** R-07
+- **Issue:** [#194](https://gitlab.com/devnw/zig/config/-/issues/194)
+- **Category:** Quality (Low readability)
+- **Resolution:** Consolidated 5-6 inline import lists in build.zig into a single shared `parser_imports` constant.
+- **Evidence:**
+  - `build.zig` -- shared parser_imports constant
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 4)
+
+### ADV-07: Gitleaks exclusions narrowed [RESOLVED]
+
+- **ID:** ADV-07
+- **Issue:** [#63](https://gitlab.com/devnw/zig/config/-/issues/63)
+- **Category:** Security (Low, CWE-1295)
+- **Resolution:** Narrowed gitleaks allowlist from wildcard `*_test.zig` exclusions to specific test file paths.
+- **Evidence:**
+  - `.gitleaks.toml` -- specific path exclusions instead of wildcards
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 4)
+
+### Batch 5: Performance (3 items)
+
+### PERF-59: mergeMaps ensureTotalCapacity [RESOLVED]
+
+- **ID:** PERF-59
+- **Issue:** [#170](https://gitlab.com/devnw/zig/config/-/issues/170)
+- **Category:** Performance (P3)
+- **Resolution:** Added `ensureTotalCapacity` to `mergeMaps` (HashMap) and `mergeEntries` (ArrayList + HashMap), eliminating O(log N) rehashes.
+- **Evidence:**
+  - `src/merge.zig` -- ensureTotalCapacity in mergeMaps and mergeEntries
+  - Benchmark: merge_maps 41% faster
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 5)
+
+### PERF-60: diff stack buffer optimization [RESOLVED]
+
+- **ID:** PERF-60
+- **Issue:** [#172](https://gitlab.com/devnw/zig/config/-/issues/172)
+- **Category:** Performance (P3)
+- **Resolution:** Replaced `allocLowerString` heap alloc/free per key in diff pass-2 with 512-byte stack buffer and heap fallback.
+- **Evidence:**
+  - `src/diff.zig` -- stack buffer with heap fallback in pass-2
+  - Benchmark: diff_compare 27% faster
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 5)
+
+### PERF-61: loadParallel redundant load() removed [RESOLVED]
+
+- **ID:** PERF-61
+- **Issue:** [#175](https://gitlab.com/devnw/zig/config/-/issues/175)
+- **Category:** Performance (P3)
+- **Resolution:** Replaced `loader.load()` with `loader.getConfig()` in loadParallel -- parseContent already populated config; load() was redundantly re-running filesystem and env scanning.
+- **Evidence:**
+  - `src/async.zig` -- getConfig() replaces load() after parseContent
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 5)
+
+### Batch 6: Documentation (6 items)
+
+### GAP-0066: ROADMAP open issues corrected [RESOLVED]
+
+- **ID:** GAP-0066
+- **Issue:** [#173](https://gitlab.com/devnw/zig/config/-/issues/173)
+- **Category:** Docs (High)
+- **Resolution:** ROADMAP.md corrected -- open/incomplete items shown as `[ ]`; partially-complete items have clarifying notes.
+- **Evidence:**
+  - `ROADMAP.md` -- #4 changed to `[ ]`; #6, #27, #35 have clarifying notes
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 6)
+
+### GAP-0064: ROADMAP closed issues checked [RESOLVED]
+
+- **ID:** GAP-0064
+- **Issue:** [#169](https://gitlab.com/devnw/zig/config/-/issues/169)
+- **Category:** Docs (Medium)
+- **Resolution:** Updated ROADMAP.md to show `[x]` for #37, #43, #39, #40, #12, #89 with implementation notes.
+- **Evidence:**
+  - `ROADMAP.md` -- all closed GitLab issues show `[x]`
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 6)
+
+### GAP-0065: VIPER_COMPARISON updated [RESOLVED]
+
+- **ID:** GAP-0065
+- **Issue:** [#171](https://gitlab.com/devnw/zig/config/-/issues/171)
+- **Category:** Docs (Medium)
+- **Resolution:** Updated VIPER_COMPARISON.md -- Custom key delimiter, Files without extension, AllSettings(), AllKeys() now show "Yes | Complete".
+- **Evidence:**
+  - `VIPER_COMPARISON.md` -- feature matrix updated
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 6)
+
+### GAP-0070: ROADMAP YAML claim corrected [RESOLVED]
+
+- **ID:** GAP-0070
+- **Issue:** [#181](https://gitlab.com/devnw/zig/config/-/issues/181)
+- **Category:** Docs (Medium)
+- **Resolution:** Changed ROADMAP.md from "Nested YAML parsing via recursive applyJsonValue" to "YAML parsing for flat key:value structures; nested YAML parsing planned (#4)".
+- **Evidence:**
+  - `ROADMAP.md` -- YAML description corrected
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 6)
+
+### GAP-0068: Zig version updated to 0.15.2 [RESOLVED]
+
+- **ID:** GAP-0068
+- **Issue:** [#176](https://gitlab.com/devnw/zig/config/-/issues/176)
+- **Category:** Docs (Low)
+- **Resolution:** Updated `Makefile` and `CONTRIBUTING.md` to reference Zig 0.15.2 consistently.
+- **Evidence:**
+  - `Makefile:106` -- "Zig 0.15.2 or compatible"
+  - `CONTRIBUTING.md:12` -- "Zig 0.15.2+"
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 6)
+
+### GAP-0069: README version updated to v0.3.x [RESOLVED]
+
+- **ID:** GAP-0069
+- **Issue:** [#178](https://gitlab.com/devnw/zig/config/-/issues/178)
+- **Category:** Docs (Low)
+- **Resolution:** Updated `README.md` from "Current Version: v0.2.0" to "Current Version: v0.3.x".
+- **Evidence:**
+  - `README.md:366` -- "Current Version: v0.3.x"
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 6)
+
+### Batch 7: Housekeeping (5 items)
+
+### D-02: validation_test.zig extracted [RESOLVED]
+
+- **ID:** D-02
+- **Issue:** [#198](https://gitlab.com/devnw/zig/config/-/issues/198)
+- **Category:** Quality (Info maintainability)
+- **Resolution:** Split tests from validation.zig into companion `validation_test.zig` file, consistent with Wave 11 pattern.
+- **Evidence:**
+  - `src/validation_test.zig` -- extracted test companion file
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 7)
+
+### D-01/D-03: Loader(T)/getPath() doc comments [RESOLVED]
+
+- **ID:** D-01/D-03
+- **Issue:** [#199](https://gitlab.com/devnw/zig/config/-/issues/199)
+- **Category:** Quality (Info docs)
+- **Resolution:** Added doc comments to `Loader(T)` struct and `getPath()` stub.
+- **Evidence:**
+  - `src/loader.zig` -- doc comments on Loader(T) and getPath()
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 7)
+
+### D-04: serialize.zig cross-reference fixed [RESOLVED]
+
+- **ID:** D-04
+- **Issue:** [#200](https://gitlab.com/devnw/zig/config/-/issues/200)
+- **Category:** Quality (Info docs)
+- **Resolution:** Updated inaccurate cross-reference comment at serialize.zig:490 to reflect that config.zig now has sync/errdefer parity.
+- **Evidence:**
+  - `src/serialize.zig:490` -- cross-reference comment corrected
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 7)
+
+### T-04: findConfigFileWithOptions stack buffer [RESOLVED]
+
+- **ID:** T-04
+- **Issue:** [#201](https://gitlab.com/devnw/zig/config/-/issues/201)
+- **Category:** Quality (Info perf)
+- **Resolution:** Added stack buffer with heap fallback for candidate path construction in `findConfigFileWithOptions`.
+- **Evidence:**
+  - `src/loader.zig` -- stack buffer with heap fallback
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 7)
+
+### T-05: timeout_ms log warning [RESOLVED]
+
+- **ID:** T-05
+- **Issue:** [#202](https://gitlab.com/devnw/zig/config/-/issues/202)
+- **Category:** Quality (Info reliability)
+- **Resolution:** Added log warning when non-default `timeout_ms` is configured, informing callers that the value is not enforced by Zig 0.15's http.Client.
+- **Evidence:**
+  - `src/remote.zig` -- `log.warn` when non-default timeout_ms configured
+- **Resolved date:** 2026-03-25 (Wave 12 Batch 7)

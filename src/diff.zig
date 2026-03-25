@@ -219,6 +219,15 @@ pub fn compareWithOptions(
         const key = new_entry.key_ptr.*;
 
         const was_seen = if (options.case_insensitive) blk: {
+            // PERF-60: Use stack buffer to avoid heap alloc per key; heap fallback for oversized keys
+            var lower_buf: [512]u8 = undefined;
+            if (key.len <= lower_buf.len) {
+                const lowered = lower_buf[0..key.len];
+                for (key, 0..) |c, idx| {
+                    lowered[idx] = std.ascii.toLower(c);
+                }
+                break :blk seen_keys.contains(lowered);
+            }
             const lowered = try std.ascii.allocLowerString(allocator, key);
             defer allocator.free(lowered);
             break :blk seen_keys.contains(lowered);

@@ -10,15 +10,17 @@ useDefault = true
 [allowlist]
 description = "Global allowlist"
 # Security: Do NOT exclude security-sensitive source files from scanning (#63)
-# Only exclude test fixtures and build artifacts
+# Only exclude test fixtures, build artifacts, and specific test files with known
+# false positives (test credentials, mock tokens). Other test files are scanned
+# normally to catch accidental secret leaks. (ADV-07)
 paths = [
   '''testdata''',
   '''tests/.*''',
   '''\.zig-cache''',
   '''zig-out''',
   '''vendor''',
-  '''.*_test\.zig$''',
-  '''.*test_.*\.zig$''',
+  '''src/encrypted_secrets_test\.zig$''',
+  '''src/remote_test\.zig$''',
 ]
 stopwords = [
   "super-secret-password",

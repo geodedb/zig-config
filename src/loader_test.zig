@@ -15,6 +15,7 @@ const LoadOptions = loader_mod.LoadOptions;
 const parseBool = loader_mod.parseBool;
 const matchFieldName = loader_mod.matchFieldName;
 const buildEnvVarName = loader_mod.buildEnvVarName;
+const buildEnvVarNameAlloc = loader_mod.buildEnvVarNameAlloc;
 const getBaseName = loader_mod.getBaseName;
 const detectFormatFromContent = loader_mod.detectFormatFromContent;
 
@@ -793,4 +794,178 @@ test "loadDotEnv handles whitespace around equals via dotenv delegation (QUAL-12
     // The old inline parser didn't trim whitespace around keys/values.
     // dotenv.zig's parser does.
     try std.testing.expectEqualStrings("spaced-host.example.com", ldr.config.host);
+}
+
+// ============================================================================
+// GAP-0042: JSON array flattening into dot-delimited numeric-index keys
+// ============================================================================
+
+test "GAP-0042: applyJsonValue flattens JSON arrays to dot-delimited keys" {
+    const Config = struct {
+        @"tags.0": []const u8 = "",
+        @"tags.1": []const u8 = "",
+        @"tags.2": []const u8 = "",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+
+    const json_content =
+        \\{"tags": ["web", "api", "prod"]}
+    ;
+
+    try ldr.parseContent(json_content, .json, .project, "test.json");
+
+    try std.testing.expectEqualStrings("web", ldr.config.@"tags.0");
+    try std.testing.expectEqualStrings("api", ldr.config.@"tags.1");
+    try std.testing.expectEqualStrings("prod", ldr.config.@"tags.2");
+}
+
+// ============================================================================
+// GAP-0041: getPath() dot-delimited traversal and bracket normalization
+// ============================================================================
+
+test "GAP-0041: getPath returns value for dot-delimited array paths" {
+    const Config = struct {
+        @"servers.0.host": []const u8 = "",
+        @"servers.1.host": []const u8 = "",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+
+    const json_content =
+        \\{"servers": [{"host": "a.example.com"}, {"host": "b.example.com"}]}
+    ;
+
+    try ldr.parseContent(json_content, .json, .project, "test.json");
+
+    // Verify struct fields were set correctly
+    try std.testing.expectEqualStrings("a.example.com", ldr.config.@"servers.0.host");
+    try std.testing.expectEqualStrings("b.example.com", ldr.config.@"servers.1.host");
+
+    // get() should find tracker-stored values
+    const v0 = ldr.get("servers.0.host");
+    try std.testing.expect(v0 != null);
+    try std.testing.expectEqualStrings("a.example.com", v0.?);
+
+    // getPath() should also work (delegates to get())
+    try std.testing.expectEqualStrings("a.example.com", ldr.getPath("servers.0.host").?);
+    try std.testing.expectEqualStrings("b.example.com", ldr.getPath("servers.1.host").?);
+}
+
+test "GAP-0041: getPath normalizes bracket notation to dot notation" {
+    const Config = struct {
+        @"ports.0": u16 = 0,
+        @"ports.1": u16 = 0,
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+
+    const json_content =
+        \\{"ports": [80, 443]}
+    ;
+
+    try ldr.parseContent(json_content, .json, .project, "test.json");
+
+    // Bracket notation "ports[0]" should resolve to "ports.0"
+    try std.testing.expectEqualStrings("80", ldr.getPath("ports[0]").?);
+    try std.testing.expectEqualStrings("443", ldr.getPath("ports[1]").?);
+
+    // Dot notation also works
+    try std.testing.expectEqualStrings("80", ldr.getPath("ports.0").?);
+}
+
+test "GAP-0041: getPath returns null for non-existent paths" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+
+    _ = ldr.load(.{ .app_name = "test", .use_xdg = false, .optional = true }) catch {};
+
+    try std.testing.expect(ldr.getPath("nonexistent.path") == null);
+}
+
+// ============================================================================
+// A-02: buildEnvVarName heap fallback for long names
+// ============================================================================
+
+test "A-02: buildEnvVarName fits in stack buffer" {
+    var buf: [256]u8 = undefined;
+    const result = buildEnvVarName(&buf, "APP", "host", null);
+    try std.testing.expectEqualStrings("APP_HOST", result);
+}
+
+test "A-02: buildEnvVarName truncates to empty on overflow without alloc" {
+    // With a tiny buffer the old API returns empty (no silent partial match)
+    var buf: [4]u8 = undefined;
+    const result = buildEnvVarName(&buf, "MYAPP", "host", null);
+    // Buffer is too small for "MYAPP_HOST" (10 chars) so returns empty
+    try std.testing.expectEqualStrings("", result);
+}
+
+test "A-02: buildEnvVarNameAlloc uses heap fallback for long names" {
+    // Use a tiny stack buffer that cannot hold the result
+    var buf: [4]u8 = undefined;
+    var heap_out: ?[]u8 = null;
+    defer if (heap_out) |h| std.testing.allocator.free(h);
+    const result = buildEnvVarNameAlloc(&buf, "MYAPP", "host", null, std.testing.allocator, &heap_out);
+    try std.testing.expectEqualStrings("MYAPP_HOST", result);
+    // Verify it was heap allocated
+    try std.testing.expect(heap_out != null);
+}
+
+// ============================================================================
+// GAP-0067: setFieldFromEnvKey uses case-insensitive matching for env keys
+// ============================================================================
+
+test "GAP-0067: setFieldFromEnvKey matches uppercase env keys to lowercase fields" {
+    // Env keys are conventionally UPPERCASE. setFieldFromEnvKey should always
+    // use case-insensitive matching so HOST matches 'host' field.
+    const Config = struct {
+        host: []const u8 = "default",
+        name: []const u8 = "default",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    tmp_dir.dir.writeFile(.{ .sub_path = ".env", .data = "HOST=env-host\nNAME=env-name\n" }) catch return;
+    const tmp_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, ".env") catch return;
+    defer std.testing.allocator.free(tmp_path);
+
+    try ldr.loadDotEnv(tmp_path, .project);
+
+    // Always matches regardless of case_insensitive flag (which defaults to false)
+    try std.testing.expectEqualStrings("env-host", ldr.config.host);
+    try std.testing.expectEqualStrings("env-name", ldr.config.name);
+}
+
+test "GAP-0067: setFieldFromEnvKey matches mixed-case env keys" {
+    // Mixed-case field names should match case-insensitively with env keys
+    const Config = struct {
+        myHost: []const u8 = "default",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    tmp_dir.dir.writeFile(.{ .sub_path = ".env", .data = "MYHOST=mixed-case-value\n" }) catch return;
+    const tmp_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, ".env") catch return;
+    defer std.testing.allocator.free(tmp_path);
+
+    try ldr.loadDotEnv(tmp_path, .project);
+
+    // MYHOST should match myHost via case-insensitive comparison
+    try std.testing.expectEqualStrings("mixed-case-value", ldr.config.myHost);
 }

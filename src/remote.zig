@@ -142,6 +142,27 @@ pub fn isValidHeaderValue(value: []const u8) bool {
     return true;
 }
 
+/// R-05: Base64 encode with stack buffer, falling back to heap for oversized inputs.
+/// Returns the encoded slice and an optional heap allocation that the caller must free.
+/// The returned `encoded` slice is valid for the lifetime of `stack_buf` (if stack-allocated)
+/// or until `heap_alloc` is freed (if heap-allocated).
+const Base64Encoded = struct {
+    encoded: []u8,
+    heap_alloc: ?[]u8,
+};
+
+fn base64EncodeStackOrHeap(allocator: Allocator, input: []const u8, stack_buf: []u8) RemoteError!Base64Encoded {
+    const encoder = std.base64.standard;
+    const encoded_len = encoder.Encoder.calcSize(input.len);
+    const encoded = if (encoded_len <= stack_buf.len)
+        stack_buf[0..encoded_len]
+    else
+        (allocator.alloc(u8, encoded_len) catch return RemoteError.OutOfMemory);
+    const heap_alloc: ?[]u8 = if (encoded_len > stack_buf.len) encoded else null;
+    _ = encoder.Encoder.encode(encoded, input);
+    return .{ .encoded = encoded, .heap_alloc = heap_alloc };
+}
+
 /// Validate a URL for security (SSRF protection)
 /// Returns error if URL is invalid or points to a private address
 ///
@@ -636,6 +657,12 @@ pub const Etcd = struct {
         // Security: Warn when TLS certificate verification is disabled (CWE-295)
         warnIfTlsSkipVerify(options.security);
 
+        // T-05: Warn when timeout_ms is configured but cannot be enforced
+        if (options.timeout_ms != 5000) {
+            log.warn("timeout_ms ({d}ms) is configured but not enforced by Zig 0.15's http.Client; " ++
+                "requests may block indefinitely (see EtcdOptions.timeout_ms doc comment)", .{options.timeout_ms});
+        }
+
         // PERF-33: Build auth header once at init time instead of per request
         const auth_header = buildBasicAuthHeader(
             allocator,
@@ -703,26 +730,28 @@ pub const Etcd = struct {
         var uri = self.cached_uris[0];
         uri.path = .{ .raw = "/v3/kv/range" };
 
-        // PERF-19: Base64 encode key using stack buffer (fallback to heap for oversized keys)
-        const encoder = std.base64.standard;
-        const encoded_len = encoder.Encoder.calcSize(key.len);
+        // R-05: Base64 encode key using shared helper (stack buffer + heap fallback)
         var b64_stack_buf: [512]u8 = undefined;
-        var heap_encoded_key: ?[]u8 = null;
-        defer if (heap_encoded_key) |h| self.allocator.free(h);
-        const encoded_key = if (encoded_len <= b64_stack_buf.len)
-            b64_stack_buf[0..encoded_len]
-        else
-            (self.allocator.alloc(u8, encoded_len) catch return RemoteError.OutOfMemory);
-        if (encoded_len > b64_stack_buf.len) heap_encoded_key = encoded_key;
-        _ = encoder.Encoder.encode(encoded_key, key);
+        const b64_result = try base64EncodeStackOrHeap(self.allocator, key, &b64_stack_buf);
+        defer if (b64_result.heap_alloc) |h| self.allocator.free(h);
+        const encoded_key = b64_result.encoded;
 
-        // PERF-18: Build JSON request body using stack buffer
+        // PERF-18/T-06: Build JSON request body using stack buffer with heap fallback
         var body_buf: [1024]u8 = undefined;
-        const body = std.fmt.bufPrint(&body_buf, "{{\"key\":\"{s}\"}}", .{encoded_key}) catch return RemoteError.OutOfMemory;
+        const body = std.fmt.bufPrint(&body_buf, "{{\"key\":\"{s}\"}}", .{encoded_key}) catch blk: {
+            // Fallback to heap for oversized body (large keys)
+            break :blk std.fmt.allocPrint(self.allocator, "{{\"key\":\"{s}\"}}", .{encoded_key}) catch return RemoteError.OutOfMemory;
+        };
+        const body_is_heap = body.ptr != &body_buf;
+        defer if (body_is_heap) self.allocator.free(body);
 
         // Make HTTP request
         const response = self.makeRequest(uri, body) catch return RemoteError.RequestFailed;
-        defer self.allocator.free(response);
+        // ADV-03: Zero response before freeing -- may contain secrets (CWE-226)
+        defer {
+            secret.secureZero(response);
+            self.allocator.free(response);
+        }
 
         // Parse response
         return self.parseEtcdResponse(response);
@@ -740,32 +769,16 @@ pub const Etcd = struct {
         var uri = self.cached_uris[0];
         uri.path = .{ .raw = "/v3/kv/put" };
 
-        // Base64 encode key and value
-        const encoder = std.base64.standard;
-
-        // PERF-19: Base64 encode key using stack buffer (fallback to heap for oversized keys)
-        const encoded_key_len = encoder.Encoder.calcSize(key.len);
+        // R-05: Base64 encode key and value using shared helper
         var key_b64_stack: [512]u8 = undefined;
-        var heap_encoded_key: ?[]u8 = null;
-        defer if (heap_encoded_key) |h| self.allocator.free(h);
-        const encoded_key = if (encoded_key_len <= key_b64_stack.len)
-            key_b64_stack[0..encoded_key_len]
-        else
-            (self.allocator.alloc(u8, encoded_key_len) catch return RemoteError.OutOfMemory);
-        if (encoded_key_len > key_b64_stack.len) heap_encoded_key = encoded_key;
-        _ = encoder.Encoder.encode(encoded_key, key);
+        const key_b64 = try base64EncodeStackOrHeap(self.allocator, key, &key_b64_stack);
+        defer if (key_b64.heap_alloc) |h| self.allocator.free(h);
+        const encoded_key = key_b64.encoded;
 
-        // PERF-19: Base64 encode value using stack buffer (fallback to heap for oversized values)
-        const encoded_value_len = encoder.Encoder.calcSize(value.len);
         var val_b64_stack: [512]u8 = undefined;
-        var heap_encoded_value: ?[]u8 = null;
-        defer if (heap_encoded_value) |h| self.allocator.free(h);
-        const encoded_value = if (encoded_value_len <= val_b64_stack.len)
-            val_b64_stack[0..encoded_value_len]
-        else
-            (self.allocator.alloc(u8, encoded_value_len) catch return RemoteError.OutOfMemory);
-        if (encoded_value_len > val_b64_stack.len) heap_encoded_value = encoded_value;
-        _ = encoder.Encoder.encode(encoded_value, value);
+        const val_b64 = try base64EncodeStackOrHeap(self.allocator, value, &val_b64_stack);
+        defer if (val_b64.heap_alloc) |h| self.allocator.free(h);
+        const encoded_value = val_b64.encoded;
 
         // PERF-18: Build JSON request body using stack buffer
         var body_buf: [1024]u8 = undefined;
@@ -777,7 +790,11 @@ pub const Etcd = struct {
         defer if (body_is_heap) self.allocator.free(body);
 
         const response = self.makeRequest(uri, body) catch return RemoteError.RequestFailed;
-        defer self.allocator.free(response);
+        // ADV-03: Zero response before freeing -- may contain secrets (CWE-226)
+        defer {
+            secret.secureZero(response);
+            self.allocator.free(response);
+        }
     }
 
     /// Delete a key from etcd
@@ -792,25 +809,27 @@ pub const Etcd = struct {
         var uri = self.cached_uris[0];
         uri.path = .{ .raw = "/v3/kv/deleterange" };
 
-        // PERF-19: Base64 encode key using stack buffer (fallback to heap for oversized keys)
-        const encoder = std.base64.standard;
-        const encoded_len = encoder.Encoder.calcSize(key.len);
+        // R-05: Base64 encode key using shared helper (stack buffer + heap fallback)
         var b64_stack_buf: [512]u8 = undefined;
-        var heap_encoded_key: ?[]u8 = null;
-        defer if (heap_encoded_key) |h| self.allocator.free(h);
-        const encoded_key = if (encoded_len <= b64_stack_buf.len)
-            b64_stack_buf[0..encoded_len]
-        else
-            (self.allocator.alloc(u8, encoded_len) catch return RemoteError.OutOfMemory);
-        if (encoded_len > b64_stack_buf.len) heap_encoded_key = encoded_key;
-        _ = encoder.Encoder.encode(encoded_key, key);
+        const b64_result = try base64EncodeStackOrHeap(self.allocator, key, &b64_stack_buf);
+        defer if (b64_result.heap_alloc) |h| self.allocator.free(h);
+        const encoded_key = b64_result.encoded;
 
-        // PERF-18: Build JSON request body using stack buffer
+        // PERF-18/T-06: Build JSON request body using stack buffer with heap fallback
         var body_buf: [1024]u8 = undefined;
-        const body = std.fmt.bufPrint(&body_buf, "{{\"key\":\"{s}\"}}", .{encoded_key}) catch return RemoteError.OutOfMemory;
+        const body = std.fmt.bufPrint(&body_buf, "{{\"key\":\"{s}\"}}", .{encoded_key}) catch blk: {
+            // Fallback to heap for oversized body (large keys)
+            break :blk std.fmt.allocPrint(self.allocator, "{{\"key\":\"{s}\"}}", .{encoded_key}) catch return RemoteError.OutOfMemory;
+        };
+        const body_is_heap = body.ptr != &body_buf;
+        defer if (body_is_heap) self.allocator.free(body);
 
         const response = self.makeRequest(uri, body) catch return RemoteError.RequestFailed;
-        defer self.allocator.free(response);
+        // ADV-03: Zero response before freeing -- may contain secrets (CWE-226)
+        defer {
+            secret.secureZero(response);
+            self.allocator.free(response);
+        }
     }
 
     /// Get all keys with a prefix
@@ -825,18 +844,11 @@ pub const Etcd = struct {
         var uri = self.cached_uris[0];
         uri.path = .{ .raw = "/v3/kv/range" };
 
-        // PERF-19: Base64 encode key using stack buffer (fallback to heap for oversized keys)
-        const encoder = std.base64.standard;
-        const encoded_len = encoder.Encoder.calcSize(prefix.len);
+        // R-05: Base64 encode key using shared helper (stack buffer + heap fallback)
         var key_b64_stack: [512]u8 = undefined;
-        var heap_encoded_key: ?[]u8 = null;
-        defer if (heap_encoded_key) |h| self.allocator.free(h);
-        const encoded_key = if (encoded_len <= key_b64_stack.len)
-            key_b64_stack[0..encoded_len]
-        else
-            (self.allocator.alloc(u8, encoded_len) catch return RemoteError.OutOfMemory);
-        if (encoded_len > key_b64_stack.len) heap_encoded_key = encoded_key;
-        _ = encoder.Encoder.encode(encoded_key, prefix);
+        const key_b64 = try base64EncodeStackOrHeap(self.allocator, prefix, &key_b64_stack);
+        defer if (key_b64.heap_alloc) |h| self.allocator.free(h);
+        const encoded_key = key_b64.encoded;
 
         // Range end for prefix query (increment last byte)
         // Security: Handle 0xFF overflow correctly (NEW-10).  When the last
@@ -856,17 +868,11 @@ pub const Etcd = struct {
         }
         defer self.allocator.free(range_end);
 
-        // PERF-19: Base64 encode range_end using stack buffer
-        const encoded_end_len = encoder.Encoder.calcSize(range_end.len);
+        // R-05: Base64 encode range_end using shared helper
         var end_b64_stack: [512]u8 = undefined;
-        var heap_encoded_end: ?[]u8 = null;
-        defer if (heap_encoded_end) |h| self.allocator.free(h);
-        const encoded_end = if (encoded_end_len <= end_b64_stack.len)
-            end_b64_stack[0..encoded_end_len]
-        else
-            (self.allocator.alloc(u8, encoded_end_len) catch return RemoteError.OutOfMemory);
-        if (encoded_end_len > end_b64_stack.len) heap_encoded_end = encoded_end;
-        _ = encoder.Encoder.encode(encoded_end, range_end);
+        const end_b64 = try base64EncodeStackOrHeap(self.allocator, range_end, &end_b64_stack);
+        defer if (end_b64.heap_alloc) |h| self.allocator.free(h);
+        const encoded_end = end_b64.encoded;
 
         // PERF-18: Build JSON request body using stack buffer
         var body_buf: [1024]u8 = undefined;
@@ -878,7 +884,11 @@ pub const Etcd = struct {
         defer if (body_is_heap) self.allocator.free(body);
 
         const response = self.makeRequest(uri, body) catch return RemoteError.RequestFailed;
-        defer self.allocator.free(response);
+        // ADV-03: Zero response before freeing -- may contain secrets (CWE-226)
+        defer {
+            secret.secureZero(response);
+            self.allocator.free(response);
+        }
 
         return self.parseEtcdRangeResponse(response);
     }
@@ -1047,6 +1057,12 @@ pub const Consul = struct {
         // Security: Warn when TLS certificate verification is disabled (CWE-295)
         warnIfTlsSkipVerify(options.security);
 
+        // T-05: Warn when timeout_ms is configured but cannot be enforced
+        if (options.timeout_ms != 5000) {
+            log.warn("timeout_ms ({d}ms) is configured but not enforced by Zig 0.15's http.Client; " ++
+                "requests may block indefinitely (see ConsulOptions.timeout_ms doc comment)", .{options.timeout_ms});
+        }
+
         // PERF-37: Parse address URI once at init time instead of per request
         const cached_uri = Uri.parse(options.address) catch return RemoteError.InvalidUrl;
 
@@ -1060,6 +1076,10 @@ pub const Consul = struct {
     }
 
     pub fn deinit(self: *Consul) void {
+        // ADV-02: Zero Consul ACL token before releasing memory (contains credentials)
+        if (self.options.token) |*token| {
+            token.deinit();
+        }
         self.client.deinit();
         self.arena.deinit();
     }
@@ -1078,9 +1098,14 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // PERF-35/37: Build URL path in stack buffer and set on cached URI
+        // A-03: Build URL path with heap fallback for long keys
         var path_buf: [512]u8 = undefined;
-        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{key}) catch return RemoteError.OutOfMemory;
+        var heap_path: ?[]u8 = null;
+        defer if (heap_path) |h| self.allocator.free(h);
+        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{key}) catch blk: {
+            break :blk std.fmt.allocPrint(self.allocator, "/v1/kv/{s}", .{key}) catch return RemoteError.OutOfMemory;
+        };
+        if (path.ptr != &path_buf) heap_path = @constCast(path);
         var uri = self.cached_uri;
         uri.path = .{ .raw = path };
         uri.query = .{ .raw = "raw" };
@@ -1092,6 +1117,8 @@ pub const Consul = struct {
 
         // Copy to arena for persistent storage
         const result = self.arena.allocator().dupe(u8, response) catch return RemoteError.OutOfMemory;
+        // ADV-03: Zero response before freeing -- may contain secrets (CWE-226)
+        secret.secureZero(response);
         self.allocator.free(response);
 
         return result;
@@ -1105,9 +1132,14 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // PERF-35/37: Build URL path in stack buffer and set on cached URI
+        // A-03: Build URL path with heap fallback for long keys
         var path_buf: [512]u8 = undefined;
-        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{key}) catch return RemoteError.OutOfMemory;
+        var heap_path: ?[]u8 = null;
+        defer if (heap_path) |h| self.allocator.free(h);
+        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{key}) catch blk: {
+            break :blk std.fmt.allocPrint(self.allocator, "/v1/kv/{s}", .{key}) catch return RemoteError.OutOfMemory;
+        };
+        if (path.ptr != &path_buf) heap_path = @constCast(path);
         var uri = self.cached_uri;
         uri.path = .{ .raw = path };
         uri.query = null;
@@ -1123,9 +1155,14 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // PERF-35/37: Build URL path in stack buffer and set on cached URI
+        // A-03: Build URL path with heap fallback for long keys
         var path_buf: [512]u8 = undefined;
-        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{key}) catch return RemoteError.OutOfMemory;
+        var heap_path: ?[]u8 = null;
+        defer if (heap_path) |h| self.allocator.free(h);
+        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{key}) catch blk: {
+            break :blk std.fmt.allocPrint(self.allocator, "/v1/kv/{s}", .{key}) catch return RemoteError.OutOfMemory;
+        };
+        if (path.ptr != &path_buf) heap_path = @constCast(path);
         var uri = self.cached_uri;
         uri.path = .{ .raw = path };
         uri.query = null;
@@ -1141,15 +1178,24 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // PERF-35/37: Build URL path in stack buffer and set on cached URI
+        // A-03: Build URL path with heap fallback for long keys
         var path_buf: [512]u8 = undefined;
-        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{prefix}) catch return RemoteError.OutOfMemory;
+        var heap_path: ?[]u8 = null;
+        defer if (heap_path) |h| self.allocator.free(h);
+        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{prefix}) catch blk: {
+            break :blk std.fmt.allocPrint(self.allocator, "/v1/kv/{s}", .{prefix}) catch return RemoteError.OutOfMemory;
+        };
+        if (path.ptr != &path_buf) heap_path = @constCast(path);
         var uri = self.cached_uri;
         uri.path = .{ .raw = path };
         uri.query = .{ .raw = "recurse" };
 
         const response = self.makeGetRequest(uri) catch return RemoteError.RequestFailed;
-        defer self.allocator.free(response);
+        // ADV-03: Zero response before freeing -- may contain secrets (CWE-226)
+        defer {
+            secret.secureZero(response);
+            self.allocator.free(response);
+        }
 
         return self.parseConsulKVList(response);
     }
@@ -1162,15 +1208,24 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // PERF-35/37: Build URL path in stack buffer and set on cached URI
+        // A-03: Build URL path with heap fallback for long keys
         var path_buf: [512]u8 = undefined;
-        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{prefix}) catch return RemoteError.OutOfMemory;
+        var heap_path: ?[]u8 = null;
+        defer if (heap_path) |h| self.allocator.free(h);
+        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{prefix}) catch blk: {
+            break :blk std.fmt.allocPrint(self.allocator, "/v1/kv/{s}", .{prefix}) catch return RemoteError.OutOfMemory;
+        };
+        if (path.ptr != &path_buf) heap_path = @constCast(path);
         var uri = self.cached_uri;
         uri.path = .{ .raw = path };
         uri.query = .{ .raw = "keys" };
 
         const response = self.makeGetRequest(uri) catch return RemoteError.RequestFailed;
-        defer self.allocator.free(response);
+        // ADV-03: Zero response before freeing -- may contain secrets (CWE-226)
+        defer {
+            secret.secureZero(response);
+            self.allocator.free(response);
+        }
 
         return self.parseKeysList(response);
     }
@@ -1300,12 +1355,14 @@ pub const Consul = struct {
             .ignore_unknown_fields = true,
         }) catch return RemoteError.InvalidResponse;
 
+        // T-03: parseFromSliceLeaky already allocated strings into the arena,
+        // so no redundant dupe needed. Just copy the slice pointers into a
+        // caller-owned array.
         var keys: std.ArrayListUnmanaged([]const u8) = .{};
         errdefer keys.deinit(self.allocator);
 
         for (keys_parsed) |key| {
-            const owned_key = self.arena.allocator().dupe(u8, key) catch return RemoteError.OutOfMemory;
-            keys.append(self.allocator, owned_key) catch return RemoteError.OutOfMemory;
+            keys.append(self.allocator, key) catch return RemoteError.OutOfMemory;
         }
 
         return keys.toOwnedSlice(self.allocator) catch return RemoteError.OutOfMemory;

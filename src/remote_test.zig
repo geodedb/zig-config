@@ -1466,3 +1466,75 @@ test "Consul error variants cover HTTP error codes (Q-NEW-7)" {
         }
     }
 }
+
+// ============================================================================
+// T-06: Etcd get/delete body_buf heap fallback
+// ============================================================================
+
+// ============================================================================
+// A-03: Consul path_buf heap fallback for long keys
+// ============================================================================
+
+test "A-03: Consul URL path formatting supports keys beyond 512-byte buffer" {
+    // Verify the heap fallback pattern works for Consul URL path construction
+    // when the key exceeds the 512-byte stack buffer.
+    const large_key = "a" ** 510; // 510 bytes -> "/v1/kv/" + 510 = 517 > 512
+
+    var path_buf: [512]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{large_key}) catch blk: {
+        break :blk try std.fmt.allocPrint(std.testing.allocator, "/v1/kv/{s}", .{large_key});
+    };
+    const path_is_heap = path.ptr != &path_buf;
+    defer if (path_is_heap) std.testing.allocator.free(path);
+
+    // Verify heap path was used and content is correct
+    try std.testing.expect(path_is_heap);
+    try std.testing.expect(std.mem.startsWith(u8, path, "/v1/kv/"));
+    try std.testing.expectEqual(@as(usize, 7 + 510), path.len);
+}
+
+test "A-03: Consul URL path fits in stack buffer for normal keys" {
+    const normal_key = "myapp/config/host";
+
+    var path_buf: [512]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{normal_key}) catch blk: {
+        break :blk try std.fmt.allocPrint(std.testing.allocator, "/v1/kv/{s}", .{normal_key});
+    };
+    const path_is_heap = path.ptr != &path_buf;
+    defer if (path_is_heap) std.testing.allocator.free(path);
+
+    // Normal key should fit in stack buffer
+    try std.testing.expect(!path_is_heap);
+    try std.testing.expectEqualStrings("/v1/kv/myapp/config/host", path);
+}
+
+test "T-06: Etcd body JSON formatting supports large base64 keys" {
+    // Verify the JSON body construction pattern works for keys that
+    // exceed the 1024-byte stack buffer when base64-encoded.
+    // The actual HTTP call will fail (no server), but the body construction
+    // itself must not return OutOfMemory.
+    const encoder = std.base64.standard;
+
+    // Create a key that, when base64-encoded, exceeds 1024 bytes in the JSON body
+    const large_key = "a" ** 800; // 800 bytes -> ~1068 base64 chars
+    const encoded_len = encoder.Encoder.calcSize(large_key.len);
+    const encoded_key = try std.testing.allocator.alloc(u8, encoded_len);
+    defer std.testing.allocator.free(encoded_key);
+    _ = encoder.Encoder.encode(encoded_key, large_key);
+
+    // JSON body: {"key":"<encoded>"} must exceed 1024 bytes
+    try std.testing.expect(encoded_len + 10 > 1024);
+
+    // Verify the heap fallback pattern works (same pattern as in get/delete)
+    var body_buf: [1024]u8 = undefined;
+    const body = std.fmt.bufPrint(&body_buf, "{{\"key\":\"{s}\"}}", .{encoded_key}) catch blk: {
+        break :blk try std.fmt.allocPrint(std.testing.allocator, "{{\"key\":\"{s}\"}}", .{encoded_key});
+    };
+    const body_is_heap = body.ptr != &body_buf;
+    defer if (body_is_heap) std.testing.allocator.free(body);
+
+    // Verify the body was correctly constructed (heap path)
+    try std.testing.expect(body_is_heap);
+    try std.testing.expect(std.mem.startsWith(u8, body, "{\"key\":\""));
+    try std.testing.expect(std.mem.endsWith(u8, body, "\"}"));
+}

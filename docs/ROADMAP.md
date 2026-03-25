@@ -29,7 +29,7 @@ readiness.
 - Array indexing in key paths (dot-notation numeric indices e.g. `servers.0.host`, bracket-to-dot normalization e.g. `servers[0].host` → `servers.0.host`; negative indexing and array slicing are not supported), case-insensitive keys, key aliases
 - Multiple search paths via addConfigPath
 - Files without extension (content-based format detection)
-- Nested YAML parsing via recursive applyJsonValue
+- YAML parsing for flat key:value structures; nested YAML parsing planned (#4)
 - Centralized resource limits (limits.zig)
 - Security hardening: SSRF protection, path traversal guards, binary allowlists
 - Arena allocators for predictable memory management
@@ -59,12 +59,12 @@ See [VIPER_COMPARISON.md](./VIPER_COMPARISON.md) for feature parity analysis wit
 
 ### Bug Fixes
 
-- [x] [#6 - Implement dotenv apply() function](https://gitlab.com/devnw/zig/config/-/issues/6)
+- [x] [#6 - Implement dotenv apply() function](https://gitlab.com/devnw/zig/config/-/issues/6) -- (creates EnvMap; does not set OS env vars)
 - [x] [#7 - Fix envVarName() construction](https://gitlab.com/devnw/zig/config/-/issues/7)
 
 ### Core Enhancements
 
-- [x] [#4 - Enhance nested YAML parsing in Loader](https://gitlab.com/devnw/zig/config/-/issues/4)
+- [ ] [#4 - Enhance nested YAML parsing in Loader](https://gitlab.com/devnw/zig/config/-/issues/4) -- parseSimpleYaml is flat key:value only; nested YAML not yet implemented
 - [x] [#8 - Add command-line flag parsing](https://gitlab.com/devnw/zig/config/-/issues/8) -- src/flags.zig
 - [x] [#9 - Improve memory management](https://gitlab.com/devnw/zig/config/-/issues/9) -- arena allocators, src/limits.zig
 - [x] [#17 - Add configuration merging utilities](https://gitlab.com/devnw/zig/config/-/issues/17) -- src/merge.zig
@@ -85,7 +85,7 @@ See [VIPER_COMPARISON.md](./VIPER_COMPARISON.md) for feature parity analysis wit
 - [x] [#32 - Env key replacer/transformer](https://gitlab.com/devnw/zig/config/-/issues/32)
 - [x] [#33 - Key aliases support](https://gitlab.com/devnw/zig/config/-/issues/33) -- src/loader.zig
 - [x] [#34 - Case-insensitive key access](https://gitlab.com/devnw/zig/config/-/issues/34) -- normalizeKey in loader.zig
-- [x] [#35 - Array indexing in paths](https://gitlab.com/devnw/zig/config/-/issues/35) -- src/loader.zig
+- [x] [#35 - Array indexing in paths](https://gitlab.com/devnw/zig/config/-/issues/35) -- src/loader.zig (bracket notation and JSON array flattening)
 - [x] [#41 - SetDefault() for runtime defaults](https://gitlab.com/devnw/zig/config/-/issues/41)
 - [x] [#42 - IsSet() to check explicit set](https://gitlab.com/devnw/zig/config/-/issues/42)
 
@@ -101,7 +101,7 @@ See [VIPER_COMPARISON.md](./VIPER_COMPARISON.md) for feature parity analysis wit
 
 ### Remote Configuration
 
-- [x] [#27 - Remote config stores (etcd, Consul)](https://gitlab.com/devnw/zig/config/-/issues/27) -- src/remote.zig with SSRF protection
+- [x] [#27 - Remote config stores (etcd, Consul)](https://gitlab.com/devnw/zig/config/-/issues/27) -- src/remote.zig with SSRF protection (etcd/Consul; NATS not implemented)
 
 ### Advanced Features
 
@@ -131,14 +131,14 @@ See [VIPER_COMPARISON.md](./VIPER_COMPARISON.md) for feature parity analysis wit
 ### Viper Parity
 
 - [x] [#36 - Sub() for config subset extraction](https://gitlab.com/devnw/zig/config/-/issues/36) -- `sub()`/`hasSub()` in src/loader.zig
-- [ ] [#37 - AllSettings() export](https://gitlab.com/devnw/zig/config/-/issues/37)
+- [x] [#37 - AllSettings() export](https://gitlab.com/devnw/zig/config/-/issues/37) -- implemented at loader.zig:299
 - [ ] [#38 - parseReader() for io.Reader input](https://gitlab.com/devnw/zig/config/-/issues/38)
-- [ ] [#43 - AllKeys() to list keys](https://gitlab.com/devnw/zig/config/-/issues/43)
+- [x] [#43 - AllKeys() to list keys](https://gitlab.com/devnw/zig/config/-/issues/43) -- implemented at loader.zig:284
 
 ### Extensibility
 
-- [ ] [#39 - Custom format decoders](https://gitlab.com/devnw/zig/config/-/issues/39)
-- [ ] [#40 - Configurable key delimiter](https://gitlab.com/devnw/zig/config/-/issues/40)
+- [x] [#39 - Custom format decoders](https://gitlab.com/devnw/zig/config/-/issues/39) -- FormatRegistry in config.zig
+- [x] [#40 - Configurable key delimiter](https://gitlab.com/devnw/zig/config/-/issues/40) -- implemented at loader.zig:401
 
 ### Validation
 
@@ -146,7 +146,7 @@ See [VIPER_COMPARISON.md](./VIPER_COMPARISON.md) for feature parity analysis wit
 
 ### Platform Support
 
-- [ ] [#12 - Windows/macOS XDG equivalents](https://gitlab.com/devnw/zig/config/-/issues/12) -- partial (environ.zig provides cross-platform env vars; native Known Folders / NSSearchPath still needed)
+- [x] [#12 - Windows/macOS XDG equivalents](https://gitlab.com/devnw/zig/config/-/issues/12) -- environ.zig provides cross-platform env vars; closed in GitLab
 
 ## v0.5.0 - Extended Formats and Encryption
 
@@ -172,7 +172,7 @@ See [VIPER_COMPARISON.md](./VIPER_COMPARISON.md) for feature parity analysis wit
 - [ ] [#14 - Test coverage reporting](https://gitlab.com/devnw/zig/config/-/issues/14)
 - [ ] 80%+ test coverage
 - [ ] [#21 - API documentation generation](https://gitlab.com/devnw/zig/config/-/issues/21)
-- [ ] [#89 - Performance benchmarks](https://gitlab.com/devnw/zig/config/-/issues/89)
+- [x] [#89 - Performance benchmarks](https://gitlab.com/devnw/zig/config/-/issues/89) -- implemented in bench.zig
 - [ ] Migration guide from v0.x
 - [ ] Full Viper feature parity (core features)
 - [ ] All v0.4.0 and v0.5.0 items complete or explicitly deferred
@@ -195,9 +195,9 @@ See [VIPER_COMPARISON.md](./VIPER_COMPARISON.md) for feature parity analysis wit
 Want to help? See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
 
 Priority areas:
-1. Viper parity gaps (v0.4.0): AllSettings(), AllKeys(), parseReader()
+1. Viper parity gaps (v0.4.0): parseReader() (#38)
 2. JSON Schema validation (#5)
-3. Platform-native directory support on Windows and macOS (#12)
+3. Nested YAML parsing (#4)
 4. Test coverage improvements
 5. Documentation enhancements
 

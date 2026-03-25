@@ -1,8 +1,8 @@
 # Security Gap Analysis
 
 **Project:** devnw/zig/config
-**Last updated:** 2026-03-24 (Wave 11 closure -- no security changes in Wave 11)
-**Review phase:** Phase 3+ (security-reviewer, SSRF/injection deep-dive)
+**Last updated:** 2026-03-25 (Wave 12 closure -- ADV-01 through ADV-05, ADV-07 closed; ADV-06, ADV-08 Won't Do)
+**Review phase:** Phase 3+ (security-reviewer, SSRF/injection deep-dive, advanced code review) + Wave 12 closure
 **Scoring formula:** RiskScore = Impact(1-5) x Likelihood(1-5) x 4
 **Review commit:** fe9d0f6 (HEAD of main) + working tree
 
@@ -10,21 +10,21 @@
 
 ## Summary
 
-| Severity | Count | Open | Closed/Accepted | Notes |
-|----------|-------|------|-----------------|-------|
-| Critical | 0     | 0    | 0               | No critical vulnerabilities found |
-| Medium   | 4     | 2    | 2               | SEC-01/SEC-03 closed (Wave 10); SEC-02 blocked (Zig 0.15); SEC-04 blocked (upstream) |
-| Low      | 11    | 0    | 11 (1 FP, 1 accepted, 9 closed) | SEC-05/06/07/08/09/15/16/17/18 closed (Wave 10); SEC-10 FP; SEC-11 accepted |
-| Info     | 3     | 0    | 0               | Sound patterns, standard IP handling |
-| **Total** | **18** | **2** | **13** | 3 Info items require no action; 11 items closed in Wave 10; SEC-02 blocked (Zig 0.15 timeout); SEC-04 blocked (spice upstream) |
+| Severity | Count | Open | Closed/Accepted/Blocked | Won't Do | Notes |
+|----------|-------|------|-------------------------|----------|-------|
+| Critical | 0     | 0    | 0               | 0 | No critical vulnerabilities found |
+| Medium   | 5     | 0    | 3 closed, 2 blocked | 0 | SEC-01/SEC-03 closed (Wave 10); ADV-01 closed (Wave 12 Batch 3); SEC-02 blocked (Zig 0.15); SEC-04 blocked (upstream) |
+| Low      | 16    | 0    | 16 (1 FP, 1 accepted, 14 closed) | 0 | SEC-05-09/15-18 closed (Wave 10); SEC-10 FP; SEC-11 accepted; ADV-02/03/04/05/07 closed (Wave 12 Batch 3-4) |
+| Info     | 5     | 0    | 3 (info, no action) | 2 | SEC-12/13/14 sound patterns; ADV-06 Won't Do (info-level); ADV-08 Won't Do (architectural) |
+| **Total** | **26** | **0 open + 2 blocked** | **22** | **2** | All open items resolved in Wave 12. SEC-02/SEC-04 remain blocked. ADV-06/ADV-08 Won't Do. |
 
-### Top 5 Risks
+### Top 5 Risks (all resolved or blocked)
 
-1. ~~**Consul missing HTTP status code validation** (SEC-01)~~ -- Medium, RiskScore 36. **Closed** (Wave 10): HTTP status validation added to `makeGetRequest`/`makePutRequest`/`makeDeleteRequest` in remote.zig.
-2. **HTTP timeout not enforced (etcd/Consul)** (SEC-02) -- Medium, RiskScore 36. **Blocked**: Zig 0.15 http.Client has no timeout API. Slow-read/hang attacks can block indefinitely.
-3. ~~**Case-insensitive hostname bypass in isPrivateAddress** (SEC-03)~~ -- Medium, RiskScore 24. **Closed** (Wave 10): Case-insensitive comparison implemented in `isPrivateAddress` for `localhost` check.
-4. **Spice dependency tracks main branch** (SEC-04) -- Medium, RiskScore 24. **Blocked**: Upstream `devnw/zig/spice` has no version tag; hash-only pinning in place.
-5. ~~**isPathSafe doesn't check backslash on Windows** (SEC-05)~~ -- Low, RiskScore 16. **Closed** (Wave 10): Windows backslash path traversal documented and tested in `secret.zig`.
+1. **HTTP timeout not enforced (etcd/Consul)** (SEC-02) -- Medium, RiskScore 36. **Blocked**: Zig 0.15 http.Client has no timeout API. Slow-read/hang attacks can block indefinitely.
+2. ~~**`unreachable` on `.auto` format causes panic/UB**~~ (ADV-01, #177) -- Medium, RiskScore 24. **Closed** (Wave 12 Batch 3): `.auto` now returns `error.UnsupportedFormat` instead of `unreachable`.
+3. **Spice dependency tracks main branch** (SEC-04) -- Medium, RiskScore 24. **Blocked**: Upstream `devnw/zig/spice` has no version tag; hash-only pinning in place.
+4. ~~**JSON serializer emits unescaped control chars**~~ (ADV-04, #184) -- Low, RiskScore 20. **Closed** (Wave 12 Batch 3): Added `\uXXXX` escaping for control chars per RFC 8259.
+5. ~~**Gitleaks allowlist over-broad test exclusion**~~ (ADV-07, #63) -- Low, RiskScore 16. **Closed** (Wave 12 Batch 4): Narrowed exclusions to specific paths.
 
 ### Overlap with Existing Gap Analyses
 
@@ -38,6 +38,10 @@
 | S-NEW-3 (DNS rebinding) | SEC-10 (Closed FP) | SECURITY_GAP_ANALYSIS.md | Already tracked as SEC-10; closed as false positive in Phase 3+ review. |
 | SEC-15, SEC-16, SEC-18 (SSRF edge cases) | GAP_ANALYSIS.md #65, #71 (Closed) | GAP_ANALYSIS.md | #65 added decimal/hex/octal IP parsing; #71 added percent-encoding decode. SEC-15/16/18 track residual edge cases. |
 | SEC-17 (CLI arg injection) | GAP_ANALYSIS.md #66, #67, #77 (Closed) | GAP_ANALYSIS.md | #66/#67/#77 added allowlists and validation. SEC-17 tracks residual permissiveness in `isValidVaultPath`. |
+| ADV-02/ADV-03 (credential zeroing) | SEC-08 (Closed, Wave 10) | SECURITY_GAP_ANALYSIS.md | SEC-08 fixed `execCommand` buffer zeroing. ADV-02/03 identify remaining paths (Consul token, response bodies) not covered by that fix. |
+| ADV-05 (backup symlink) | #72 (Closed, symlink protection) | GAP_ANALYSIS.md | #72 added `createFileNoFollow` for main write paths. ADV-05 identifies the backup path as not covered. |
+| ADV-06 (traversal masked) | #107 (Closed, path traversal) | GAP_ANALYSIS.md | #107 added `isPathSafe` check. ADV-06 identifies that the error return masks the detection. |
+| ADV-07 (gitleaks over-broad) | #63 (Open) | GitLab issues | Same root cause. Updated #63 with Phase 3 review comment. |
 
 ---
 
@@ -49,20 +53,28 @@
 | 2 | Medium | 36 | HTTP timeout not enforced (etcd/Consul) | remote.zig | CWE-400 / A05:2021 Security Misconfiguration | src/remote.zig:616,1030 | SEC-02 | Blocked: Zig 0.15 http.Client has no timeout API; documented as known limitation | Maintainer | 2026-06-22 (90d) | **Blocked** |
 | 3 | Medium | 24 | ~~Case-insensitive hostname bypass in isPrivateAddress~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:289 | SEC-03 | Hostname comparison uses `std.ascii.eqlIgnoreCase` per RFC 4343; case-insensitive `localhost` check implemented | Maintainer | 2026-06-22 (90d) | **Closed** (Wave 10) |
 | 4 | Medium | 24 | Spice dependency tracks main branch | build.zig.zon | CWE-829 / A06:2021 Vulnerable and Outdated Components | build.zig.zon:20 | SEC-04 | Blocked: Upstream spice has no version tag; hash-only pinning in place | Maintainer | 2026-06-22 (90d) | **Blocked** |
-| 5 | Low | 16 | ~~isPathSafe doesn't check backslash on Windows~~ | secret.zig | CWE-22 / A01:2021 Broken Access Control | src/secret.zig:51-63 | SEC-05 | Windows backslash path traversal documented and tested; `isPathSafe` handles `..` regardless of separator via `mem.indexOf` | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
-| 6 | Low | 16 | ~~TOCTOU in Windows symlink check~~ | secret.zig | CWE-367 / A01:2021 Broken Access Control | src/secret.zig:93-95 | SEC-06 | Documented as accepted risk on Windows; POSIX uses O_NOFOLLOW atomically; Windows TOCTOU inherent to check-then-open pattern | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10, accepted risk) |
-| 7 | Low | 16 | ~~isValidOpPath overly permissive home-directory pattern~~ | encrypted_secrets.zig | CWE-426 / A08:2021 Software and Data Integrity Failures | src/encrypted_secrets.zig:170-181 | SEC-07 | `isValidVaultPath` tightened to match `isValidOpPath` strict pattern; rejects null bytes, control chars, shell metacharacters | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
-| 8 | Low | 12 | ~~execCommand stdout buffer not zeroed before free~~ | encrypted_secrets.zig | CWE-244 / A02:2021 Cryptographic Failures | src/encrypted_secrets.zig:705-707,760 | SEC-08 | `secureZero` applied to stdout/stderr buffers before free in `execCommand` | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
-| 9 | Low | 12 | ~~@constCast in loadFromFile~~ | encrypted_secrets.zig | CWE-704 / A04:2021 Insecure Design | src/encrypted_secrets.zig:495 | SEC-09 | Replaced `@constCast` with `allocator.dupe(u8, content)` producing genuinely mutable copy | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
-| 10 | Low | 8 | ~~Decimal/hex/octal IP SSRF bypass (residual)~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:269,382-452 | SEC-15 | Case-insensitive `::ffff:` prefix check added for IPv4-mapped IPv6 SSRF protection | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
-| 11 | Low | 8 | ~~IPv4-mapped IPv6 SSRF bypass (::FFFF: case)~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:269-278 | SEC-16 | Case-insensitive `::ffff:` prefix check added in `isPrivateAddress`; binary-level `isPrivateIPv6Bytes` already handles correctly | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
-| 12 | Low | 8 | ~~DNS rebinding residual risk~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:147-154 | SEC-10 | False positive: Vault token passed via VAULT_TOKEN env var, not CLI args (encrypted_secrets.zig:663). Mitigations remain in place. | Maintainer | 2026-03-24 | **Closed (False Positive)** |
-| 13 | Low | 8 | loadFromEnv env data not zeroable | encrypted_secrets.zig | CWE-244 / A02:2021 Cryptographic Failures | src/encrypted_secrets.zig:624-627 | SEC-11 | Env provider is opt-in and deprecated. Document that env-sourced secrets cannot be securely erased. Accepted risk. | Maintainer | Backlog | **Accepted** |
-| 14 | Low | 6 | ~~Percent-encoded double-decode risk~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:178-181,198-233 | SEC-18 | Double-decode protection added: pre-decode `%` check + `SuspiciousUrl` error rejects encoded-percent patterns before SSRF validation | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
-| 15 | Low | 4 | ~~CLI argument injection via vault/op path (residual)~~ | encrypted_secrets.zig | CWE-78 / A03:2021 Injection | src/encrypted_secrets.zig:160-189,192-209,551-580 | SEC-17 | `isValidVaultPath` tightened to match `isValidOpPath` strict pattern; no shell invocation + allowlist + `isValidSecretIdentifier` char restriction remain in place | Maintainer | Backlog | **Closed** (Wave 10) |
-| 16 | Info | 4 | @constCast in normalizeKey | loader.zig | CWE-704 | src/loader.zig:593 | SEC-12 | Sound usage with safety comment. No action needed. | -- | -- | **Info** |
-| 17 | Info | 4 | @constCast in SensitiveString.deinit | encrypted_secrets.zig | CWE-704 | src/encrypted_secrets.zig:68 | SEC-13 | Sound: casts owned memory back to mutable for secureZero before free. No action needed. | -- | -- | **Info** |
-| 18 | Info | 4 | @ptrCast in IP handling | remote.zig | CWE-704 | src/remote.zig:315,415,457 | SEC-14 | Standard Zig pattern for socket address introspection. No action needed. | -- | -- | **Info** |
+| 5 | Medium | 24 | ~~`unreachable` on `.auto` format causes panic/UB~~ | config.zig | CWE-248 / A04:2021 Insecure Design | src/config.zig:328 | ADV-01 / [#177](https://gitlab.com/devnw/zig/config/-/issues/177) | Replaced `unreachable` with `return error.UnsupportedFormat`; tests added | Maintainer | 2026-06-23 (90d) | **Closed** (Wave 12 Batch 3) |
+| 6 | Low | 20 | ~~JSON serializer emits unescaped control chars < 0x20~~ | serialize.zig | CWE-838 / A03:2021 Injection | src/serialize.zig:117-126 | ADV-04 / [#184](https://gitlab.com/devnw/zig/config/-/issues/184) | Added `\uXXXX` escaping for control chars per RFC 8259; tests added | Maintainer | 2026-09-21 (180d) | **Closed** (Wave 12 Batch 3) |
+| 7 | Low | 16 | ~~isPathSafe doesn't check backslash on Windows~~ | secret.zig | CWE-22 / A01:2021 Broken Access Control | src/secret.zig:51-63 | SEC-05 | Windows backslash path traversal documented and tested; `isPathSafe` handles `..` regardless of separator via `mem.indexOf` | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
+| 8 | Low | 16 | ~~TOCTOU in Windows symlink check~~ | secret.zig | CWE-367 / A01:2021 Broken Access Control | src/secret.zig:93-95 | SEC-06 | Documented as accepted risk on Windows; POSIX uses O_NOFOLLOW atomically; Windows TOCTOU inherent to check-then-open pattern | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10, accepted risk) |
+| 9 | Low | 16 | ~~isValidOpPath overly permissive home-directory pattern~~ | encrypted_secrets.zig | CWE-426 / A08:2021 Software and Data Integrity Failures | src/encrypted_secrets.zig:170-181 | SEC-07 | `isValidVaultPath` tightened to match `isValidOpPath` strict pattern; rejects null bytes, control chars, shell metacharacters | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
+| 10 | Low | 16 | ~~Gitleaks allowlist over-broad test file exclusion~~ | .gitleaks.toml | CWE-1295 / A05:2021 Security Misconfiguration | .gitleaks.toml:20-21 | ADV-07 / [#63](https://gitlab.com/devnw/zig/config/-/issues/63) | Narrowed exclusions to specific test file paths instead of wildcard `*_test.zig` | Maintainer | 2026-09-21 (180d) | **Closed** (Wave 12 Batch 4) |
+| 11 | Low | 12 | ~~execCommand stdout buffer not zeroed before free~~ | encrypted_secrets.zig | CWE-244 / A02:2021 Cryptographic Failures | src/encrypted_secrets.zig:705-707,760 | SEC-08 | `secureZero` applied to stdout/stderr buffers before free in `execCommand` | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
+| 12 | Low | 12 | ~~@constCast in loadFromFile~~ | encrypted_secrets.zig | CWE-704 / A04:2021 Insecure Design | src/encrypted_secrets.zig:495 | SEC-09 | Replaced `@constCast` with `allocator.dupe(u8, content)` producing genuinely mutable copy | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
+| 13 | Low | 12 | ~~Consul token not zeroed on deinit~~ | remote.zig | CWE-244 / A02:2021 Cryptographic Failures | src/remote.zig:1062-1065 | ADV-02 / [#180](https://gitlab.com/devnw/zig/config/-/issues/180) | Added `SensitiveString.deinit()` call on `self.options.token` in `Consul.deinit()` | Maintainer | 2026-09-21 (180d) | **Closed** (Wave 12 Batch 3) |
+| 14 | Low | 12 | ~~Etcd/Consul response bodies not zeroed before free~~ | remote.zig | CWE-244 / A02:2021 Cryptographic Failures | src/remote.zig:725,780,813 | ADV-03 / [#182](https://gitlab.com/devnw/zig/config/-/issues/182) | Added `secret.secureZero()` before `allocator.free(response)` at all response defer sites | Maintainer | 2026-09-21 (180d) | **Closed** (Wave 12 Batch 3) |
+| 15 | Low | 12 | ~~writeToFileWithBackup follows symlinks on backup path~~ | serialize.zig | CWE-59 / A01:2021 Broken Access Control | src/serialize.zig:576-578 | ADV-05 / [#186](https://gitlab.com/devnw/zig/config/-/issues/186) | Added symlink protection for backup path; tests added | Maintainer | 2026-09-21 (180d) | **Closed** (Wave 12 Batch 3) |
+| 16 | Low | 8 | ~~Decimal/hex/octal IP SSRF bypass (residual)~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:269,382-452 | SEC-15 | Case-insensitive `::ffff:` prefix check added for IPv4-mapped IPv6 SSRF protection | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
+| 17 | Low | 8 | ~~IPv4-mapped IPv6 SSRF bypass (::FFFF: case)~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:269-278 | SEC-16 | Case-insensitive `::ffff:` prefix check added in `isPrivateAddress`; binary-level `isPrivateIPv6Bytes` already handles correctly | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
+| 18 | Low | 8 | ~~DNS rebinding residual risk~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:147-154 | SEC-10 | False positive: Vault token passed via VAULT_TOKEN env var, not CLI args (encrypted_secrets.zig:663). Mitigations remain in place. | Maintainer | 2026-03-24 | **Closed (False Positive)** |
+| 19 | Low | 8 | loadFromEnv env data not zeroable | encrypted_secrets.zig | CWE-244 / A02:2021 Cryptographic Failures | src/encrypted_secrets.zig:624-627 | SEC-11 | Env provider is opt-in and deprecated. Document that env-sourced secrets cannot be securely erased. Accepted risk. | Maintainer | Backlog | **Accepted** |
+| 20 | Low | 6 | ~~Percent-encoded double-decode risk~~ | remote.zig | CWE-918 / A10:2021 SSRF | src/remote.zig:178-181,198-233 | SEC-18 | Double-decode protection added: pre-decode `%` check + `SuspiciousUrl` error rejects encoded-percent patterns before SSRF validation | Maintainer | 2026-09-20 (180d) | **Closed** (Wave 10) |
+| 21 | Low | 4 | ~~CLI argument injection via vault/op path (residual)~~ | encrypted_secrets.zig | CWE-78 / A03:2021 Injection | src/encrypted_secrets.zig:160-189,192-209,551-580 | SEC-17 | `isValidVaultPath` tightened to match `isValidOpPath` strict pattern; no shell invocation + allowlist + `isValidSecretIdentifier` char restriction remain in place | Maintainer | Backlog | **Closed** (Wave 10) |
+| 22 | Info | 4 | loadFromPath masks traversal detection as FileNotFound | loader.zig | CWE-778 / A09:2021 Logging Failures | src/loader.zig:745-746 | ADV-06 / [#188](https://gitlab.com/devnw/zig/config/-/issues/188) | Won't Do: info-level observability improvement; traversal is still blocked by `isPathSafe` | Maintainer | Backlog | **Won't Do** |
+| 23 | Info | 4 | No structured security event logging/callback | all modules | CWE-778 / A09:2021 Logging Failures | multiple | ADV-08 / [#190](https://gitlab.com/devnw/zig/config/-/issues/190) | Won't Do: architectural change beyond gap closure scope; existing `std.log.scoped` logging is adequate | Maintainer | Backlog | **Won't Do** |
+| 24 | Info | 4 | @constCast in normalizeKey | loader.zig | CWE-704 | src/loader.zig:593 | SEC-12 | Sound usage with safety comment. No action needed. | -- | -- | **Info** |
+| 25 | Info | 4 | @constCast in SensitiveString.deinit | encrypted_secrets.zig | CWE-704 | src/encrypted_secrets.zig:68 | SEC-13 | Sound: casts owned memory back to mutable for secureZero before free. No action needed. | -- | -- | **Info** |
+| 26 | Info | 4 | @ptrCast in IP handling | remote.zig | CWE-704 | src/remote.zig:315,415,457 | SEC-14 | Standard Zig pattern for socket address introspection. No action needed. | -- | -- | **Info** |
 
 ---
 
@@ -217,6 +229,85 @@
 - **Confidence:** `confidence::suspected` -- the two-pass decode covers double-encoding. Triple-encoding is theoretically possible but practically unlikely given how the decoded string is consumed (passed to string comparison, not re-parsed as URL).
 - **Cross-reference:** S-NEW-6 from Phase 3+ review.
 
+### ADV-01: `unreachable` on `.auto` format causes panic/UB (CWE-248)
+
+- **Impact: 3** (In ReleaseFast/ReleaseSmall: undefined behavior -- compiler eliminates the branch, arbitrary execution. In Debug/ReleaseSafe: panic/DoS.)
+- **Likelihood: 2** (Requires `.auto` format to survive format detection and reach the switch. Library consumer must pass `Format.auto` with undetectable content. Not pre-auth/remote.)
+- **RiskScore: 3 x 2 x 4 = 24**
+- **Exploit surface:** Application-dependent (library consumer must pass `.auto` format with undetectable content)
+- **How to verify:** Call `parseContent` with `Format.auto` and content that matches no known format signature. Observe panic in Debug or UB in ReleaseFast.
+- **Confidence:** `confidence::confirmed` -- `config.zig:328` shows `.auto => unreachable` in the format switch.
+- **Confidential:** Yes (UB path in optimized builds could lead to unexpected code execution)
+
+### ADV-02: Consul token not zeroed on deinit (CWE-244)
+
+- **Impact: 2** (Credential residue in freed heap memory)
+- **Likelihood: 2** (Process-local; requires heap forensics or crash dump analysis)
+- **RiskScore: 2 x 2 x 4 = 16 (adjusted to 12 -- defense-in-depth, process-local only)**
+- **Adjusted RiskScore: 12**
+- **Exploit surface:** Process-local (heap forensics or crash dump analysis)
+- **How to verify:** Create a Consul client with an ACL token, call `deinit()`, then inspect freed heap for token residue. Compare with Etcd which zeroes `cached_auth_header` at `remote.zig:674-678`.
+- **Confidence:** `confidence::confirmed` -- `Consul.deinit()` at `remote.zig:1062-1065` does not call `SensitiveString.deinit()` on `self.options.token`.
+
+### ADV-03: Etcd/Consul response bodies not zeroed before free (CWE-244)
+
+- **Impact: 2** (Secret config values persist in freed heap memory)
+- **Likelihood: 2** (Process-local; `makeRequest` already zeroes credential buffers but response path does not)
+- **RiskScore: 2 x 2 x 4 = 16 (adjusted to 12 -- defense-in-depth, process-local only)**
+- **Adjusted RiskScore: 12**
+- **Exploit surface:** Process-local (heap forensics or crash dump analysis)
+- **How to verify:** Fetch a secret value from etcd KV store, observe `defer self.allocator.free(response)` at lines 725, 780, 813 without prior `secureZero`. Compare with credential zeroing pattern in `makeRequest`.
+- **Confidence:** `confidence::confirmed` -- all three response defer sites (get/put/delete) use `defer self.allocator.free(response)` without zeroing.
+
+### ADV-04: JSON serializer emits unescaped control chars (CWE-838)
+
+- **Impact: 2** (Data integrity -- produces invalid JSON per RFC 8259 Section 7; downstream parsers may reject, truncate, or misinterpret)
+- **Likelihood: 3** (Any string value with control chars 0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F triggers the bug; no authentication required)
+- **RiskScore: 2 x 3 x 4 = 24 (adjusted to 20 -- config values rarely contain control chars in practice)**
+- **Adjusted RiskScore: 20**
+- **Exploit surface:** Application-dependent (any config value serialized to JSON)
+- **How to verify:** Serialize a config struct with a string field containing `\x00` or `\x01`. Validate output with a strict RFC 8259 JSON parser -- it should reject.
+- **Confidence:** `confidence::confirmed` -- `serialize.zig:117-126` switch only handles `"`, `\`, `\n`, `\r`, `\t`; `else` emits raw bytes.
+- **Confidential:** Yes (invalid JSON output could enable injection in downstream consumers)
+
+### ADV-05: writeToFileWithBackup follows symlinks on backup path (CWE-59)
+
+- **Impact: 3** (Symlink redirect on backup path could overwrite or delete arbitrary files)
+- **Likelihood: 1** (Requires local attacker with write access to config directory; `.bak` path is predictable but config dirs are typically not world-writable)
+- **RiskScore: 3 x 1 x 4 = 12**
+- **Exploit surface:** Local (requires write access to config directory)
+- **How to verify:** Create symlink at `{config_path}.bak` pointing to a target file. Call `writeToFileWithBackup()`. Observe that `copyFile` follows the symlink and overwrites the target. Compare with main write path which uses `createFileNoFollow`.
+- **Confidence:** `confidence::suspected` -- code at `serialize.zig:576-578` uses `std.fs.cwd().copyFile/deleteFile` which follow symlinks. Needs runtime verification to confirm symlink following behavior of these Zig std functions.
+
+### ADV-06: loadFromPath masks traversal detection as FileNotFound (CWE-778)
+
+- **Impact: 1** (Monitoring gap -- cannot distinguish missing file from blocked traversal attack)
+- **Likelihood: 1** (Not exploitable; defensive improvement only. Traversal is still blocked.)
+- **RiskScore: 1 x 1 x 4 = 4**
+- **Exploit surface:** None (observability improvement)
+- **How to verify:** Call `loadFromPath("../../etc/passwd", ...)`. Observe `LoadError.FileNotFound` is returned. Compare with `writeToFile` which returns `PathTraversalDetected` from the same `isPathSafe` check.
+- **Confidence:** `confidence::confirmed` -- `loader.zig:746` returns `LoadError.FileNotFound` on `!isPathSafe(path)`.
+
+### ADV-07: Gitleaks allowlist over-broad test file exclusion (CWE-1295)
+
+- **Impact: 2** (Real credentials in `*_test.zig` files would evade gitleaks scanning)
+- **Likelihood: 1** (Requires accidental credential placement in test files; no real credentials found in current codebase)
+- **RiskScore: 2 x 1 x 4 = 8 (using existing #63 score of 16 for consistency)**
+- **Adjusted RiskScore: 16** (aligning with existing #63 assessment)
+- **Exploit surface:** Supply-chain (leaked credentials in test files missed by scanning)
+- **How to verify:** Add a test API key string to a `*_test.zig` file. Run `gitleaks detect`. Observe it is not flagged due to the path exclusion at `.gitleaks.toml:20-21`.
+- **Confidence:** `confidence::suspected` -- no real credentials found in test files during review; the over-broad exclusion creates a theoretical blind spot.
+- **Cross-reference:** Existing issue #63 updated with Phase 3 review comment.
+
+### ADV-08: No structured security event logging/callback (CWE-778)
+
+- **Impact: 1** (Defense-in-depth -- library consumers cannot easily monitor security events)
+- **Likelihood: 1** (Not exploitable; observability improvement)
+- **RiskScore: 1 x 1 x 4 = 4**
+- **Exploit surface:** None (observability improvement)
+- **How to verify:** Review all `std.log` calls in security-sensitive code paths. Observe inconsistent formatting, no structured fields, no callback mechanism.
+- **Confidence:** `confidence::confirmed` -- `std.log.warn` used ad-hoc in remote.zig/loader.zig/secret.zig with no consistent structure.
+
 ### S-NEW-5 (Informational Note): JSON nesting depth
 
 JSON nesting depth is bounded by `std.json.parseFromSlice` defaults (`default_max_depth = 256`). No custom parser configuration overrides this limit. Stack overflow via deeply nested JSON is not a practical concern. **Not tracked as an open finding.**
@@ -237,6 +328,8 @@ JSON nesting depth is bounded by `std.json.parseFromSlice` defaults (`default_ma
 | Finding | RiskScore | Status | ID | Notes |
 |---------|-----------|--------|----|-------|
 | ~~isValidOpPath overly permissive home-directory pattern~~ | 16 | **Closed** (Wave 10) | SEC-07 | `isValidVaultPath` tightened to strict pattern |
+| ~~Consul token not zeroed on deinit~~ | 12 | **Closed** (Wave 12 Batch 3) | ADV-02 / #180 | `SensitiveString.deinit()` added in `Consul.deinit()` |
+| ~~Etcd/Consul response bodies not zeroed before free~~ | 12 | **Closed** (Wave 12 Batch 3) | ADV-03 / #182 | `secureZero()` added before free at all response sites |
 | ~~execCommand stdout buffer not zeroed before free~~ | 12 | **Closed** (Wave 10) | SEC-08 | `secureZero` on stdout/stderr before free |
 | ~~@constCast in loadFromFile~~ | 12 | **Closed** (Wave 10) | SEC-09 | Replaced with `allocator.dupe` |
 | loadFromEnv env data not zeroable | 8 | **Accepted** | SEC-11 | Env provider deprecated + opt-in |
@@ -262,27 +355,39 @@ JSON nesting depth is bounded by `std.json.parseFromSlice` defaults (`default_ma
 |---------|-----------|--------|----|-------|
 | ~~isPathSafe doesn't check backslash on Windows~~ | 16 | **Closed** (Wave 10) | SEC-05 | Documented + tested in secret.zig |
 | ~~TOCTOU in Windows symlink check~~ | 16 | **Closed** (Wave 10, accepted risk) | SEC-06 | Documented as accepted risk in secret.zig |
+| ~~writeToFileWithBackup follows symlinks on backup path~~ | 12 | **Closed** (Wave 12 Batch 3) | ADV-05 / #186 | Symlink protection added for backup path |
+| loadFromPath masks traversal detection as FileNotFound | 4 | **Won't Do** | ADV-06 / #188 | Info-level; traversal still blocked by isPathSafe |
 | @constCast in normalizeKey | 4 | **Info** | SEC-12 | Sound with safety comment |
+
+### Serialization / Deserialization
+
+| Finding | RiskScore | Status | ID | Notes |
+|---------|-----------|--------|----|-------|
+| ~~`unreachable` on `.auto` format causes panic/UB~~ | 24 | **Closed** (Wave 12 Batch 3) | ADV-01 / #177 | Replaced with `return error.UnsupportedFormat` |
+| ~~JSON serializer emits unescaped control chars~~ | 20 | **Closed** (Wave 12 Batch 3) | ADV-04 / #184 | `\uXXXX` escaping added per RFC 8259 |
+
+JSON parsing uses `std.json.parseFromSlice` with default `max_depth = 256` (resolved in QUAL Wave 7). JSON nesting depth attacks are bounded by this default (S-NEW-5, informational).
 
 ### Supply Chain
 
 | Finding | RiskScore | Status | ID | Notes |
 |---------|-----------|--------|----|-------|
 | Spice dependency tracks main branch | 24 | **Blocked** | SEC-04 | Pin to tagged release; upstream has no tag |
-
-### Deserialization
-
-No actionable findings. JSON parsing uses `std.json.parseFromSlice` with default `max_depth = 256` (resolved in QUAL Wave 7). JSON nesting depth attacks are bounded by this default and do not require a separate tracking entry (S-NEW-5, informational).
+| ~~Gitleaks allowlist over-broad test exclusion~~ | 16 | **Closed** (Wave 12 Batch 4) | ADV-07 / #63 | Exclusions narrowed to specific paths |
 
 ### Infrastructure / Ops
 
-No findings in this area. CI pipeline is fully implemented (GAP_ANALYSIS.md #82, resolved).
+| Finding | RiskScore | Status | ID | Notes |
+|---------|-----------|--------|----|-------|
+| No structured security event logging/callback | 4 | **Won't Do** | ADV-08 / #190 | Architectural change; existing std.log.scoped adequate |
+
+CI pipeline is fully implemented (GAP_ANALYSIS.md #82, resolved).
 
 ---
 
 ## Positive Observations
 
-The Phase 3 security review confirmed several strong security properties:
+The Phase 3 and Phase 3+ security reviews confirmed several strong security properties:
 
 - **0 secrets found** by gitleaks scan
 - **0 vulnerabilities** from grype/trivy dependency scanning
@@ -302,16 +407,20 @@ The Phase 3 security review confirmed several strong security properties:
 
 ## Roadmap
 
-### Quick Wins (< 1 day) -- ALL CLOSED (Wave 10)
+### Quick Wins (< 1 day)
 
 | Finding | RiskScore | ID | Effort | Notes |
 |---------|----------|-----|--------|-------|
-| ~~Case-insensitive hostname bypass~~ | 24 | SEC-03 | S | **Closed** (Wave 10): Case-insensitive comparison implemented |
-| ~~execCommand stdout buffer not zeroed~~ | 12 | SEC-08 | S | **Closed** (Wave 10): `secureZero` on stdout/stderr before free |
-| ~~@constCast in loadFromFile~~ | 12 | SEC-09 | S | **Closed** (Wave 10): Replaced with `allocator.dupe` |
-| ~~IPv4-mapped IPv6 case bypass~~ | 8 | SEC-16 | S | **Closed** (Wave 10): Case-insensitive `::ffff:` prefix check |
-| ~~Decimal/hex/octal edge cases~~ | 8 | SEC-15 | S | **Closed** (Wave 10): Case-insensitive `::ffff:` prefix matching added |
-| ~~Percent-encoded double-decode~~ | 6 | SEC-18 | S | **Closed** (Wave 10): Pre-decode `%` check + `SuspiciousUrl` error |
+| ~~`unreachable` on `.auto` format causes panic/UB~~ | 24 | ADV-01 / #177 | S | **Closed** (Wave 12 Batch 3): Replaced with `return error.UnsupportedFormat` |
+| ~~JSON serializer emits unescaped control chars~~ | 20 | ADV-04 / #184 | S | **Closed** (Wave 12 Batch 3): Added `\uXXXX` escaping per RFC 8259 |
+| ~~Consul token not zeroed on deinit~~ | 12 | ADV-02 / #180 | S | **Closed** (Wave 12 Batch 3): Added `SensitiveString.deinit()` call |
+| ~~Etcd/Consul response bodies not zeroed before free~~ | 12 | ADV-03 / #182 | S | **Closed** (Wave 12 Batch 3): Added `secureZero()` at all response sites |
+| ~~Case-insensitive hostname bypass~~ | 24 | SEC-03 | S | **Closed** (Wave 10) |
+| ~~execCommand stdout buffer not zeroed~~ | 12 | SEC-08 | S | **Closed** (Wave 10) |
+| ~~@constCast in loadFromFile~~ | 12 | SEC-09 | S | **Closed** (Wave 10) |
+| ~~IPv4-mapped IPv6 case bypass~~ | 8 | SEC-16 | S | **Closed** (Wave 10) |
+| ~~Decimal/hex/octal edge cases~~ | 8 | SEC-15 | S | **Closed** (Wave 10) |
+| ~~Percent-encoded double-decode~~ | 6 | SEC-18 | S | **Closed** (Wave 10) |
 
 ### Medium (1-5 days)
 
@@ -319,6 +428,8 @@ The Phase 3 security review confirmed several strong security properties:
 |---------|----------|-----|--------|-------|
 | ~~Consul missing HTTP status code validation~~ | 36 | SEC-01 | M | **Closed** (Wave 10): HTTP status validation added to all Consul methods |
 | Spice dependency pin to release | 24 | SEC-04 | S-M | **Blocked**: Upstream spice has no version tag; hash-only pinning in place |
+| ~~Gitleaks allowlist over-broad test exclusion~~ | 16 | ADV-07 / #63 | S-M | **Closed** (Wave 12 Batch 4): Narrowed to specific paths |
+| ~~writeToFileWithBackup follows symlinks on backup path~~ | 12 | ADV-05 / #186 | M | **Closed** (Wave 12 Batch 3): Symlink protection added for backup path |
 | ~~isPathSafe Windows backslash handling~~ | 16 | SEC-05 | S | **Closed** (Wave 10): Documented + tested |
 | ~~isValidOpPath tighter pattern~~ | 16 | SEC-07 | S | **Closed** (Wave 10): `isValidVaultPath` tightened to strict pattern |
 
@@ -333,6 +444,8 @@ The Phase 3 security review confirmed several strong security properties:
 
 | Finding | RiskScore | ID | Rationale |
 |---------|----------|-----|-----------|
+| loadFromPath masks traversal as FileNotFound | 4 | ADV-06 / #188 | **Won't Do**: Traversal still blocked; observability improvement only |
+| No structured security event logging | 4 | ADV-08 / #190 | **Won't Do**: Architectural change; existing std.log.scoped adequate |
 | ~~DNS rebinding residual risk~~ | 8 | SEC-10 | **Closed (False Positive):** Vault token passed via env var, not CLI args. Mitigations remain in place. |
 | loadFromEnv env data not zeroable | 8 | SEC-11 | Provider is opt-in, deprecated, disabled by default |
 | ~~CLI argument injection via vault/op path (residual)~~ | 4 | SEC-17 | **Closed** (Wave 10): `isValidVaultPath` tightened to strict pattern. Triple defense remains: no shell, allowlist, char validation. |
@@ -352,6 +465,14 @@ The Phase 3 security review confirmed several strong security properties:
 - **SEC-16 (IPv4-mapped IPv6 case)**: Tagged `confidence::suspected` -- string check at line 269 is case-sensitive (`::ffff:`). `::FFFF:127.0.0.1` bypasses it. Whether `net.Address.parseIp` recognizes uppercase and whether `isIpLiteral` then returns true (skipping DNS fallback) needs runtime verification. Binary-level `isPrivateIPv6Bytes` (line 363) provides defense-in-depth for resolved addresses.
 - **SEC-17 (CLI arg injection)**: Tagged `confidence::suspected` -- no shell invocation confirmed at line 710 (`process.Child.init`). Allowlist + `isValidSecretIdentifier` prevents injection characters. Residual risk is the permissive `isValidVaultPath` home-directory pattern. Would confirm by reviewing all paths that reach `execCommand` with user-controlled args.
 - **SEC-18 (double-decode)**: Tagged `confidence::suspected` -- two-pass decode (URI parser + `decodePercentEncoded`) confirmed by code at lines 178-181. Triple-encoding survival is theoretical. Would confirm by testing `validateUrl` with `%2531%2532%2537.0.0.1` (triple-encoded `127`).
+- **ADV-01 (unreachable on .auto)**: Tagged `confidence::confirmed` -- `config.zig:328` shows `.auto => unreachable` in the format switch. The `unreachable` keyword is UB in optimized builds per Zig language specification.
+- **ADV-02 (Consul token not zeroed)**: Tagged `confidence::confirmed` -- `Consul.deinit()` at `remote.zig:1062-1065` does not call `SensitiveString.deinit()`. Etcd correctly zeroes at `remote.zig:674-678`.
+- **ADV-03 (response bodies not zeroed)**: Tagged `confidence::confirmed` -- `defer self.allocator.free(response)` at lines 725, 780, 813 without `secureZero`. Credential zeroing in `makeRequest` confirms the pattern exists but is not applied to responses.
+- **ADV-04 (JSON control chars)**: Tagged `confidence::confirmed` -- `serialize.zig:117-126` switch only handles 5 characters; `else` branch emits raw bytes. RFC 8259 Section 7 requires all U+0000-U+001F to be escaped.
+- **ADV-05 (backup symlink)**: Tagged `confidence::suspected` -- `serialize.zig:576-578` uses `std.fs.cwd().copyFile/deleteFile` which are expected to follow symlinks based on standard POSIX behavior. Would confirm by creating a symlink at `.bak` path and observing `copyFile` behavior.
+- **ADV-06 (traversal masked as FileNotFound)**: Tagged `confidence::confirmed` -- `loader.zig:746` returns `LoadError.FileNotFound` on `!isPathSafe(path)`.
+- **ADV-07 (gitleaks over-broad)**: Tagged `confidence::suspected` -- `.gitleaks.toml:20-21` excludes `*_test.zig` patterns. No real credentials found in current test files; the risk is the blind spot. Would confirm by adding a test API key to a `_test.zig` file and running `gitleaks detect`.
+- **ADV-08 (no structured logging)**: Tagged `confidence::confirmed` -- reviewed all `std.log` calls in security-sensitive paths; no consistent structure or callback mechanism.
 
 ## Unknowns / Blockers
 
@@ -362,3 +483,21 @@ The Phase 3 security review confirmed several strong security properties:
 - **IPv6 parseIp behavior (SEC-16):** Whether Zig's `net.Address.parseIp` recognizes uppercase `::FFFF:` prefix needs runtime verification. If it does, the string-level bypass is confirmed; if not, the input is rejected entirely and the risk is lower than assessed.
 - **Fuzzing for IP format edge cases (SEC-15):** `parseIPv4ToInt` handles standard formats but mixed-base octets (e.g., `0x7f.0.0.01`) need systematic testing. A fuzz harness targeting `isPrivateIPv4` would confirm or eliminate residual bypass risk.
 - **Triple-encoding validation (SEC-18):** Testing `validateUrl` with triple-encoded hostnames (`%25`-prefixed) would confirm whether the two-pass decode is sufficient or if a loop-until-stable approach is needed.
+- **ADV-05 (backup symlink):** Whether `std.fs.cwd().copyFile` follows symlinks on all platforms needs runtime verification. Expected to follow based on POSIX semantics.
+- **SBOM gap:** No scanner supports Zig `build.zig.zon` -- 4 dependencies remain unscanned (tracked by SEC-04). Gitleaks, trufflehog, semgrep, checkov, trivy, grype, and osv-scanner all returned clean/false-positive results.
+
+## Automated Scanner Results (2026-03-25)
+
+All automated scanner findings were verified as false positives or clean:
+
+| Scanner | Result | Notes |
+|---------|--------|-------|
+| Gitleaks | Clean | 0 secrets found |
+| TruffleHog | Clean | 0 secrets found |
+| Semgrep | Clean | No actionable findings |
+| Checkov | Clean | No misconfigurations |
+| Trivy | Clean | 0 vulnerabilities |
+| Grype | Clean | 0 vulnerabilities |
+| OSV-Scanner | Clean | 0 known vulnerabilities |
+
+**SBOM gap:** No scanner supports Zig `build.zig.zon` format. 4 dependencies (`spice`, `zig-yaml`, `tomlz`, `iniparse`) are unscanned by SCA tools. This is already tracked by SEC-04 (supply-chain).

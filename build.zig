@@ -42,6 +42,13 @@ pub fn build(b: *std.Build) void {
     });
     const json_mod = json_dep.module("json");
 
+    // R-07: Define shared parser import list to avoid repetition across build targets
+    const parser_imports: []const std.Build.Module.Import = &.{
+        .{ .name = "yaml", .module = yaml_mod },
+        .{ .name = "toml", .module = toml_mod },
+        .{ .name = "json", .module = json_mod },
+    };
+
     // Parallel module
     const parallel_mod = b.addModule("parallel", .{
         .root_source_file = b.path("src/parallel.zig"),
@@ -60,13 +67,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/config.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
-            .{ .name = "yaml", .module = yaml_mod },
-            .{ .name = "toml", .module = toml_mod },
-            .{ .name = "json", .module = json_mod },
-            .{ .name = "parallel", .module = parallel_mod },
-        },
+        .imports = parser_imports,
     });
+    config_mod.addImport("parallel", parallel_mod);
 
     // Static library
     const lib = b.addLibrary(.{
@@ -76,11 +79,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/config.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "yaml", .module = yaml_mod },
-                .{ .name = "toml", .module = toml_mod },
-                .{ .name = "json", .module = json_mod },
-            },
+            .imports = parser_imports,
         }),
     });
     b.installArtifact(lib);
@@ -91,11 +90,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/config.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "yaml", .module = yaml_mod },
-                .{ .name = "toml", .module = toml_mod },
-                .{ .name = "json", .module = json_mod },
-            },
+            .imports = parser_imports,
         }),
     });
 
@@ -107,11 +102,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/integration_test.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "yaml", .module = yaml_mod },
-                .{ .name = "toml", .module = toml_mod },
-                .{ .name = "json", .module = json_mod },
-            },
+            .imports = parser_imports,
         }),
     });
     const run_integration_tests = b.addRunArtifact(integration_tests);
@@ -134,11 +125,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/config.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "yaml", .module = yaml_mod },
-                .{ .name = "toml", .module = toml_mod },
-                .{ .name = "json", .module = json_mod },
-            },
+            .imports = parser_imports,
         }),
     });
     const check_step = b.step("check", "Check for compilation errors");
@@ -151,11 +138,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/config.zig"),
             .target = target,
             .optimize = .Debug,
-            .imports = &.{
-                .{ .name = "yaml", .module = yaml_mod },
-                .{ .name = "toml", .module = toml_mod },
-                .{ .name = "json", .module = json_mod },
-            },
+            .imports = parser_imports,
         }),
     });
     const install_docs = b.addInstallDirectory(.{

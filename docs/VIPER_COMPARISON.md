@@ -31,7 +31,7 @@ This document compares zigconfig features with [Viper](https://github.com/spf13/
 | Dot notation | Yes | Yes | Complete | - |
 | Array indexing | Yes | Yes | Complete | e.g. `servers.0.host` via `applyJsonValue` |
 | Sub() extraction | Yes | Yes | Complete | `src/loader.zig` `sub()`/`hasSub()` |
-| Custom key delimiter | Yes | No | Planned | [#40](https://gitlab.com/devnw/zig/config/-/issues/40) |
+| Custom key delimiter | Yes | Yes | Complete | [#40](https://gitlab.com/devnw/zig/config/-/issues/40) -- `loader.zig` configurable delimiter |
 | **Environment Variables** |
 | BindEnv() | Yes | Yes | Complete | [#30](https://gitlab.com/devnw/zig/config/-/issues/30) |
 | AutomaticEnv() | Yes | Yes | Complete | [#31](https://gitlab.com/devnw/zig/config/-/issues/31) |
@@ -44,10 +44,10 @@ This document compares zigconfig features with [Viper](https://github.com/spf13/
 | SafeWriteConfig() | Yes | Yes | Complete | `safeWriteConfig`, `safeWriteConfigWithBackup` |
 | WatchConfig() / hot-reload | Yes | Yes | Complete | `src/watch.zig` -- polling-based, cross-platform |
 | Multiple search paths | Yes | Yes | Complete | `addConfigPath` in loader; XDG multi-path support |
-| Files without extension | Yes | No | Planned | [#44](https://gitlab.com/devnw/zig/config/-/issues/44) |
+| Files without extension | Yes | Yes | Complete | [#44](https://gitlab.com/devnw/zig/config/-/issues/44) -- `detectFormatFromContent` |
 | **Data Export** |
-| AllSettings() | Yes | No | Planned | [#37](https://gitlab.com/devnw/zig/config/-/issues/37) |
-| AllKeys() | Yes | No | Planned | [#43](https://gitlab.com/devnw/zig/config/-/issues/43) |
+| AllSettings() | Yes | Yes | Complete | [#37](https://gitlab.com/devnw/zig/config/-/issues/37) -- `loader.zig:299` |
+| AllKeys() | Yes | Yes | Complete | [#43](https://gitlab.com/devnw/zig/config/-/issues/43) -- `loader.zig:284` |
 | **Input Sources** |
 | Read from io.Reader | Yes | No | Planned | [#38](https://gitlab.com/devnw/zig/config/-/issues/38) |
 | Custom format decoders | Yes | Yes | Complete | Via `Format` enum in loader; [#39](https://gitlab.com/devnw/zig/config/-/issues/39) |
@@ -188,10 +188,7 @@ std.debug.print("token: {s}\n", .{token});
 | SOPS integration | [#87](https://gitlab.com/devnw/zig/config/-/issues/87) | Mozilla SOPS encrypted files |
 | age/GPG encryption | [#88](https://gitlab.com/devnw/zig/config/-/issues/88) | age/GPG encrypted config files |
 | JSON Schema validation | [#5](https://gitlab.com/devnw/zig/config/-/issues/5) | Schema-based config validation |
-| AllSettings() | [#37](https://gitlab.com/devnw/zig/config/-/issues/37) | Export all settings as map |
-| AllKeys() | [#43](https://gitlab.com/devnw/zig/config/-/issues/43) | List all known keys |
 | parseReader() | [#38](https://gitlab.com/devnw/zig/config/-/issues/38) | Read from io.Reader |
-| Custom key delimiter | [#40](https://gitlab.com/devnw/zig/config/-/issues/40) | Replace default "." delimiter |
 
 ## API Comparison
 

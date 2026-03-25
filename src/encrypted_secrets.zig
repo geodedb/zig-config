@@ -154,21 +154,22 @@ const vault_path_allowlist = [_][]const u8{
     "C:\\Program Files\\HashiCorp\\Vault\\vault.exe",
 };
 
-/// Validate the 1Password CLI binary path against an allowlist (CWE-78, #66).
-/// Security: Prevents arbitrary binary execution by restricting op_path to known safe locations.
-/// Returns true if the path is in the allowlist or matches a safe pattern.
-pub fn isValidOpPath(path: []const u8) bool {
+// R-03/R-04: Parameterized provider path validation (shared by op and vault).
+// Security: Validates a CLI binary path against an explicit allowlist and
+// a restricted home-directory pattern to prevent arbitrary binary execution
+// (CWE-78, CWE-426, #66, SEC-07, SEC-17).
+fn isValidProviderPath(path: []const u8, allowlist: []const []const u8, binary_suffix: []const u8) bool {
     if (path.len == 0) return false;
 
     // Check against explicit allowlist
-    for (op_path_allowlist) |allowed| {
+    for (allowlist) |allowed| {
         if (mem.eql(u8, path, allowed)) return true;
     }
 
-    // Allow paths in home directories: ~/bin/op or ~/.local/bin/op only.
-    // Security (SEC-07): Restrict to exactly /home/<user>/bin/op or
-    // /home/<user>/.local/bin/op to prevent matches like
-    // /home/user/projects/evil/bin/op.
+    // Allow paths in home directories: ~/bin/<tool> or ~/.local/bin/<tool> only.
+    // Security (SEC-07): Restrict to exactly /home/<user>/bin/<tool> or
+    // /home/<user>/.local/bin/<tool> to prevent matches like
+    // /home/user/projects/evil/bin/<tool>.
     if (mem.indexOf(u8, path, "..") != null) return false;
     const prefixes = [_][]const u8{ "/home/", "/Users/" };
     for (prefixes) |prefix| {
@@ -177,8 +178,15 @@ pub fn isValidOpPath(path: []const u8) bool {
             const user_end = mem.indexOf(u8, after_prefix, "/") orelse continue;
             if (user_end == 0) continue;
             const after_user = after_prefix[user_end..];
-            if (mem.eql(u8, after_user, "/bin/op") or
-                mem.eql(u8, after_user, "/.local/bin/op"))
+
+            // Build expected suffixes: "/bin/<tool>" and "/.local/bin/<tool>"
+            var bin_suffix_buf: [64]u8 = undefined;
+            const bin_suffix = std.fmt.bufPrint(&bin_suffix_buf, "/bin/{s}", .{binary_suffix}) catch continue;
+            var local_suffix_buf: [64]u8 = undefined;
+            const local_suffix = std.fmt.bufPrint(&local_suffix_buf, "/.local/bin/{s}", .{binary_suffix}) catch continue;
+
+            if (mem.eql(u8, after_user, bin_suffix) or
+                mem.eql(u8, after_user, local_suffix))
             {
                 return true;
             }
@@ -188,37 +196,18 @@ pub fn isValidOpPath(path: []const u8) bool {
     return false;
 }
 
+/// Validate the 1Password CLI binary path against an allowlist (CWE-78, #66).
+/// Security: Prevents arbitrary binary execution by restricting op_path to known safe locations.
+/// Returns true if the path is in the allowlist or matches a safe pattern.
+pub fn isValidOpPath(path: []const u8) bool {
+    return isValidProviderPath(path, &op_path_allowlist, "op");
+}
+
 /// Validate the Vault CLI binary path against an allowlist (CWE-426).
 /// Security (SEC-07, SEC-17): Uses strict suffix matching identical to isValidOpPath
 /// to prevent matches like /home/user/projects/evil/bin/vault.
 pub fn isValidVaultPath(path: []const u8) bool {
-    if (path.len == 0) return false;
-
-    for (vault_path_allowlist) |allowed| {
-        if (mem.eql(u8, path, allowed)) return true;
-    }
-
-    // Allow paths in home directories: ~/bin/vault or ~/.local/bin/vault only.
-    // Security (SEC-07): Restrict to exactly /home/<user>/bin/vault or
-    // /home/<user>/.local/bin/vault to prevent matches like
-    // /home/user/projects/evil/bin/vault.
-    if (mem.indexOf(u8, path, "..") != null) return false;
-    const prefixes = [_][]const u8{ "/home/", "/Users/" };
-    for (prefixes) |prefix| {
-        if (mem.startsWith(u8, path, prefix)) {
-            const after_prefix = path[prefix.len..];
-            const user_end = mem.indexOf(u8, after_prefix, "/") orelse continue;
-            if (user_end == 0) continue;
-            const after_user = after_prefix[user_end..];
-            if (mem.eql(u8, after_user, "/bin/vault") or
-                mem.eql(u8, after_user, "/.local/bin/vault"))
-            {
-                return true;
-            }
-        }
-    }
-
-    return false;
+    return isValidProviderPath(path, &vault_path_allowlist, "vault");
 }
 
 fn findExecutableInPath(allocator: Allocator, name: []const u8) ?[]u8 {
@@ -236,19 +225,25 @@ fn findExecutableInPath(allocator: Allocator, name: []const u8) ?[]u8 {
     return null;
 }
 
-pub fn resolveVaultPath(allocator: Allocator, path: []const u8) SecretError![]u8 {
+// R-03/R-04: Parameterized provider path resolution (shared by op and vault).
+// Security: Prevents PATH hijack by ensuring resolved binary is in allowlist (CWE-426, #77).
+fn resolveProviderPath(allocator: Allocator, path: []const u8, comptime validator_fn: fn ([]const u8) bool) SecretError![]u8 {
     const has_separator = mem.indexOfAny(u8, path, "/\\") != null;
     if (!has_separator) {
         const resolved = findExecutableInPath(allocator, path) orelse return SecretError.ProviderNotAvailable;
-        if (!isValidVaultPath(resolved)) {
+        if (!validator_fn(resolved)) {
             allocator.free(resolved);
             return SecretError.InvalidInputCharacters;
         }
         return resolved;
     }
 
-    if (!isValidVaultPath(path)) return SecretError.InvalidInputCharacters;
+    if (!validator_fn(path)) return SecretError.InvalidInputCharacters;
     return allocator.dupe(u8, path) catch return SecretError.OutOfMemory;
+}
+
+pub fn resolveVaultPath(allocator: Allocator, path: []const u8) SecretError![]u8 {
+    return resolveProviderPath(allocator, path, isValidVaultPath);
 }
 
 /// Resolve the 1Password CLI binary path, analogous to resolveVaultPath.
@@ -257,18 +252,7 @@ pub fn resolveVaultPath(allocator: Allocator, path: []const u8) SecretError![]u8
 /// the absolute/relative path directly against the allowlist.
 /// Security: Prevents PATH hijack by ensuring resolved binary is in allowlist (CWE-426, #77)
 pub fn resolveOpPath(allocator: Allocator, path: []const u8) SecretError![]u8 {
-    const has_separator = mem.indexOfAny(u8, path, "/\\") != null;
-    if (!has_separator) {
-        const resolved = findExecutableInPath(allocator, path) orelse return SecretError.ProviderNotAvailable;
-        if (!isValidOpPath(resolved)) {
-            allocator.free(resolved);
-            return SecretError.InvalidInputCharacters;
-        }
-        return resolved;
-    }
-
-    if (!isValidOpPath(path)) return SecretError.InvalidInputCharacters;
-    return allocator.dupe(u8, path) catch return SecretError.OutOfMemory;
+    return resolveProviderPath(allocator, path, isValidOpPath);
 }
 
 /// Handle process termination status safely, covering all Term variants.

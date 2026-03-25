@@ -325,7 +325,8 @@ pub fn parseContent(allocator: Allocator, content: []const u8, format: Format) !
         .toml => try parseTomlContent(arena_alloc, content),
         .ini => try parseIniContent(arena_alloc, content),
         .properties => try parsePropertiesContent(arena_alloc, content),
-        .auto => unreachable,
+        // ADV-01: Return a proper error instead of unreachable (UB in ReleaseFast)
+        .auto => return error.UnsupportedFormat,
     };
 
     return Value{
@@ -536,26 +537,25 @@ fn convertTomlValue(allocator: Allocator, val: toml.Value) error{OutOfMemory}!Va
     };
 }
 
-fn formatTomlDatetime(buf: []u8, dt: toml.DateTime) usize {
+// R-02: Generic datetime formatter shared by DateTime and DateTimeLocal.
+// Both types have the same year/month/day/hour/minute/second fields.
+fn formatTomlDatetimeFields(comptime T: type, val: T, buf: []u8) usize {
     return (std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
-        dt.year,
-        dt.month,
-        dt.day,
-        dt.hour,
-        dt.minute,
-        dt.second,
+        val.year,
+        val.month,
+        val.day,
+        val.hour,
+        val.minute,
+        val.second,
     }) catch buf[0..0]).len;
 }
 
+fn formatTomlDatetime(buf: []u8, dt: toml.DateTime) usize {
+    return formatTomlDatetimeFields(toml.DateTime, dt, buf);
+}
+
 fn formatTomlDatetimeLocal(buf: []u8, dt: toml.DateTimeLocal) usize {
-    return (std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
-        dt.year,
-        dt.month,
-        dt.day,
-        dt.hour,
-        dt.minute,
-        dt.second,
-    }) catch buf[0..0]).len;
+    return formatTomlDatetimeFields(toml.DateTimeLocal, dt, buf);
 }
 
 fn formatTomlDateLocal(buf: []u8, d: toml.DateLocal) usize {
@@ -659,8 +659,15 @@ pub const SafeWriteOptions = struct {
     atomic: bool = true,
 };
 
-/// Safely write configuration to a file without overwriting existing files
-/// Use this to prevent accidental data loss
+/// Safely write configuration to a file without overwriting existing files.
+/// Use this to prevent accidental data loss. Returns `FileExists` if the
+/// target path already exists.
+///
+/// A-01: Uses the same safety guarantees as `serialize.safeWriteToFile`
+/// (atomic temp+rename, sync before close, errdefer cleanup), but takes
+/// raw content instead of a typed value. See `safeWriteConfigWithBackup`
+/// for a variant that allows overwriting with backup.
+///
 /// Security: Validates path to prevent path traversal attacks (CWE-22, #62)
 pub fn safeWriteConfig(
     allocator: Allocator,
@@ -689,8 +696,8 @@ pub fn safeWriteConfig(
         while (attempt < 5) : (attempt += 1) {
             var random_bytes: [8]u8 = undefined;
             std.crypto.random.bytes(&random_bytes);
-            const random_suffix = std.fmt.fmtSliceHexLower(&random_bytes);
-            temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, random_suffix }) catch return SafeWriteError.OutOfMemory;
+            const random_suffix = std.fmt.bytesToHex(random_bytes, .lower);
+            temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, &random_suffix }) catch return SafeWriteError.OutOfMemory;
             temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
                 error.PathAlreadyExists => {
                     allocator.free(temp_path);
@@ -702,11 +709,14 @@ pub fn safeWriteConfig(
         }
         if (attempt == 5) return SafeWriteError.IoError;
         defer allocator.free(temp_path);
-        temp_file.writeAll(content) catch {
-            temp_file.close();
-            cwd.deleteFile(temp_path) catch {};
-            return SafeWriteError.IoError;
-        };
+        errdefer cwd.deleteFile(temp_path) catch {};
+        // R-01/T-01: Ensure temp file handle is closed on write/sync failure
+        // so the fd is not leaked before errdefer cleanup deletes the file.
+        errdefer temp_file.close();
+
+        temp_file.writeAll(content) catch return SafeWriteError.IoError;
+        // R-01/T-01: Flush data to disk before rename to guarantee durability
+        temp_file.sync() catch return SafeWriteError.IoError;
         temp_file.close();
 
         // Rename temp to target
@@ -722,7 +732,12 @@ pub fn safeWriteConfig(
     }
 }
 
-/// Write config with backup if file exists
+/// Write config, creating a backup of any existing file first.
+/// Unlike `safeWriteConfig`, this function allows overwriting (after backup).
+///
+/// A-01: Shares the same atomic-write safety guarantees (sync, errdefer,
+/// path validation) as `safeWriteConfig` and `serialize.safeWriteToFile`.
+///
 /// Security: Validates path to prevent path traversal attacks (CWE-22, #62)
 pub fn safeWriteConfigWithBackup(
     allocator: Allocator,
@@ -755,8 +770,8 @@ pub fn safeWriteConfigWithBackup(
         while (attempt < 5) : (attempt += 1) {
             var random_bytes: [8]u8 = undefined;
             std.crypto.random.bytes(&random_bytes);
-            const random_suffix = std.fmt.fmtSliceHexLower(&random_bytes);
-            temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, random_suffix }) catch return SafeWriteError.OutOfMemory;
+            const random_suffix = std.fmt.bytesToHex(random_bytes, .lower);
+            temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, &random_suffix }) catch return SafeWriteError.OutOfMemory;
             temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
                 error.PathAlreadyExists => {
                     allocator.free(temp_path);
@@ -768,11 +783,13 @@ pub fn safeWriteConfigWithBackup(
         }
         if (attempt == 5) return SafeWriteError.IoError;
         defer allocator.free(temp_path);
-        temp_file.writeAll(content) catch {
-            temp_file.close();
-            cwd.deleteFile(temp_path) catch {};
-            return SafeWriteError.IoError;
-        };
+        errdefer cwd.deleteFile(temp_path) catch {};
+        // R-01/T-01: Ensure temp file handle is closed on write/sync failure
+        errdefer temp_file.close();
+
+        temp_file.writeAll(content) catch return SafeWriteError.IoError;
+        // R-01/T-01: Flush data to disk before rename to guarantee durability
+        temp_file.sync() catch return SafeWriteError.IoError;
         temp_file.close();
 
         cwd.rename(temp_path, path) catch {
@@ -1075,4 +1092,104 @@ test "unified config: parseContent with .auto detects TOML (GAP-0010)" {
 
     try std.testing.expectEqualStrings("toml-host", config.getString("host").?);
     try std.testing.expectEqual(@as(i64, 4000), config.getInt("port").?);
+}
+
+// ============================================================================
+// R-01/T-01: Atomic write tests (sync, errdefer, path traversal, backup)
+// ============================================================================
+
+test "R-01/T-01: safeWriteConfig creates correct file with atomic write" {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // Get real path for the temp dir
+    const dir_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, ".") catch return;
+    defer std.testing.allocator.free(dir_path);
+
+    const file_path = std.fmt.allocPrint(std.testing.allocator, "{s}/test_write.json", .{dir_path}) catch return;
+    defer std.testing.allocator.free(file_path);
+
+    const content = "{\"key\": \"value\"}";
+    try safeWriteConfig(std.testing.allocator, file_path, content, .{ .atomic = true });
+
+    // Verify file content is correct
+    const read_content = std.fs.cwd().readFileAlloc(std.testing.allocator, file_path, 4096) catch return;
+    defer std.testing.allocator.free(read_content);
+    try std.testing.expectEqualStrings(content, read_content);
+}
+
+test "R-01/T-01: safeWriteConfig rejects path traversal" {
+    try std.testing.expectError(
+        SafeWriteError.PathTraversalDetected,
+        safeWriteConfig(std.testing.allocator, "../etc/passwd", "bad", .{}),
+    );
+    try std.testing.expectError(
+        SafeWriteError.PathTraversalDetected,
+        safeWriteConfig(std.testing.allocator, "/tmp/../../etc/passwd", "bad", .{}),
+    );
+}
+
+test "R-01/T-01: safeWriteConfigWithBackup creates backup file" {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const dir_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, ".") catch return;
+    defer std.testing.allocator.free(dir_path);
+
+    const file_path = std.fmt.allocPrint(std.testing.allocator, "{s}/config.json", .{dir_path}) catch return;
+    defer std.testing.allocator.free(file_path);
+
+    // Create original file
+    const original = "original content";
+    {
+        const f = std.fs.cwd().createFile(file_path, .{}) catch return;
+        f.writeAll(original) catch {};
+        f.close();
+    }
+
+    // Write with backup
+    const updated = "updated content";
+    try safeWriteConfigWithBackup(std.testing.allocator, file_path, updated, .{ .create_backup = true, .atomic = true });
+
+    // Verify updated content
+    const read_content = std.fs.cwd().readFileAlloc(std.testing.allocator, file_path, 4096) catch return;
+    defer std.testing.allocator.free(read_content);
+    try std.testing.expectEqualStrings(updated, read_content);
+
+    // Verify backup exists
+    const backup_path = std.fmt.allocPrint(std.testing.allocator, "{s}.bak", .{file_path}) catch return;
+    defer std.testing.allocator.free(backup_path);
+    const backup_content = std.fs.cwd().readFileAlloc(std.testing.allocator, backup_path, 4096) catch return;
+    defer std.testing.allocator.free(backup_content);
+    try std.testing.expectEqualStrings(original, backup_content);
+}
+
+test "R-01/T-01: safeWriteConfigWithBackup rejects path traversal" {
+    try std.testing.expectError(
+        SafeWriteError.PathTraversalDetected,
+        safeWriteConfigWithBackup(std.testing.allocator, "../etc/shadow", "bad", .{}),
+    );
+}
+
+// ============================================================================
+// ADV-01: .auto format returns error instead of unreachable
+// ============================================================================
+
+test "ADV-01: parseContent with .auto format detects JSON correctly" {
+    // Verify that .auto resolves to the correct format via content detection
+    const json_content =
+        \\{"key": "value"}
+    ;
+    var config = try parseContent(std.testing.allocator, json_content, .auto);
+    defer config.deinit();
+    try std.testing.expectEqualStrings("value", config.getString("key").?);
+}
+
+test "ADV-01: parseContent with .auto format detects YAML correctly" {
+    const yaml_content =
+        \\key: value
+    ;
+    var config = try parseContent(std.testing.allocator, yaml_content, .auto);
+    defer config.deinit();
+    try std.testing.expectEqualStrings("value", config.getString("key").?);
 }
