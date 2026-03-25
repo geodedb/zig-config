@@ -35,3 +35,7 @@ pub const MAX_CLI_OUTPUT_SIZE: usize = 1024 * 1024;
 /// Maximum size for .env files (1 MB)
 /// .env files are typically small; 1 MB is generous
 pub const MAX_DOTENV_FILE_SIZE: usize = 1024 * 1024;
+
+/// Maximum length for KV store keys (512 bytes)
+/// Reasonable upper bound for etcd/Consul key paths.
+pub const MAX_KV_KEY_LENGTH: usize = 512;

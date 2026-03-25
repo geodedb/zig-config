@@ -318,6 +318,8 @@ pub fn Loader(comptime T: type) type {
         pub fn allKeys(self: *const Self) ![]const []const u8 {
             var keys: std.ArrayListUnmanaged([]const u8) = .{};
             errdefer keys.deinit(self.allocator);
+            // INFO-5: Pre-allocate capacity since tracker value count is known
+            try keys.ensureTotalCapacity(self.allocator, @intCast(self.tracker.values.count()));
 
             // Get keys from tracker
             var iter = self.tracker.values.keyIterator();
@@ -333,6 +335,8 @@ pub fn Loader(comptime T: type) type {
         pub fn allSettings(self: *const Self) !std.StringHashMap([]const u8) {
             var settings = std.StringHashMap([]const u8).init(self.allocator);
             errdefer settings.deinit();
+            // INFO-5: Pre-allocate capacity since tracker value count is known
+            try settings.ensureTotalCapacity(@intCast(self.tracker.values.count()));
 
             var iter = self.tracker.values.iterator();
             while (iter.next()) |entry| {

@@ -1,8 +1,8 @@
 # GAP Analysis
 
-Last updated: 2026-03-25 (Wave 12 closure -- all batches complete)
-Review commit: fe9d0f6 (HEAD of main) + working tree
-Reviewed by: Gap Detection Agent (Phase 3, adversarial); Wave 12 closures applied (Batches 1-7)
+Last updated: 2026-03-25 (Wave 14 closure -- 12 audit findings closed)
+Review commit: 8d6b87c (HEAD of main) + working tree
+Reviewed by: Gap Detection Agent (Phase 3, adversarial); Wave 12 closures applied (Batches 1-7); Wave 13 (SEC-02); Wave 14 (12 audit findings)
 
 ## Summary
 
@@ -10,19 +10,24 @@ Reviewed by: Gap Detection Agent (Phase 3, adversarial); Wave 12 closures applie
 
 | Severity | Count | Open | Closed | Won't Do | Blocked | Description |
 |----------|-------|------|--------|----------|---------|-------------|
-| Critical | 0 | 0 | 0 | 0 | 0 | No critical vulnerabilities found |
-| High | 3 | 0 | 3 | 0 | 0 | GAP-0062 closed (Batch 1+2); GAP-0066 closed (Batch 6) |
-| Medium | 20 | 0 | 17 | 1 | 2 | GAP-0063 Won't Do (deferred feature); GAP-0067 closed (Batch 1+2); SEC-02 blocked |
-| Low | 12 | 0 | 10 | 0 | 2 | Version inconsistency (GAP-0068/0069) closed (Batch 6); SEC-04/GAP-0058 blocked |
-| **Total** | **35** | **0** | **30** | **1** | **4** | Wave 12 closed all open items. 1 Won't Do (GAP-0063). 3 blocked (SEC-02, SEC-04, GAP-0058). |
+| Critical | 1 | 0 | 1 | 0 | 0 | CRIT-1 bounded HTTP response body (Wave 14) |
+| High | 4 | 0 | 4 | 0 | 0 | GAP-0062 closed (Batch 1+2); GAP-0066 closed (Batch 6); HIGH-1 transfer buffer (Wave 14) |
+| Medium | 22 | 0 | 21 | 1 | 0 | GAP-0063 Won't Do; MED-1/MED-2 closed (Wave 14); SEC-02 closed (Wave 13) |
+| Low | 13 | 0 | 11 | 0 | 2 | LOW-1 Windows setsockopt (Wave 14); SEC-04/GAP-0058 blocked |
+| Info | 7 | 0 | 7 | 0 | 0 | INFO-1 through INFO-7 closed (Wave 14) |
+| **Total** | **47** | **0** | **44** | **1** | **2** | Wave 14 closed 12 audit findings + P3-R1/PERF-46. SEC-02 closed (Wave 13). 1 Won't Do (GAP-0063). 2 blocked (SEC-04, GAP-0058). |
 
 Wave 12 (Phase 3) found 9 new gaps. GAP-0041/GAP-0042 marked as REGRESSION in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md) -- code was in agent worktree only, never merged to main. These are superseded by GAP-0062. All 14 original security findings remain resolved. Resolution evidence for closed items is tracked in [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
 
-Wave 12 closure complete: Batch 1+2 closed GAP-0062 and GAP-0067. Batch 6 closed 6 documentation gaps (GAP-0064, GAP-0065, GAP-0066, GAP-0068, GAP-0069, GAP-0070). GAP-0063 marked Won't Do (significant feature, deferred to future release). No open items remain.
+Wave 12 closure complete: Batch 1+2 closed GAP-0062 and GAP-0067. Batch 6 closed 6 documentation gaps (GAP-0064, GAP-0065, GAP-0066, GAP-0068, GAP-0069, GAP-0070). GAP-0063 marked Won't Do (significant feature, deferred to future release).
+
+Wave 13 closed SEC-02 (HTTP timeout enforcement via SO_RCVTIMEO/SO_SNDTIMEO).
+
+Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1, MED-2, LOW-1, INFO-1 through INFO-7. Also closed P3-R1/PERF-46 (bounded response writer), subsumed by CRIT-1. No open items remain.
 
 ### Remaining Risks (Blocked only)
 
-1. SEC-02: HTTP timeout not enforced (Zig 0.15 limitation) -- Medium, blocked
+1. ~~SEC-02: HTTP timeout not enforced (Zig 0.15 limitation)~~ -- **Closed** (Wave 13)
 2. SEC-04: Spice dependency not pinned (no upstream tags) -- Low, blocked
 3. GAP-0058: Windows CI infrastructure -- Low, blocked
 
@@ -119,7 +124,117 @@ Wave 12 closure complete: Batch 1+2 closed GAP-0062 and GAP-0067. Batch 6 closed
 
 ---
 
-## Blocked Items (unchanged)
+## Wave 14 -- Audit Findings (2026-03-25)
+
+12 findings from full codebase audit, all closed.
+
+### CRIT-1: Bounded HTTP response body allocation (CWE-770) -- **CLOSED**
+- **Issue:** [#206](https://gitlab.com/devnw/zig/config/-/issues/206)
+- **Category:** Security
+- **Severity:** Critical
+- **Status:** Closed (Wave 14)
+- **Resolution:** HTTP response body allocation in `fetchWithTimeout` now enforced via `BoundedResponseWriter` with `limits.MAX_REMOTE_RESPONSE_SIZE` cap. Prevents unbounded memory allocation from malicious server responses.
+- **Evidence:** `src/remote.zig` -- `BoundedResponseWriter` struct; `fetchWithTimeout` reads through bounded writer
+- **Also closes:** P3-R1/PERF-46 (bounded response writer) -- subsumed by this implementation.
+
+### HIGH-1: 64-byte transfer buffer upgraded to 8192 bytes -- **CLOSED**
+- **Issue:** [#207](https://gitlab.com/devnw/zig/config/-/issues/207)
+- **Category:** Performance
+- **Severity:** High
+- **Status:** Closed (Wave 14)
+- **Resolution:** Transfer buffer in `fetchWithTimeout` increased from 64 bytes to 8192 bytes, reducing syscall overhead by ~128x for typical responses.
+- **Evidence:** `src/remote.zig` -- `TRANSFER_BUFFER_SIZE = 8192`
+
+### MED-1: Extract Consul buildConsulPath helper -- **CLOSED**
+- **Issue:** [#208](https://gitlab.com/devnw/zig/config/-/issues/208)
+- **Category:** Quality
+- **Severity:** Medium
+- **Status:** Closed (Wave 14)
+- **Resolution:** Extracted `buildConsulPath` helper to deduplicate Consul KV path construction across get/put/delete/keys operations.
+- **Evidence:** `src/remote.zig` -- `buildConsulPath()` helper function
+
+### MED-2: Extract writeEscapedString helper -- **CLOSED**
+- **Issue:** [#209](https://gitlab.com/devnw/zig/config/-/issues/209)
+- **Category:** Quality
+- **Severity:** Medium
+- **Status:** Closed (Wave 14)
+- **Resolution:** Extracted `writeEscapedString` helper from JSON serialization to deduplicate string escaping logic.
+- **Evidence:** `src/serialize.zig` -- `writeEscapedString()` helper function
+
+### LOW-1: Windows setsockopt return value checking (CWE-252) -- **CLOSED**
+- **Issue:** [#210](https://gitlab.com/devnw/zig/config/-/issues/210)
+- **Category:** Security
+- **Severity:** Low
+- **Status:** Closed (Wave 14)
+- **Resolution:** Windows `setsockopt` return values are now checked and errors propagated, preventing silent timeout failures.
+- **Evidence:** `src/remote.zig` -- Windows `setsockopt` error checking in `setSocketTimeout()`
+
+### INFO-1: Differentiate receiveHead error types -- **CLOSED**
+- **Issue:** [#211](https://gitlab.com/devnw/zig/config/-/issues/211)
+- **Category:** Security
+- **Severity:** Info
+- **Status:** Closed (Wave 14)
+- **Resolution:** `receiveHead` errors in `fetchWithTimeout` now differentiated between timeout (`EAGAIN`/`WOULDBLOCK`) and other errors, providing more specific error reporting.
+- **Evidence:** `src/remote.zig` -- error switch in `fetchWithTimeout` after `receiveHead`
+
+### INFO-2: Update PERF-29 for GAP-0062 array handling -- **CLOSED**
+- **Issue:** [#212](https://gitlab.com/devnw/zig/config/-/issues/212)
+- **Category:** Docs
+- **Severity:** Info
+- **Status:** Closed (Wave 14)
+- **Resolution:** PERF-29 entry in PERF_GAP_ANALYSIS.md updated to reflect GAP-0062 array handling implementation with stack-buffer `bufPrint`.
+- **Evidence:** `docs/PERF_GAP_ANALYSIS.md` -- PERF-29 entry updated
+
+### INFO-3: Audit secureZero callsites -- **CLOSED**
+- **Issue:** [#213](https://gitlab.com/devnw/zig/config/-/issues/213)
+- **Category:** Security
+- **Severity:** Info
+- **Status:** Closed (Wave 14)
+- **Resolution:** Audited all `secureZero` callsites in `remote.zig`; confirmed all credential and response buffers are properly zeroed before free.
+- **Evidence:** `src/remote.zig` -- `secureZero` verified at all credential/response `defer` sites
+
+### INFO-4: Remove redundant isSymlink check -- **CLOSED**
+- **Issue:** [#214](https://gitlab.com/devnw/zig/config/-/issues/214)
+- **Category:** Quality
+- **Severity:** Info
+- **Status:** Closed (Wave 14)
+- **Resolution:** Removed redundant `isSymlink` pre-check in config file loading path where `openFileReadNoFollow` already handles symlink rejection atomically.
+- **Evidence:** `src/config.zig` -- redundant symlink check removed
+
+### INFO-5: Add ensureTotalCapacity to 12+ sites -- **CLOSED**
+- **Issue:** [#215](https://gitlab.com/devnw/zig/config/-/issues/215)
+- **Category:** Performance
+- **Severity:** Info
+- **Status:** Closed (Wave 14)
+- **Resolution:** Added `ensureTotalCapacity` capacity hints to 12+ HashMap/ArrayList initialization sites across multiple modules.
+- **Evidence:**
+  - `src/remote.zig` -- capacity hints on response parsing maps
+  - `src/config.zig` -- capacity hints on config maps
+  - `src/loader.zig` -- capacity hints on loader maps
+  - `src/provenance.zig` -- capacity hints on provenance tracker
+  - `src/dotenv.zig` -- capacity hints on dotenv parsing
+
+### INFO-6: Replace open+stat with fstatat in watcher -- **CLOSED**
+- **Issue:** [#216](https://gitlab.com/devnw/zig/config/-/issues/216)
+- **Category:** Performance
+- **Severity:** Info
+- **Status:** Closed (Wave 14)
+- **Resolution:** Replaced separate `open()`+`stat()` calls with `fstatat()` in the file watcher, reducing per-check syscalls from 3 to 1.
+- **Evidence:** `src/watch.zig` -- `fstatat` replaces `open`+`fstat`+`close`
+
+### INFO-7: Single-pass isValidKVKey validator -- **CLOSED**
+- **Issue:** [#217](https://gitlab.com/devnw/zig/config/-/issues/217)
+- **Category:** Performance
+- **Severity:** Info
+- **Status:** Closed (Wave 14)
+- **Resolution:** Replaced multi-pass `isValidKVKey` validator (separate checks for length, null bytes, control chars) with a single-pass implementation that validates all constraints in one iteration.
+- **Evidence:**
+  - `src/remote.zig` -- single-pass `isValidKVKey` implementation
+  - `src/limits.zig` -- `MAX_KV_KEY_LENGTH` constant
+
+---
+
+## Blocked Items
 
 | ID | Severity | Finding | Component | Blocker | Unblock Steps | Status |
 |----|----------|---------|-----------|---------|---------------|--------|
@@ -138,11 +253,11 @@ Wave 12 closure complete: Batch 1+2 closed GAP-0062 and GAP-0067. Batch 6 closed
 | ADV-08 | Structured security logging | Architectural change; not a gap closure item | **Won't Do** |
 | P3-M2 | Consul request consolidation | Refactoring too aggressive; breaks 44 tests | **Deferred** |
 | P3-M3 | URL builder extraction | Deferred to future refactoring pass | **Deferred** |
-| P3-R1/PERF-46 | Bounded response writer | Needs design work; current `limits.MAX_REMOTE_RESPONSE_SIZE` check sufficient | **Deferred** |
+| P3-R1/PERF-46 | Bounded response writer | Subsumed by CRIT-1: `BoundedResponseWriter` in `fetchWithTimeout` enforces `limits.MAX_REMOTE_RESPONSE_SIZE` | **Closed** (Wave 14) |
 | PERF-47 | Etcd endpoint failover enhancements | Feature addition, not gap closure | **Deferred** |
 
 ---
 
 ## Closed Items Reference
 
-All 30 closed gaps include: 14 security findings, 3 feature gaps, 5 security hardening items, 6 documentation gaps (Batch 6), and 2 bug fixes (GAP-0062, GAP-0067 -- Batch 1+2). GAP-0041 and GAP-0042 have been reclassified as REGRESSION (code never merged to main) and are superseded by GAP-0062. 1 Won't Do: GAP-0063 (nested YAML -- deferred feature). See [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md) for full resolution details.
+All 42 closed gaps include: 14 original security findings, 3 feature gaps, 5 security hardening items, 6 documentation gaps (Batch 6), 2 bug fixes (GAP-0062, GAP-0067 -- Batch 1+2), 1 SEC-02 (Wave 13), and 12 Wave 14 audit findings (CRIT-1, HIGH-1, MED-1/2, LOW-1, INFO-1 through INFO-7) plus P3-R1/PERF-46 (subsumed by CRIT-1). GAP-0041 and GAP-0042 have been reclassified as REGRESSION (code never merged to main) and are superseded by GAP-0062. 1 Won't Do: GAP-0063 (nested YAML -- deferred feature). See [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md) for full resolution details.

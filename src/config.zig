@@ -344,11 +344,9 @@ pub fn parseFile(allocator: Allocator, path: []const u8) !Value {
         return error.PathTraversalDetected;
     }
 
-    // Security: Check for symlinks before opening to prevent symlink attacks (CWE-59, #72)
-    if (secret.isSymlink(path)) {
-        return error.SymlinkNotAllowed;
-    }
-
+    // INFO-4: Removed redundant isSymlink() stat check. openFileReadNoFollow()
+    // uses O_NOFOLLOW which atomically rejects symlinks at the kernel level,
+    // eliminating the TOCTOU window from the prior stat+open sequence.
     const file = secret.openFileReadNoFollow(path) catch |err| switch (err) {
         error.SymlinkNotAllowed => return error.SymlinkNotAllowed,
         error.FileNotFound => return error.FileNotFound,
@@ -408,6 +406,8 @@ fn convertYamlValue(allocator: Allocator, val: yaml.Value) !Value.ValueData {
         },
         .map => |pairs| {
             var map = std.StringArrayHashMap(Value).init(allocator);
+            // INFO-5: Pre-allocate capacity since pair count is known
+            try map.ensureTotalCapacity(@intCast(pairs.len));
             for (pairs) |pair| {
                 // pair.k and pair.v are yaml.Value
                 const key = switch (pair.k) {
@@ -453,6 +453,8 @@ fn convertStdJsonValue(allocator: Allocator, val: std.json.Value) !Value.ValueDa
         },
         .object => |obj| {
             var map = std.StringArrayHashMap(Value).init(allocator);
+            // INFO-5: Pre-allocate capacity since object entry count is known
+            try map.ensureTotalCapacity(@intCast(obj.count()));
             var iter = obj.iterator();
             while (iter.next()) |entry| {
                 const key = try allocator.dupe(u8, entry.key_ptr.*);
@@ -504,6 +506,8 @@ fn convertTomlValue(allocator: Allocator, val: toml.Value) error{OutOfMemory}!Va
         },
         .table => |tbl| {
             var map = std.StringArrayHashMap(Value).init(allocator);
+            // INFO-5: Pre-allocate capacity since table entry count is known
+            try map.ensureTotalCapacity(@intCast(tbl.entries.len));
             for (tbl.entries) |entry| {
                 const key = try allocator.dupe(u8, entry.key);
                 try map.put(key, Value{
@@ -582,6 +586,8 @@ fn parseIniContent(allocator: Allocator, content: []const u8) !Value.ValueData {
 
     var map = std.StringArrayHashMap(Value).init(allocator);
     errdefer map.deinit();
+    // INFO-5: Pre-allocate capacity since global + section count is known
+    try map.ensureTotalCapacity(@intCast(doc.global.count() + doc.sections.count()));
 
     // Add global values
     var global_iter = doc.global.iterator();
@@ -597,6 +603,8 @@ fn parseIniContent(allocator: Allocator, content: []const u8) !Value.ValueData {
     var section_iter = doc.sections.iterator();
     while (section_iter.next()) |section_entry| {
         var section_map = std.StringArrayHashMap(Value).init(allocator);
+        // INFO-5: Pre-allocate capacity since section value count is known
+        try section_map.ensureTotalCapacity(@intCast(section_entry.value_ptr.values.count()));
         var value_iter = section_entry.value_ptr.values.iterator();
         while (value_iter.next()) |value_entry| {
             const key = try allocator.dupe(u8, value_entry.key_ptr.*);
@@ -623,6 +631,8 @@ fn parsePropertiesContent(allocator: Allocator, content: []const u8) !Value.Valu
 
     var map = std.StringArrayHashMap(Value).init(allocator);
     errdefer map.deinit();
+    // INFO-5: Pre-allocate capacity since property count is known
+    try map.ensureTotalCapacity(@intCast(props.values.count()));
 
     var iter = props.values.iterator();
     while (iter.next()) |entry| {

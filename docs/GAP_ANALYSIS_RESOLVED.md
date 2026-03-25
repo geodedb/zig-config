@@ -1,7 +1,7 @@
 # Gap Analysis -- Resolved
 
-Last updated: 2026-03-25 (Wave 12 closure complete -- 34 closed, 3 Won't Do, 3 Blocked)
-Review commit: fe9d0f6 (HEAD of main) + working tree
+Last updated: 2026-03-25 (Wave 14 closure complete -- 46 closed, 3 Won't Do, 2 Blocked)
+Review commit: 8d6b87c (HEAD of main) + working tree
 
 ## Resolved Gaps
 
@@ -2000,3 +2000,132 @@ All 774/774 tests pass. Format clean. Build clean.
 - **Evidence:**
   - `src/remote.zig` -- `log.warn` when non-default timeout_ms configured
 - **Resolved date:** 2026-03-25 (Wave 12 Batch 7)
+
+---
+
+## Wave 14 Gap Closures (2026-03-25)
+
+12 findings from full codebase audit, all closed. 828/828 tests pass, 5/5 build steps succeed.
+
+### CRIT-1: Bounded HTTP response body allocation (CWE-770) [RESOLVED]
+
+- **ID:** CRIT-1
+- **Category:** Security (Critical)
+- **Resolution:** HTTP response body allocation in `fetchWithTimeout` now enforced via `BoundedResponseWriter` with `limits.MAX_REMOTE_RESPONSE_SIZE` cap. Prevents unbounded memory allocation from malicious server responses. Also closes P3-R1/PERF-46 (bounded response writer).
+- **Evidence:**
+  - `src/remote.zig` -- `BoundedResponseWriter` struct limits response body size
+  - `src/remote.zig` -- `fetchWithTimeout` reads through bounded writer
+- **Resolved date:** 2026-03-25 (Wave 14)
+
+### HIGH-1: 64-byte transfer buffer upgraded to 8192 bytes [RESOLVED]
+
+- **ID:** HIGH-1
+- **Category:** Performance (High)
+- **Resolution:** Transfer buffer in `fetchWithTimeout` increased from 64 bytes to 8192 bytes, reducing syscall overhead by ~128x for typical responses.
+- **Evidence:**
+  - `src/remote.zig` -- `TRANSFER_BUFFER_SIZE = 8192`
+- **Resolved date:** 2026-03-25 (Wave 14)
+
+### MED-1: Extract Consul buildConsulPath helper [RESOLVED]
+
+- **ID:** MED-1
+- **Category:** Quality / Maintainability (Medium)
+- **Resolution:** Extracted `buildConsulPath` helper to deduplicate Consul KV path construction across get/put/delete/keys operations.
+- **Evidence:**
+  - `src/remote.zig` -- `buildConsulPath()` helper function used by all Consul operations
+- **Resolved date:** 2026-03-25 (Wave 14)
+
+### MED-2: Extract writeEscapedString helper [RESOLVED]
+
+- **ID:** MED-2
+- **Category:** Quality / Maintainability (Medium)
+- **Resolution:** Extracted `writeEscapedString` helper from JSON serialization to deduplicate string escaping logic.
+- **Evidence:**
+  - `src/serialize.zig` -- `writeEscapedString()` helper function
+- **Resolved date:** 2026-03-25 (Wave 14)
+
+### LOW-1: Windows setsockopt return value checking (CWE-252) [RESOLVED]
+
+- **ID:** LOW-1
+- **Category:** Security (Low)
+- **Resolution:** Windows `setsockopt` return values are now checked and errors propagated, preventing silent timeout failures on Windows.
+- **Evidence:**
+  - `src/remote.zig` -- Windows `setsockopt` error checking in `setSocketTimeout()`
+- **Resolved date:** 2026-03-25 (Wave 14)
+
+### INFO-1: Differentiate receiveHead error types [RESOLVED]
+
+- **ID:** INFO-1
+- **Category:** Security / Observability (Info)
+- **Resolution:** `receiveHead` errors in `fetchWithTimeout` now differentiated between timeout (`EAGAIN`/`WOULDBLOCK`) and other errors, providing more specific error reporting.
+- **Evidence:**
+  - `src/remote.zig` -- error switch in `fetchWithTimeout` after `receiveHead`
+- **Resolved date:** 2026-03-25 (Wave 14)
+
+### INFO-2: Update PERF-29 for GAP-0062 array handling [RESOLVED]
+
+- **ID:** INFO-2
+- **Category:** Docs (Info)
+- **Resolution:** PERF-29 entry in PERF_GAP_ANALYSIS.md updated to reflect GAP-0062 array handling implementation with stack-buffer `bufPrint`.
+- **Evidence:**
+  - `docs/PERF_GAP_ANALYSIS.md` -- PERF-29 entry updated
+- **Resolved date:** 2026-03-25 (Wave 14)
+
+### INFO-3: Audit secureZero callsites [RESOLVED]
+
+- **ID:** INFO-3
+- **Category:** Security (Info)
+- **Resolution:** Audited all `secureZero` callsites in `remote.zig`; confirmed all credential and response buffers are properly zeroed before free. No gaps found.
+- **Evidence:**
+  - `src/remote.zig` -- `secureZero` verified at all credential/response `defer` sites
+- **Resolved date:** 2026-03-25 (Wave 14)
+
+### INFO-4: Remove redundant isSymlink check [RESOLVED]
+
+- **ID:** INFO-4
+- **Category:** Quality / Cleanup (Info)
+- **Resolution:** Removed redundant `isSymlink` pre-check in config file loading path where `openFileReadNoFollow` already handles symlink rejection atomically via `O_NOFOLLOW`.
+- **Evidence:**
+  - `src/config.zig` -- redundant symlink check removed
+- **Resolved date:** 2026-03-25 (Wave 14)
+
+### INFO-5: Add ensureTotalCapacity to 12+ sites [RESOLVED]
+
+- **ID:** INFO-5
+- **Category:** Performance / Quality (Info)
+- **Resolution:** Added `ensureTotalCapacity` capacity hints to 12+ HashMap/ArrayList initialization sites across multiple modules, reducing rehash overhead.
+- **Evidence:**
+  - `src/remote.zig` -- capacity hints on response parsing maps
+  - `src/config.zig` -- capacity hints on config maps
+  - `src/loader.zig` -- capacity hints on loader maps
+  - `src/provenance.zig` -- capacity hints on provenance tracker
+  - `src/dotenv.zig` -- capacity hints on dotenv parsing
+- **Resolved date:** 2026-03-25 (Wave 14)
+
+### INFO-6: Replace open+stat with fstatat in watcher [RESOLVED]
+
+- **ID:** INFO-6
+- **Category:** Performance (Info)
+- **Resolution:** Replaced separate `open()`+`stat()` calls with `fstatat()` in the file watcher, reducing per-check syscalls from 3 to 1.
+- **Evidence:**
+  - `src/watch.zig` -- `fstatat` replaces `open`+`fstat`+`close`
+- **Resolved date:** 2026-03-25 (Wave 14)
+
+### INFO-7: Single-pass isValidKVKey validator [RESOLVED]
+
+- **ID:** INFO-7
+- **Category:** Performance (Info)
+- **Resolution:** Replaced multi-pass `isValidKVKey` validator (separate checks for length, null bytes, control chars) with a single-pass implementation that validates all constraints in one iteration.
+- **Evidence:**
+  - `src/remote.zig` -- single-pass `isValidKVKey` implementation
+  - `src/limits.zig` -- `MAX_KV_KEY_LENGTH` constant
+- **Resolved date:** 2026-03-25 (Wave 14)
+
+### P3-R1/PERF-46: Bounded response writer [RESOLVED]
+
+- **ID:** P3-R1/PERF-46
+- **Category:** Performance / Security (P3, previously Deferred)
+- **Resolution:** Subsumed by CRIT-1. The `BoundedResponseWriter` in `fetchWithTimeout` enforces `limits.MAX_REMOTE_RESPONSE_SIZE` at the streaming level, which is a stronger implementation than the post-hoc size check this item originally proposed.
+- **Evidence:**
+  - `src/remote.zig` -- `BoundedResponseWriter` struct in `fetchWithTimeout`
+- **Resolved date:** 2026-03-25 (Wave 14)

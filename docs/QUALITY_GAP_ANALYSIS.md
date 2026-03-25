@@ -1,8 +1,8 @@
 # Quality Gap Analysis
 
 **Project:** devnw/zig/config
-**Last updated:** 2026-03-25 (Wave 12 closure -- all Phase 3 quality-reviewer items resolved)
-**Review phase:** Phase 4 (quality-reviewer follow-up) + Waves 6-11 closure + Phase 3 addendum + Phase 3 quality-reviewer + Wave 12 closure
+**Last updated:** 2026-03-25 (Wave 14 closure -- MED-1, MED-2, INFO-4, INFO-5 added and closed)
+**Review phase:** Phase 4 (quality-reviewer follow-up) + Waves 6-11 closure + Phase 3 addendum + Phase 3 quality-reviewer + Wave 12 closure + Wave 14 audit
 **Scoring formula:** PriorityScore = Impact(1-5) x Likelihood(1-5) x 4
 
 ---
@@ -13,10 +13,10 @@
 |----------|-------|----------|----------|------|
 | Critical | 5     | 5        | 0        | 0    |
 | High     | 11    | 9        | 2        | 0    |
-| Medium   | 27    | 25       | 2        | 0    |
+| Medium   | 29    | 27       | 2        | 0    |
 | Low      | 20    | 20       | 0        | 0    |
-| Info     | 9     | 7        | 2        | 0    |
-| **Total** | **72** | **66** | **6** | **0** |
+| Info     | 11    | 9        | 2        | 0    |
+| **Total** | **76** | **70** | **6** | **0** |
 
 ### Top 5 Active Risks (all resolved in Wave 12)
 
@@ -96,6 +96,10 @@
 | 54 | Info | 8 | perf | ~~findConfigFileWithOptions heap-allocates per candidate path~~ | loader.zig | `loader.zig:430-431` -- stack buffer with heap fallback added | [#201](https://gitlab.com/devnw/zig/config/-/issues/201) | Stack buffer with heap fallback for candidate path construction | Maintainer | S | **Resolved** (Wave 12 Batch 7) |
 | 55 | Info | 8 | reliability | ~~timeout_ms declared but not enforced, no warning logged~~ | remote.zig | `remote.zig:600, :1021` -- log warning added when non-default timeout_ms configured | [#202](https://gitlab.com/devnw/zig/config/-/issues/202) | Added log warning when non-default timeout_ms configured | Maintainer | S | **Resolved** (Wave 12 Batch 7) |
 | 56 | Info | 4 | docs | ~~serialize.zig:490 cross-reference comment is inaccurate~~ | serialize.zig | `serialize.zig:490` -- cross-reference comment fixed to reflect actual behavior | [#200](https://gitlab.com/devnw/zig/config/-/issues/200) | Updated comment to reflect actual sync/errdefer parity (now both have it) | Maintainer | S | **Resolved** (Wave 12 Batch 7) |
+| 57 | Medium | 36 | maintainability | ~~Consul buildConsulPath deduplication~~ | remote.zig | `remote.zig` -- extracted `buildConsulPath` helper | MED-1 | Extracted shared Consul path construction helper | Maintainer | S | **Resolved** (Wave 14) |
+| 58 | Medium | 36 | maintainability | ~~writeEscapedString deduplication~~ | serialize.zig | `serialize.zig` -- extracted `writeEscapedString` helper | MED-2 | Extracted shared JSON string escaping helper | Maintainer | S | **Resolved** (Wave 14) |
+| 59 | Info | 8 | cleanup | ~~Redundant isSymlink pre-check in config.zig~~ | config.zig | `config.zig` -- redundant check removed; `openFileReadNoFollow` handles symlink rejection | INFO-4 | Removed redundant pre-check | Maintainer | S | **Resolved** (Wave 14) |
+| 60 | Info | 8 | perf | ~~Missing ensureTotalCapacity at 12+ sites~~ | multiple | `remote.zig`, `config.zig`, `loader.zig`, `provenance.zig`, `dotenv.zig` -- capacity hints added | INFO-5 | Added ensureTotalCapacity to 12+ HashMap/ArrayList init sites | Maintainer | S | **Resolved** (Wave 14) |
 
 ---
 

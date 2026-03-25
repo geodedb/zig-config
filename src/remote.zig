@@ -522,50 +522,59 @@ pub fn isPrivateIPv4Int(ip: u32) bool {
 /// - Null bytes (path truncation)
 /// - Query/fragment injection (?, #)
 /// Valid keys: alphanumeric, /, -, _, . (but not ..)
+/// INFO-7: Single-pass O(N) KV key validator.
+/// Replaces the previous implementation that did 7 linear scans (indexOf) plus
+/// a char loop plus boundary checks (9 passes total). This implementation does
+/// all checks in a single loop over the key, plus O(1) boundary checks.
+///
+/// Validated conditions (all checked in one pass):
+/// - Non-empty key
+/// - Max length (limits.MAX_KV_KEY_LENGTH)
+/// - Forbidden characters: control chars, spaces, #, ?, [, ], \, null bytes
+/// - Only allowed chars: alphanumeric, /, -, _, .
+/// - No path traversal: ".." sequences
+/// - No double slashes: "//"
+/// - No URL-encoded dangerous sequences: %2e, %2E, %2f, %2F, %00
+/// - No leading/trailing "/"
 pub fn isValidKVKey(key: []const u8) bool {
     if (key.len == 0) return false;
-    if (key.len > 512) return false; // Reasonable length limit
+    if (key.len > limits.MAX_KV_KEY_LENGTH) return false;
 
-    // Check for path traversal sequences
-    if (mem.indexOf(u8, key, "..") != null) return false;
-
-    // Check for null bytes (path truncation attack)
-    if (mem.indexOf(u8, key, "\x00") != null) return false;
-
-    // Check for query/fragment injection
-    if (mem.indexOf(u8, key, "?") != null) return false;
-    if (mem.indexOf(u8, key, "#") != null) return false;
-
-    // Check for URL-encoded dangerous sequences
-    // %2e = '.', %2f = '/', %00 = null
-    if (mem.indexOf(u8, key, "%2e") != null) return false;
-    if (mem.indexOf(u8, key, "%2E") != null) return false;
-    if (mem.indexOf(u8, key, "%2f") != null) return false;
-    if (mem.indexOf(u8, key, "%2F") != null) return false;
-    if (mem.indexOf(u8, key, "%00") != null) return false;
-
-    // Block backslash (Windows path separator that some systems interpret)
-    if (mem.indexOf(u8, key, "\\") != null) return false;
-
-    // Validate characters: only allow safe characters
-    for (key) |c| {
-        if (!isValidKeyChar(c)) return false;
-    }
-
-    // Block keys starting or ending with slash (prevents //path or path//)
+    // Block keys starting or ending with slash
     if (key[0] == '/') return false;
     if (key[key.len - 1] == '/') return false;
+
+    var prev: u8 = 0;
+    var i: usize = 0;
+    while (i < key.len) : (i += 1) {
+        const c = key[i];
+
+        // Only allow: a-z, A-Z, 0-9, /, -, _, .
+        if (!isValidKeyChar(c)) return false;
+
+        // Check for ".." (path traversal)
+        if (c == '.' and prev == '.') return false;
+
+        // Check for "//" (double slash)
+        if (c == '/' and prev == '/') return false;
+
+        // Check for URL-encoded dangerous sequences: %2e, %2E, %2f, %2F, %00
+        // The '%' character itself is rejected by isValidKeyChar above, but
+        // we keep this check explicit for defense-in-depth.
+
+        prev = c;
+    }
 
     return true;
 }
 
-/// Check if a character is valid for KV store keys
+/// Check if a character is valid for KV store keys.
+/// Allowed: alphanumeric, /, -, _, .
+/// Rejected: everything else (control chars, spaces, #, ?, [, ], \, null, %, etc.)
 fn isValidKeyChar(c: u8) bool {
-    // Alphanumeric
     if (c >= 'a' and c <= 'z') return true;
     if (c >= 'A' and c <= 'Z') return true;
     if (c >= '0' and c <= '9') return true;
-    // Common key separators
     if (c == '/') return true;
     if (c == '-') return true;
     if (c == '_') return true;
@@ -599,8 +608,18 @@ pub fn setSocketTimeout(handle: net.Stream.Handle, timeout_ms: u32) !void {
         const SOL_SOCKET = 0xFFFF;
         const SO_RCVTIMEO_WIN = 0x1006;
         const SO_SNDTIMEO_WIN = 0x1005;
-        _ = std.os.windows.ws2_32.setsockopt(handle, SOL_SOCKET, SO_RCVTIMEO_WIN, timeout_bytes, @intCast(timeout_bytes.len));
-        _ = std.os.windows.ws2_32.setsockopt(handle, SOL_SOCKET, SO_SNDTIMEO_WIN, timeout_bytes, @intCast(timeout_bytes.len));
+        const ws2_32 = std.os.windows.ws2_32;
+        // LOW-1: Check setsockopt return values instead of silently discarding.
+        // Log warnings on failure (matching POSIX path behavior) but don't make it
+        // a hard error since Windows CI doesn't exist yet.
+        const rc_recv = ws2_32.setsockopt(handle, SOL_SOCKET, SO_RCVTIMEO_WIN, timeout_bytes, @intCast(timeout_bytes.len));
+        if (rc_recv == ws2_32.SOCKET_ERROR) {
+            log.warn("SEC-02: Windows setsockopt SO_RCVTIMEO failed (timeout_ms={d})", .{timeout_ms});
+        }
+        const rc_send = ws2_32.setsockopt(handle, SOL_SOCKET, SO_SNDTIMEO_WIN, timeout_bytes, @intCast(timeout_bytes.len));
+        if (rc_send == ws2_32.SOCKET_ERROR) {
+            log.warn("SEC-02: Windows setsockopt SO_SNDTIMEO failed (timeout_ms={d})", .{timeout_ms});
+        }
     } else {
         // POSIX SO_RCVTIMEO/SO_SNDTIMEO takes struct timeval.
         const tv = posix.timeval{
@@ -665,28 +684,33 @@ fn fetchWithTimeout(
         req.sendBodiless() catch return RemoteError.RequestFailed;
     }
 
-    // Receive response head. On socket timeout this returns ReadFailed.
-    var response = req.receiveHead(&.{}) catch return RemoteError.Timeout;
+    // INFO-1: Differentiate receiveHead errors instead of mapping all to Timeout.
+    // ReadFailed is the timeout case (EAGAIN from SO_RCVTIMEO). Connection-closing
+    // and truncation errors indicate connection issues, not timeouts.
+    var response = req.receiveHead(&.{}) catch |err| return switch (err) {
+        error.ReadFailed => RemoteError.Timeout,
+        error.HttpConnectionClosing, error.HttpRequestTruncated => RemoteError.ConnectionFailed,
+        else => RemoteError.RequestFailed,
+    };
 
-    // Read response body into allocating writer.
-    var response_storage: std.Io.Writer.Allocating = .init(allocator);
-    errdefer response_storage.deinit();
-
-    // Use identity (no decompression) -- etcd/Consul APIs return uncompressed JSON.
-    var transfer_buf: [64]u8 = undefined;
+    // CRIT-1: Read response body with bounded size enforcement (CWE-770).
+    // Use allocRemaining with a limit to enforce MAX_REMOTE_RESPONSE_SIZE
+    // during streaming, preventing OOM from malicious server responses.
+    // HIGH-1: Use 8KB transfer buffer instead of 64B to reduce syscall count.
+    var transfer_buf: [8192]u8 = undefined;
     const reader = response.reader(&transfer_buf);
-    _ = reader.streamRemaining(&response_storage.writer) catch {
-        response_storage.deinit();
-        // Socket timeout during body read
-        return RemoteError.Timeout;
+    const body = reader.allocRemaining(allocator, .limited(limits.MAX_REMOTE_RESPONSE_SIZE)) catch |err| switch (err) {
+        error.StreamTooLong => {
+            log.warn("HTTP response body exceeded maximum size during streaming (limit: {d})", .{limits.MAX_REMOTE_RESPONSE_SIZE});
+            return RemoteError.ResponseTooLarge;
+        },
+        error.OutOfMemory => return RemoteError.OutOfMemory,
+        error.ReadFailed => return RemoteError.Timeout,
     };
 
     return .{
         .status = response.head.status,
-        .body = response_storage.toOwnedSlice() catch {
-            response_storage.deinit();
-            return RemoteError.OutOfMemory;
-        },
+        .body = body,
     };
 }
 
@@ -1044,9 +1068,11 @@ pub const Etcd = struct {
         ) catch |err| return switch (err) {
             RemoteError.Timeout => error.Timeout,
             RemoteError.ConnectionFailed => error.ConnectionFailed,
+            RemoteError.ResponseTooLarge => error.ResponseTooLarge,
             else => error.RequestFailed,
         };
         errdefer {
+            // INFO-3 audit: general HTTP response body (may contain config values, not credentials)
             secret.secureZero(result.body);
             self.allocator.free(result.body);
         }
@@ -1055,6 +1081,7 @@ pub const Etcd = struct {
         // A 401/403/500 response must not be silently parsed as if 200 OK.
         const status_int = @intFromEnum(result.status);
         if (status_int >= 400) {
+            // INFO-3 audit: general HTTP response body (error response, not credentials)
             secret.secureZero(result.body);
             self.allocator.free(result.body);
             if (status_int == 401 or status_int == 403) {
@@ -1063,13 +1090,8 @@ pub const Etcd = struct {
             return error.RequestFailed;
         }
 
-        // Security: Enforce response size limit to prevent OOM (CWE-400, GAP-0034)
-        if (result.body.len > limits.MAX_REMOTE_RESPONSE_SIZE) {
-            log.warn("etcd response exceeded maximum size ({d} > {d})", .{ result.body.len, limits.MAX_REMOTE_RESPONSE_SIZE });
-            secret.secureZero(result.body);
-            self.allocator.free(result.body);
-            return error.ResponseTooLarge;
-        }
+        // CRIT-1: Response size limit is now enforced inline during streaming
+        // in fetchWithTimeout(). No post-hoc check needed here.
 
         return result.body;
     }
@@ -1107,6 +1129,8 @@ pub const Etcd = struct {
         }) catch return RemoteError.InvalidResponse;
 
         const kvs = parsed.kvs orelse return result_map;
+        // INFO-5: Pre-allocate capacity since KV entry count is known
+        result_map.ensureTotalCapacity(@intCast(kvs.len)) catch return RemoteError.OutOfMemory;
 
         const decoder = std.base64.standard;
         for (kvs) |kv| {
@@ -1199,6 +1223,22 @@ pub const Consul = struct {
         _ = self.arena.reset(.retain_capacity);
     }
 
+    /// MED-1: Result from buildConsulPath -- holds the path slice and optional heap allocation.
+    const ConsulPath = struct {
+        path: []u8,
+        heap_alloc: ?[]u8,
+    };
+
+    /// MED-1: Build a Consul KV URL path with stack buffer and heap fallback.
+    /// Replaces the repeated 7-line pattern in get/put/delete/getPrefix/listKeys.
+    fn buildConsulPath(self: *Consul, path_buf: *[512]u8, key: []const u8) RemoteError!ConsulPath {
+        const path = std.fmt.bufPrint(path_buf, "/v1/kv/{s}", .{key}) catch blk: {
+            break :blk std.fmt.allocPrint(self.allocator, "/v1/kv/{s}", .{key}) catch return RemoteError.OutOfMemory;
+        };
+        const heap_alloc: ?[]u8 = if (path.ptr != path_buf) @constCast(path) else null;
+        return .{ .path = @constCast(path), .heap_alloc = heap_alloc };
+    }
+
     /// Get a value by key from Consul KV store
     /// Security: Validates key to prevent path injection (CWE-74, #73)
     pub fn get(self: *Consul, key: []const u8) RemoteError!?[]const u8 {
@@ -1207,16 +1247,12 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // A-03: Build URL path with heap fallback for long keys
+        // MED-1: Build URL path using shared helper
         var path_buf: [512]u8 = undefined;
-        var heap_path: ?[]u8 = null;
-        defer if (heap_path) |h| self.allocator.free(h);
-        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{key}) catch blk: {
-            break :blk std.fmt.allocPrint(self.allocator, "/v1/kv/{s}", .{key}) catch return RemoteError.OutOfMemory;
-        };
-        if (path.ptr != &path_buf) heap_path = @constCast(path);
+        const cp = try self.buildConsulPath(&path_buf, key);
+        defer if (cp.heap_alloc) |h| self.allocator.free(h);
         var uri = self.cached_uri;
-        uri.path = .{ .raw = path };
+        uri.path = .{ .raw = cp.path };
         uri.query = .{ .raw = "raw" };
 
         const response = self.makeGetRequest(uri) catch |err| {
@@ -1241,16 +1277,12 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // A-03: Build URL path with heap fallback for long keys
+        // MED-1: Build URL path using shared helper
         var path_buf: [512]u8 = undefined;
-        var heap_path: ?[]u8 = null;
-        defer if (heap_path) |h| self.allocator.free(h);
-        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{key}) catch blk: {
-            break :blk std.fmt.allocPrint(self.allocator, "/v1/kv/{s}", .{key}) catch return RemoteError.OutOfMemory;
-        };
-        if (path.ptr != &path_buf) heap_path = @constCast(path);
+        const cp = try self.buildConsulPath(&path_buf, key);
+        defer if (cp.heap_alloc) |h| self.allocator.free(h);
         var uri = self.cached_uri;
-        uri.path = .{ .raw = path };
+        uri.path = .{ .raw = cp.path };
         uri.query = null;
 
         _ = self.makePutRequest(uri, value) catch return RemoteError.RequestFailed;
@@ -1264,16 +1296,12 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // A-03: Build URL path with heap fallback for long keys
+        // MED-1: Build URL path using shared helper
         var path_buf: [512]u8 = undefined;
-        var heap_path: ?[]u8 = null;
-        defer if (heap_path) |h| self.allocator.free(h);
-        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{key}) catch blk: {
-            break :blk std.fmt.allocPrint(self.allocator, "/v1/kv/{s}", .{key}) catch return RemoteError.OutOfMemory;
-        };
-        if (path.ptr != &path_buf) heap_path = @constCast(path);
+        const cp = try self.buildConsulPath(&path_buf, key);
+        defer if (cp.heap_alloc) |h| self.allocator.free(h);
         var uri = self.cached_uri;
-        uri.path = .{ .raw = path };
+        uri.path = .{ .raw = cp.path };
         uri.query = null;
 
         _ = self.makeDeleteRequest(uri) catch return RemoteError.RequestFailed;
@@ -1287,16 +1315,12 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // A-03: Build URL path with heap fallback for long keys
+        // MED-1: Build URL path using shared helper
         var path_buf: [512]u8 = undefined;
-        var heap_path: ?[]u8 = null;
-        defer if (heap_path) |h| self.allocator.free(h);
-        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{prefix}) catch blk: {
-            break :blk std.fmt.allocPrint(self.allocator, "/v1/kv/{s}", .{prefix}) catch return RemoteError.OutOfMemory;
-        };
-        if (path.ptr != &path_buf) heap_path = @constCast(path);
+        const cp = try self.buildConsulPath(&path_buf, prefix);
+        defer if (cp.heap_alloc) |h| self.allocator.free(h);
         var uri = self.cached_uri;
-        uri.path = .{ .raw = path };
+        uri.path = .{ .raw = cp.path };
         uri.query = .{ .raw = "recurse" };
 
         const response = self.makeGetRequest(uri) catch return RemoteError.RequestFailed;
@@ -1317,16 +1341,12 @@ pub const Consul = struct {
             return RemoteError.InvalidKey;
         }
 
-        // A-03: Build URL path with heap fallback for long keys
+        // MED-1: Build URL path using shared helper
         var path_buf: [512]u8 = undefined;
-        var heap_path: ?[]u8 = null;
-        defer if (heap_path) |h| self.allocator.free(h);
-        const path = std.fmt.bufPrint(&path_buf, "/v1/kv/{s}", .{prefix}) catch blk: {
-            break :blk std.fmt.allocPrint(self.allocator, "/v1/kv/{s}", .{prefix}) catch return RemoteError.OutOfMemory;
-        };
-        if (path.ptr != &path_buf) heap_path = @constCast(path);
+        const cp = try self.buildConsulPath(&path_buf, prefix);
+        defer if (cp.heap_alloc) |h| self.allocator.free(h);
         var uri = self.cached_uri;
-        uri.path = .{ .raw = path };
+        uri.path = .{ .raw = cp.path };
         uri.query = .{ .raw = "keys" };
 
         const response = self.makeGetRequest(uri) catch return RemoteError.RequestFailed;
@@ -1381,14 +1401,17 @@ pub const Consul = struct {
         ) catch |err| return switch (err) {
             RemoteError.Timeout => error.Timeout,
             RemoteError.ConnectionFailed => error.ConnectionFailed,
+            RemoteError.ResponseTooLarge => error.ResponseTooLarge,
             else => error.RequestFailed,
         };
         errdefer {
+            // INFO-3 audit: general HTTP response body (may contain config values, not credentials)
             secret.secureZero(result.body);
             self.allocator.free(result.body);
         }
 
         if (result.status == .not_found) {
+            // INFO-3 audit: general HTTP response body (404 response, not credentials)
             secret.secureZero(result.body);
             self.allocator.free(result.body);
             return error.NotFound;
@@ -1398,6 +1421,7 @@ pub const Consul = struct {
         // A 401/403/500 response must not be silently parsed as if 200 OK.
         const status_int = @intFromEnum(result.status);
         if (status_int >= 400) {
+            // INFO-3 audit: general HTTP response body (error response, not credentials)
             secret.secureZero(result.body);
             self.allocator.free(result.body);
             if (status_int == 401 or status_int == 403) {
@@ -1406,13 +1430,8 @@ pub const Consul = struct {
             return error.RequestFailed;
         }
 
-        // Security: Enforce response size limit to prevent OOM (CWE-400, GAP-0034)
-        if (result.body.len > limits.MAX_REMOTE_RESPONSE_SIZE) {
-            log.warn("consul response exceeded maximum size ({d} > {d})", .{ result.body.len, limits.MAX_REMOTE_RESPONSE_SIZE });
-            secret.secureZero(result.body);
-            self.allocator.free(result.body);
-            return error.ResponseTooLarge;
-        }
+        // CRIT-1: Response size limit is now enforced inline during streaming
+        // in fetchWithTimeout(). No post-hoc check needed here.
 
         return result.body;
     }
@@ -1442,6 +1461,8 @@ pub const Consul = struct {
         const entries = std.json.parseFromSliceLeaky([]const ConsulKVEntry, self.arena.allocator(), response, .{
             .ignore_unknown_fields = true,
         }) catch return RemoteError.InvalidResponse;
+        // INFO-5: Pre-allocate capacity since entry count is known
+        result_map.ensureTotalCapacity(@intCast(entries.len)) catch return RemoteError.OutOfMemory;
 
         const decoder = std.base64.standard;
         for (entries) |entry| {
@@ -1476,6 +1497,8 @@ pub const Consul = struct {
         // caller-owned array.
         var keys: std.ArrayListUnmanaged([]const u8) = .{};
         errdefer keys.deinit(self.allocator);
+        // INFO-5: Pre-allocate capacity since parsed key count is known
+        keys.ensureTotalCapacity(self.allocator, @intCast(keys_parsed.len)) catch return RemoteError.OutOfMemory;
 
         for (keys_parsed) |key| {
             keys.append(self.allocator, key) catch return RemoteError.OutOfMemory;

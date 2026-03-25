@@ -75,6 +75,8 @@ pub fn load(path: []const u8, allocator: Allocator) ![]EnvEntry {
         }
         owned.deinit(allocator);
     }
+    // INFO-5: Pre-allocate capacity since borrowed entry count is known
+    try owned.ensureTotalCapacity(allocator, @intCast(borrowed.len));
 
     for (borrowed) |entry| {
         const owned_key = try allocator.dupe(u8, entry.key);

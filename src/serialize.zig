@@ -13,6 +13,54 @@ const crypto = std.crypto;
 const secret = @import("secret.zig");
 const createFileNoFollow = secret.createFileNoFollow;
 
+/// MED-2: Escape mode for writeEscapedString. Each serialization format
+/// requires different escape rules:
+/// - json: Full RFC 8259 (\\, ", \n, \r, \t, \b, \f, \uXXXX for control chars)
+/// - yaml: Minimal (\\, ", \n)
+/// - toml: Extended (\\, ", \n, \t)
+/// - env:  Bare minimum (\\, ")
+const EscapeMode = enum { json, yaml, toml, env };
+
+/// MED-2: Write a string with format-appropriate escaping.
+/// Shared helper that replaces duplicated escape switch statements in
+/// JSON, YAML, TOML, and ENV serializers.
+fn writeEscapedString(writer: anytype, value: []const u8, mode: EscapeMode) !void {
+    for (value) |c| {
+        switch (c) {
+            '"' => try writer.writeAll("\\\""),
+            '\\' => try writer.writeAll("\\\\"),
+            '\n' => switch (mode) {
+                .env => try writer.writeByte(c),
+                else => try writer.writeAll("\\n"),
+            },
+            '\r' => switch (mode) {
+                .json => try writer.writeAll("\\r"),
+                else => try writer.writeByte(c),
+            },
+            '\t' => switch (mode) {
+                .json, .toml => try writer.writeAll("\\t"),
+                else => try writer.writeByte(c),
+            },
+            0x08 => switch (mode) {
+                .json => try writer.writeAll("\\b"),
+                else => try writer.writeByte(c),
+            },
+            0x0C => switch (mode) {
+                .json => try writer.writeAll("\\f"),
+                else => try writer.writeByte(c),
+            },
+            else => {
+                // ADV-04: JSON escapes remaining control chars < 0x20 as \uXXXX (RFC 8259 section 7)
+                if (mode == .json and c < 0x20) {
+                    try writer.print("\\u{X:0>4}", .{c});
+                } else {
+                    try writer.writeByte(c);
+                }
+            },
+        }
+    }
+}
+
 /// Output format for serialization
 pub const OutputFormat = enum {
     json,
@@ -112,28 +160,9 @@ fn writeJsonValue(comptime T: type, value: T, writer: anytype, depth: usize, pre
         },
         .pointer => |ptr| {
             if (ptr.size == .Slice and ptr.child == u8) {
-                // String
+                // MED-2: Use shared escape helper (JSON mode, RFC 8259)
                 try writer.writeByte('"');
-                for (value) |c| {
-                    switch (c) {
-                        '"' => try writer.writeAll("\\\""),
-                        '\\' => try writer.writeAll("\\\\"),
-                        '\n' => try writer.writeAll("\\n"),
-                        '\r' => try writer.writeAll("\\r"),
-                        '\t' => try writer.writeAll("\\t"),
-                        // ADV-04: Escape backspace and form-feed per RFC 8259
-                        0x08 => try writer.writeAll("\\b"),
-                        0x0C => try writer.writeAll("\\f"),
-                        else => {
-                            // ADV-04: Escape remaining control chars < 0x20 as \uXXXX (RFC 8259 section 7)
-                            if (c < 0x20) {
-                                try writer.print("\\u{X:0>4}", .{c});
-                            } else {
-                                try writer.writeByte(c);
-                            }
-                        },
-                    }
-                }
+                try writeEscapedString(writer, value, .json);
                 try writer.writeByte('"');
             } else if (ptr.size == .Slice) {
                 // Array
@@ -246,15 +275,9 @@ fn writeYamlScalar(comptime T: type, value: T, writer: anytype) !void {
                     value[value.len - 1] == ' ';
 
                 if (needs_quotes) {
+                    // MED-2: Use shared escape helper (YAML mode)
                     try writer.writeByte('"');
-                    for (value) |c| {
-                        switch (c) {
-                            '"' => try writer.writeAll("\\\""),
-                            '\\' => try writer.writeAll("\\\\"),
-                            '\n' => try writer.writeAll("\\n"),
-                            else => try writer.writeByte(c),
-                        }
-                    }
+                    try writeEscapedString(writer, value, .yaml);
                     try writer.writeByte('"');
                 } else {
                     try writer.writeAll(value);
@@ -340,16 +363,9 @@ fn writeTomlScalar(comptime T: type, value: T, writer: anytype) !void {
         },
         .pointer => |ptr| {
             if (ptr.size == .Slice and ptr.child == u8) {
+                // MED-2: Use shared escape helper (TOML mode)
                 try writer.writeByte('"');
-                for (value) |c| {
-                    switch (c) {
-                        '"' => try writer.writeAll("\\\""),
-                        '\\' => try writer.writeAll("\\\\"),
-                        '\n' => try writer.writeAll("\\n"),
-                        '\t' => try writer.writeAll("\\t"),
-                        else => try writer.writeByte(c),
-                    }
-                }
+                try writeEscapedString(writer, value, .toml);
                 try writer.writeByte('"');
             }
         },
@@ -438,14 +454,9 @@ fn writeEnvScalar(comptime T: type, value: T, writer: anytype) !void {
                     mem.indexOf(u8, value, "'") != null;
 
                 if (needs_quotes) {
+                    // MED-2: Use shared escape helper (ENV mode)
                     try writer.writeByte('"');
-                    for (value) |c| {
-                        switch (c) {
-                            '"' => try writer.writeAll("\\\""),
-                            '\\' => try writer.writeAll("\\\\"),
-                            else => try writer.writeByte(c),
-                        }
-                    }
+                    try writeEscapedString(writer, value, .env);
                     try writer.writeByte('"');
                 } else {
                     try writer.writeAll(value);

@@ -1,8 +1,8 @@
 # Security Gap Analysis
 
 **Project:** devnw/zig/config
-**Last updated:** 2026-03-25 (Wave 12 closure -- ADV-01 through ADV-05, ADV-07 closed; ADV-06, ADV-08 Won't Do)
-**Review phase:** Phase 3+ (security-reviewer, SSRF/injection deep-dive, advanced code review) + Wave 12 closure
+**Last updated:** 2026-03-25 (Wave 14 closure -- CRIT-1, LOW-1, INFO-1, INFO-3 added and closed)
+**Review phase:** Phase 3+ (security-reviewer, SSRF/injection deep-dive, advanced code review) + Wave 12 closure + Wave 13 (SEC-02) + Wave 14 audit
 **Scoring formula:** RiskScore = Impact(1-5) x Likelihood(1-5) x 4
 **Review commit:** fe9d0f6 (HEAD of main) + working tree
 
@@ -12,11 +12,11 @@
 
 | Severity | Count | Open | Closed/Accepted/Blocked | Won't Do | Notes |
 |----------|-------|------|-------------------------|----------|-------|
-| Critical | 0     | 0    | 0               | 0 | No critical vulnerabilities found |
+| Critical | 1     | 0    | 1               | 0 | CRIT-1 bounded HTTP response body (Wave 14) |
 | Medium   | 5     | 0    | 4 closed, 1 blocked | 0 | SEC-01/SEC-03 closed (Wave 10); ADV-01 closed (Wave 12 Batch 3); SEC-02 closed (Wave 13); SEC-04 blocked (upstream) |
-| Low      | 16    | 0    | 16 (1 FP, 1 accepted, 14 closed) | 0 | SEC-05-09/15-18 closed (Wave 10); SEC-10 FP; SEC-11 accepted; ADV-02/03/04/05/07 closed (Wave 12 Batch 3-4) |
-| Info     | 5     | 0    | 3 (info, no action) | 2 | SEC-12/13/14 sound patterns; ADV-06 Won't Do (info-level); ADV-08 Won't Do (architectural) |
-| **Total** | **26** | **0 open + 1 blocked** | **23** | **2** | All open items resolved. SEC-02 closed (Wave 13). SEC-04 remains blocked (upstream). ADV-06/ADV-08 Won't Do. |
+| Low      | 17    | 0    | 17 (1 FP, 1 accepted, 15 closed) | 0 | SEC-05-09/15-18 closed (Wave 10); SEC-10 FP; SEC-11 accepted; ADV-02/03/04/05/07 closed (Wave 12 Batch 3-4); LOW-1 (Wave 14) |
+| Info     | 7     | 0    | 5 (info/closed) | 2 | SEC-12/13/14 sound patterns; INFO-1/INFO-3 closed (Wave 14); ADV-06 Won't Do (info-level); ADV-08 Won't Do (architectural) |
+| **Total** | **30** | **0 open + 1 blocked** | **27** | **2** | Wave 14 added CRIT-1, LOW-1, INFO-1, INFO-3. SEC-04 remains blocked (upstream). ADV-06/ADV-08 Won't Do. |
 
 ### Top 5 Risks (all resolved or blocked)
 
@@ -75,6 +75,10 @@
 | 24 | Info | 4 | @constCast in normalizeKey | loader.zig | CWE-704 | src/loader.zig:593 | SEC-12 | Sound usage with safety comment. No action needed. | -- | -- | **Info** |
 | 25 | Info | 4 | @constCast in SensitiveString.deinit | encrypted_secrets.zig | CWE-704 | src/encrypted_secrets.zig:68 | SEC-13 | Sound: casts owned memory back to mutable for secureZero before free. No action needed. | -- | -- | **Info** |
 | 26 | Info | 4 | @ptrCast in IP handling | remote.zig | CWE-704 | src/remote.zig:315,415,457 | SEC-14 | Standard Zig pattern for socket address introspection. No action needed. | -- | -- | **Info** |
+| 27 | Critical | 60 | ~~Unbounded HTTP response body allocation~~ | remote.zig | CWE-770 / A05:2021 Security Misconfiguration | src/remote.zig -- fetchWithTimeout, BoundedResponseWriter | CRIT-1 | Added `BoundedResponseWriter` enforcing `limits.MAX_REMOTE_RESPONSE_SIZE` in `fetchWithTimeout()` | Maintainer | 2026-06-25 (90d) | **Closed** (Wave 14) |
+| 28 | Low | 12 | ~~Windows setsockopt return value unchecked~~ | remote.zig | CWE-252 / A04:2021 Insecure Design | src/remote.zig -- setSocketTimeout() Windows branch | LOW-1 | Windows `setsockopt` return values now checked and errors propagated | Maintainer | 2026-09-22 (180d) | **Closed** (Wave 14) |
+| 29 | Info | 4 | ~~receiveHead errors not differentiated~~ | remote.zig | CWE-754 / A04:2021 Insecure Design | src/remote.zig -- fetchWithTimeout error handling | INFO-1 | Differentiated EAGAIN/WOULDBLOCK (timeout) from other receiveHead errors | Maintainer | Backlog | **Closed** (Wave 14) |
+| 30 | Info | 4 | ~~secureZero callsite audit~~ | remote.zig | CWE-244 / A02:2021 Cryptographic Failures | src/remote.zig -- all credential/response defer sites | INFO-3 | Audited and verified all secureZero callsites; no gaps found | Maintainer | Backlog | **Closed** (Wave 14) |
 
 ---
 

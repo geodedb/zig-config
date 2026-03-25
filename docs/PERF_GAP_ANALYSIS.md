@@ -1,16 +1,16 @@
 # Performance Gap Analysis -- zigconfig
 
-Last updated: 2026-03-25 (Wave 12 closure -- PERF-59/60/61 closed in Batch 5)
+Last updated: 2026-03-25 (Wave 14 closure -- HIGH-1, INFO-5, INFO-6, INFO-7 added and closed)
 
 ## Summary
 
 | PerfSeverity | Count | Closed | Won't Do | Reopened | Open |
 |-------------|-------|--------|----------|----------|------|
 | P1          | 5     | 4      | 1        | 0        | 0    |
-| P2          | 11    | 10     | 1        | 0        | 0    |
+| P2          | 12    | 11     | 1        | 0        | 0    |
 | P3          | 18    | 15     | 0        | 0        | 3    |
-| Info        | 35    | 15     | 4        | 0        | 16   |
-| **Total**   | **69** | **44** | **6** | **0** | **19** |
+| Info        | 38    | 18     | 4        | 0        | 16   |
+| **Total**   | **73** | **48** | **6** | **0** | **19** |
 
 4 legacy Info items superseded by higher-severity Phase 4 findings and excluded from counts above:
 PERF-22 superseded by PERF-28, PERF-23 superseded by PERF-32, PERF-20i superseded by PERF-37, PERF-21 superseded by PERF-38.
@@ -88,7 +88,7 @@ Phase 6 (perf-reviewer) applied 2026-03-25. Added 3 P3 findings and 16 Info item
 | 11 | PERF-25 | P3 | 16 | Double allocLowerString per matching key in case-insensitive diff | diff.zig | `src/diff.zig:176` -- `allocLowerString(key)` for lookup, then `src/diff.zig:183` -- `allocLowerString(key)` again for seen_keys insertion. Same key lowercased twice. Similarly at lines 230 and 237 for the added-keys pass. | 2x allocLowerString per key in case-insensitive mode; 4x for keys checked in both passes | -- | Refactored: seen_keys stores lowered keys (allocated once) for O(1) hash lookup in added-keys pass. Removed O(n) containsKeyInsensitive linear scan. Each key is lowered once per pass. | benjiv | Backlog | **Closed** |
 | 12 | PERF-27 | P3 | 16 | ~~allocPrint in TOML section loop~~ | loader.zig | `parseSimpleToml` uses `var key_buf: [512]u8` with `std.fmt.bufPrint` for section.key construction at `loader.zig:865-887`. | 0 heap allocs for key construction | -- | Replaced `allocPrint` with stack-buffer `bufPrint` (Wave 7; reverted Wave 9; re-applied Wave 10) | benjiv | Backlog | **Closed** (Wave 10) |
 | 13 | PERF-28 | P3 | 16 | ~~allocPrint in INI section loop~~ | loader.zig | `parseIni` uses `var key_buf: [512]u8` with `std.fmt.bufPrint` for section.key construction at `loader.zig:939-954`. | 0 heap allocs for key construction | -- | Replaced `allocPrint` with stack-buffer `bufPrint` (Wave 7; reverted Wave 9; re-applied Wave 10) | benjiv | Backlog | **Closed** (Wave 10) |
-| 14 | PERF-29 | P3 | 16 | ~~allocPrint in JSON array index loop~~ | loader.zig | No JSON array handling code exists in `applyJsonValue`; the `.array` case is handled by the `else => {}` branch which skips arrays. Nothing to fix. | N/A -- code path does not exist | -- | Not applicable; no array flattening in current parser | benjiv | Backlog | **Closed** (N/A) |
+| 14 | PERF-29 | P3 | 16 | ~~allocPrint in JSON array index loop~~ | loader.zig | Array handling was added in Wave 12 via GAP-0062 (`src/loader.zig:862-884`). The `.array` case flattens JSON arrays into dot-delimited numeric-index keys using stack-buffer `bufPrint` with heap fallback, so no per-iteration heap allocation occurs. | 0 heap allocs for typical array key construction (stack buffer with heap fallback) | -- | Array handling added in Wave 12 (GAP-0062) with stack-buffer `bufPrint`; no `allocPrint` in the loop | benjiv | Backlog | **Closed** (Wave 12) |
 | 15 | PERF-34 | Info | 16 | ~~URL allocPrint per Etcd failover attempt~~ | remote.zig | `src/remote.zig` -- eliminated via cached URI with path override | 0 per-request URL allocs; base URI cached at init | -- | Cached URI at init; path override per request eliminates allocPrint | benjiv | As capacity | **Closed** (Wave 8) |
 | 16 | PERF-35 | Info | 16 | ~~Consul URL allocPrint per operation~~ | remote.zig | `src/remote.zig` -- stack buffer `bufPrint` for paths + cached URI at init | 0 heap allocs for typical Consul KV paths | -- | Stack buffer bufPrint for paths + cached URI | benjiv | As capacity | **Closed** (Wave 8) |
 | 17 | PERF-32 | Info | 12 | ~~prefix_with_dot heap alloc in sub()/hasSub()~~ | loader.zig | `src/loader.zig:318-378` -- stack buffer `bufPrint` (256B) in sub()/hasSub() | 0 heap allocs for prefix + "." (typical < 256B) | -- | Stack buffer bufPrint (256B) in sub/hasSub (Wave 8; reverted Wave 9; re-applied Wave 10) | benjiv | As capacity | **Closed** (Wave 10) |
@@ -161,6 +161,17 @@ Phase 6 review identified inaccurate documentation in three closed findings:
 
 ---
 
+### Wave 14 New Findings (Audit, 2026-03-25)
+
+| Rank | ID | PerfSeverity | PerfScore | Finding | Component | Evidence | Measurement | Issue | Fix Summary | Owner | SLA | Status |
+|------|-----|-------------|-----------|---------|-----------|----------|-------------|-------|-------------|-------|-----|--------|
+| 1 | HIGH-1 | P2 | 48 | ~~64-byte transfer buffer in fetchWithTimeout~~ | remote.zig | `src/remote.zig` -- `TRANSFER_BUFFER_SIZE` was 64 bytes; 8192 bytes is standard | ~128x fewer syscalls for typical HTTP responses | -- | Increased transfer buffer from 64 to 8192 bytes | benjiv | Quarter | **Closed** (Wave 14) |
+| 2 | INFO-5 | Info | 8 | ~~ensureTotalCapacity missing at 12+ sites~~ | multiple | `src/remote.zig`, `src/config.zig`, `src/loader.zig`, `src/provenance.zig`, `src/dotenv.zig` | Eliminates rehash overhead at 12+ init sites | -- | Added ensureTotalCapacity to 12+ HashMap/ArrayList inits | benjiv | As capacity | **Closed** (Wave 14) |
+| 3 | INFO-6 | Info | 8 | ~~open+stat replaced with fstatat in watcher~~ | watch.zig | `src/watch.zig` -- separate `open()`+`fstat()`+`close()` replaced with single `fstatat()` | Reduces per-check syscalls from 3 to 1 | -- | Single fstatat syscall replaces open+stat+close | benjiv | As capacity | **Closed** (Wave 14) |
+| 4 | INFO-7 | Info | 8 | ~~Multi-pass isValidKVKey replaced with single-pass~~ | remote.zig, limits.zig | `src/remote.zig` -- `isValidKVKey` now validates length, null, and control chars in one pass | 1 pass instead of 3 separate checks | -- | Single-pass validator; MAX_KV_KEY_LENGTH in limits.zig | benjiv | As capacity | **Closed** (Wave 14) |
+
+---
+
 ## Findings by Area
 
 ### App (loader.zig, parallel.zig, async.zig, merge.zig, diff.zig)
@@ -185,7 +196,7 @@ Phase 6 review identified inaccurate documentation in three closed findings:
 | PERF-25 | 16 | ~~Double allocLowerString in diff~~ | P3 | -- | **Closed** |
 | PERF-27 | 16 | ~~allocPrint in TOML section loop~~ | P3 | -- | **Closed** (Wave 10) |
 | PERF-28 | 16 | ~~allocPrint in INI section loop~~ | P3 | -- | **Closed** (Wave 10) |
-| PERF-29 | 16 | ~~allocPrint in JSON array loop~~ | P3 | -- | **Closed** (N/A) |
+| PERF-29 | 16 | ~~allocPrint in JSON array loop~~ | P3 | -- | **Closed** (Wave 12, GAP-0062) |
 | PERF-16 | 12 | ~~allocPrint in parse loops~~ | P3 | [#128](https://gitlab.com/devnw/zig/config/-/issues/128) | **Closed** (Wave 7) |
 | PERF-15 | 12 | ~~O(n^2) case-insensitive diff~~ | P3 | [#127](https://gitlab.com/devnw/zig/config/-/issues/127) | **Closed** |
 | PERF-17 | 20 | ~~No capacity hints on key collections~~ | Info | [#129](https://gitlab.com/devnw/zig/config/-/issues/129) | **Closed** |
@@ -226,6 +237,20 @@ Phase 6 review identified inaccurate documentation in three closed findings:
 | PERF-20i | 12 | URI re-parsed on every request (see PERF-37) | Info | -- | Superseded by PERF-37 |
 | PERF-21 | 8 | No timeout config (see PERF-38) | Info | -- | Superseded by PERF-38 |
 | PERF-55 | 4 | HTTP connection reuse already works (duplicate of PERF-7) | Info | -- | **Won't Do** (confirmed working) |
+| HIGH-1 | 48 | ~~64-byte transfer buffer in fetchWithTimeout~~ | P2 | -- | **Closed** (Wave 14) |
+| INFO-7 | 8 | ~~Multi-pass isValidKVKey replaced with single-pass~~ | Info | -- | **Closed** (Wave 14) |
+
+### Watch (watch.zig)
+
+| ID | PerfScore | Finding | Severity | Issue | Status |
+|----|-----------|---------|----------|-------|--------|
+| INFO-6 | 8 | ~~open+stat replaced with fstatat in watcher~~ | Info | -- | **Closed** (Wave 14) |
+
+### Cross-Module (multiple files)
+
+| ID | PerfScore | Finding | Severity | Issue | Status |
+|----|-----------|---------|----------|-------|--------|
+| INFO-5 | 8 | ~~ensureTotalCapacity missing at 12+ sites~~ | Info | -- | **Closed** (Wave 14) |
 
 ### CI (build.zig, .gitlab-ci.yml)
 
@@ -300,7 +325,7 @@ Phase 6 review identified inaccurate documentation in three closed findings:
 | -- | allocPrint in TOML section (PERF-27) | 16 | Wave 10 | Stack-buffer `bufPrint` in `parseSimpleToml` (loader.zig:865-887); reverted Wave 9, re-applied Wave 10 |
 | -- | allocPrint in INI section (PERF-28) | 16 | Wave 10 | Stack-buffer `bufPrint` in `parseIni` (loader.zig:939-954); reverted Wave 9, re-applied Wave 10 |
 | [#128](https://gitlab.com/devnw/zig/config/-/issues/128) | allocPrint in parse loops (PERF-16) | 12 | Wave 7 | Fully resolved: all parse loops use stack-buffer bufPrint |
-| -- | allocPrint in JSON array loop (PERF-29) | 16 | Wave 7 | N/A: no JSON array handling exists in current parser |
+| -- | allocPrint in JSON array loop (PERF-29) | 16 | Wave 12 | Array handling added via GAP-0062 with stack-buffer `bufPrint` (loader.zig:862-884); no `allocPrint` needed |
 | -- | Double allocLowerString in diff (PERF-25) | 16 | Wave 7 | Refactored seen_keys to store lowered keys; O(1) hash lookup replaces O(n) linear scan |
 | -- | CI caching for Zig toolchain (PERF-43) | 60 | Wave 7 | Global `cache:` block keyed on ZIG_VERSION; also resolves PERF-45 |
 | -- | CI conditional dead code (PERF-45) | 4 | Wave 7 | Resolved by PERF-43 caching; conditional now effective |
@@ -324,6 +349,10 @@ Phase 6 review identified inaccurate documentation in three closed findings:
 | -- | addFile runtime guard (PERF-53) | 8 | Wave 9 | AlreadyRunning guard in addFile |
 | -- | HashMap capacity hints in diff (PERF-54) | 12 | Wave 10 | Added `ensureTotalCapacity` to `merge()` and `compareWithOptions()` HashMaps in diff.zig |
 | [#89](https://gitlab.com/devnw/zig/config/-/issues/89) | No benchmark suite (PERF-44) | 40 | Wave 11 | Added `src/bench.zig` with JSON/TOML/YAML parse, diff compare, merge maps/structs benchmarks; `zig build bench` step with ReleaseFast |
+| -- | 64-byte transfer buffer (HIGH-1) | 48 | Wave 14 | Increased `TRANSFER_BUFFER_SIZE` from 64 to 8192 bytes in fetchWithTimeout |
+| -- | ensureTotalCapacity at 12+ sites (INFO-5) | 8 | Wave 14 | Added capacity hints to remote.zig, config.zig, loader.zig, provenance.zig, dotenv.zig |
+| -- | open+stat to fstatat in watcher (INFO-6) | 8 | Wave 14 | Single fstatat syscall replaces open+fstat+close in watch.zig |
+| -- | Single-pass isValidKVKey (INFO-7) | 8 | Wave 14 | Consolidated 3 validation passes into 1; MAX_KV_KEY_LENGTH in limits.zig |
 
 ---
 

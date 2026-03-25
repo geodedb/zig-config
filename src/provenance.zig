@@ -119,6 +119,8 @@ pub const ProvenanceTracker = struct {
     /// Get all tracked values
     pub fn getAll(self: *const Self) ![]TrackedValue {
         var list: std.ArrayList(TrackedValue) = .empty;
+        // INFO-5: Pre-allocate capacity since value count is known
+        try list.ensureTotalCapacity(self.allocator, @intCast(self.values.count()));
         var iter = self.values.valueIterator();
         while (iter.next()) |val| {
             try list.append(self.allocator, val.*);

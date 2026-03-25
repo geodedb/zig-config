@@ -240,6 +240,22 @@ const FileStat = struct {
 };
 
 fn getFileStat(path: []const u8) ?FileStat {
+    // INFO-6: Use fstatat with AT_SYMLINK_NOFOLLOW on POSIX to reduce
+    // from 3 syscalls (open+fstat+close) to 1 syscall (fstatat).
+    // Falls back to the open+stat+close path on Windows where fstatat
+    // is not available.
+    const builtin = @import("builtin");
+    if (builtin.os.tag != .windows) {
+        const posix = std.posix;
+        const stat = posix.fstatat(posix.AT.FDCWD, path, posix.AT.SYMLINK_NOFOLLOW) catch return null;
+        const mtime = stat.mtime();
+        return .{
+            // Convert to nanoseconds (i128) to match fs.File.Stat.mtime format
+            .mtime = @as(i128, mtime.sec) * std.time.ns_per_s + mtime.nsec,
+            .size = @intCast(stat.size),
+        };
+    }
+    // Windows fallback: fstatat is not implemented on Windows
     const file = openFileReadNoFollow(path) catch return null;
     defer file.close();
 
