@@ -23,33 +23,37 @@ pub fn build(b: *std.Build) void {
         break :blk spice_dep.module("spice");
     } else null;
 
-    // Get dependencies
-    const yaml_dep = b.dependency("yaml", .{
-        .target = target,
-        .optimize = optimize,
-        .spice = false,
-    });
-    const yaml_mod = yaml_dep.module("yaml");
+    // Get dependencies (optional for parent builds to disable)
+    const use_json = b.option(bool, "json", "Use internal json dependency") orelse true;
+    const use_yaml = b.option(bool, "yaml", "Use internal yaml dependency") orelse true;
+    const use_toml = b.option(bool, "toml", "Use internal toml dependency") orelse true;
 
-    const toml_dep = b.dependency("toml", .{
-        .target = target,
-        .optimize = optimize,
-        .spice = false,
-    });
-    const toml_mod = toml_dep.module("toml");
+    const yaml_mod: ?*std.Build.Module = if (use_yaml) blk: {
+        const yaml_dep = b.dependency("yaml", .{
+            .target = target,
+            .optimize = optimize,
+            .spice = false,
+        });
+        break :blk yaml_dep.module("yaml");
+    } else null;
 
-    const json_dep = b.dependency("json", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const json_mod = json_dep.module("json");
+    const toml_mod: ?*std.Build.Module = if (use_toml) blk: {
+        const toml_dep = b.dependency("toml", .{
+            .target = target,
+            .optimize = optimize,
+            .spice = false,
+        });
+        break :blk toml_dep.module("toml");
+    } else null;
 
-    // R-07: Define shared parser import list to avoid repetition across build targets
-    const parser_imports: []const std.Build.Module.Import = &.{
-        .{ .name = "yaml", .module = yaml_mod },
-        .{ .name = "toml", .module = toml_mod },
-        .{ .name = "json", .module = json_mod },
-    };
+    const json_mod: ?*std.Build.Module = if (use_json) blk: {
+        const json_dep = b.dependency("json", .{
+            .target = target,
+            .optimize = optimize,
+            .spice = false,
+        });
+        break :blk json_dep.module("json");
+    } else null;
 
     // Parallel module
     const parallel_mod = b.addModule("parallel", .{
@@ -69,8 +73,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/config.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = parser_imports,
     });
+    if (yaml_mod) |m| config_mod.addImport("yaml", m);
+    if (toml_mod) |m| config_mod.addImport("toml", m);
+    if (json_mod) |m| config_mod.addImport("json", m);
     config_mod.addImport("parallel", parallel_mod);
 
     // Static library
@@ -81,31 +87,39 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/config.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = parser_imports,
         }),
     });
+    if (yaml_mod) |m| lib.root_module.addImport("yaml", m);
+    if (toml_mod) |m| lib.root_module.addImport("toml", m);
+    if (json_mod) |m| lib.root_module.addImport("json", m);
     b.installArtifact(lib);
 
     // Unit tests (tests in src/config.zig)
+    const unit_tests_mod = b.createModule(.{
+        .root_source_file = b.path("src/config.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    if (yaml_mod) |m| unit_tests_mod.addImport("yaml", m);
+    if (toml_mod) |m| unit_tests_mod.addImport("toml", m);
+    if (json_mod) |m| unit_tests_mod.addImport("json", m);
     const unit_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/config.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = parser_imports,
-        }),
+        .root_module = unit_tests_mod,
     });
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
     // Integration tests (fixtures in test/fixtures)
+    const integration_tests_mod = b.createModule(.{
+        .root_source_file = b.path("src/integration_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    if (yaml_mod) |m| integration_tests_mod.addImport("yaml", m);
+    if (toml_mod) |m| integration_tests_mod.addImport("toml", m);
+    if (json_mod) |m| integration_tests_mod.addImport("json", m);
     const integration_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/integration_test.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = parser_imports,
-        }),
+        .root_module = integration_tests_mod,
     });
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
@@ -122,26 +136,32 @@ pub fn build(b: *std.Build) void {
     integration_test_step.dependOn(&run_integration_tests.step);
 
     // Check step (compile without running)
+    const check_mod = b.createModule(.{
+        .root_source_file = b.path("src/config.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    if (yaml_mod) |m| check_mod.addImport("yaml", m);
+    if (toml_mod) |m| check_mod.addImport("toml", m);
+    if (json_mod) |m| check_mod.addImport("json", m);
     const check = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/config.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = parser_imports,
-        }),
+        .root_module = check_mod,
     });
     const check_step = b.step("check", "Check for compilation errors");
     check_step.dependOn(&check.step);
 
     // Documentation generation
+    const docs_mod = b.createModule(.{
+        .root_source_file = b.path("src/config.zig"),
+        .target = target,
+        .optimize = .Debug,
+    });
+    if (yaml_mod) |m| docs_mod.addImport("yaml", m);
+    if (toml_mod) |m| docs_mod.addImport("toml", m);
+    if (json_mod) |m| docs_mod.addImport("json", m);
     const docs = b.addObject(.{
         .name = "zigconfig",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/config.zig"),
-            .target = target,
-            .optimize = .Debug,
-            .imports = parser_imports,
-        }),
+        .root_module = docs_mod,
     });
     const install_docs = b.addInstallDirectory(.{
         .source_dir = docs.getEmittedDocs(),
