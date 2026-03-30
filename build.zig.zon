@@ -5,16 +5,16 @@
     .minimum_zig_version = "0.15.1",
     .dependencies = .{
         .yaml = .{
-            .url = "git+https://gitlab.com/devnw/zig/yaml.git#87ba324e20619680c851d99217c25a4ec054f67f",
-            .hash = "yaml-0.1.1-lcW-hIGjBADqV27wiiI-eMHskf8WDUUucnIgikIamKJR",
+            .url = "git+https://gitlab.com/devnw/zig/yaml.git?ref=main#90544069620b76a0eafc95cf62b55956b185982f",
+            .hash = "yaml-0.1.1-lcW-hPehBAABjn-3X2h-9gMP820jySHQA9_ynMIUyZnZ",
         },
         .toml = .{
-            .url = "git+https://gitlab.com/devnw/zig/toml.git#f7a5520c7deb65ff6e83f623e4b503fdb488e9ef",
-            .hash = "toml-0.1.0-MHnSh74vAgC4W2oypdqhGuHh6llFA3xb5fQWpA3WmCJ1",
+            .url = "git+https://gitlab.com/devnw/zig/toml.git?ref=main#8b70e25a9513fe4526d239c2bc50dead2997f413",
+            .hash = "toml-0.1.0-MHnSh8otAgBkuwTmIuInubh7mbZ8vic8oMYxZwvUnoqY",
         },
         .json = .{
-            .url = "git+https://gitlab.com/devnw/zig/json.git#90330b1bf92ad861047883bdba80f802f6e239da",
-            .hash = "json-0.1.0-tOue4RypCwDXk2KkJTmCxFvgzNQIjLQPSk9w-8dtGDaO",
+            .url = "git+https://gitlab.com/devnw/zig/json.git?ref=main#66fa479dba7ba3692fb1eb8eebf760346a199256",
+            .hash = "json-0.1.0-tOue4RqoCwBSxfxE0svlreACrqTF3W_INI_gwM6rmsZf",
         },
         .spice = .{
             .url = "git+https://gitlab.com/devnw/zig/spice.git#bbf106dc8131a514a4d1687cc2173f124f5c8181",
