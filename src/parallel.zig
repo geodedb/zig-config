@@ -58,7 +58,7 @@
 //! | Serialization  | 4 formats | Yes              |
 
 const std = @import("std");
-const build_options = @import("build_options");
+const build_options = @import("config_build_options");
 
 const spice = if (build_options.enable_spice) @import("spice") else struct {
     pub const ThreadPool = void;
