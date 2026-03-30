@@ -58,9 +58,8 @@
 //! | Serialization  | 4 formats | Yes              |
 
 const std = @import("std");
-const build_options = @import("config_build_options");
 
-const spice = if (build_options.enable_spice) @import("spice") else struct {
+const spice = if (true) @import("spice") else struct {
     pub const ThreadPool = void;
     pub const Task = void;
     pub fn Future(comptime I: type, comptime O: type) type {
@@ -82,7 +81,7 @@ const parallel_file_threshold: usize = 4;
 /// Minimum number of items before spawning the thread pool for serialization.
 const parallel_serialize_threshold: usize = 4;
 
-var global_pool: if (build_options.enable_spice) ?spice.ThreadPool else void = if (build_options.enable_spice) null else {};
+var global_pool: if (true) ?spice.ThreadPool else void = if (true) null else {};
 
 /// Allocator stored by `initPool()` for use during lazy initialization.
 /// Defaults to `page_allocator`; callers should call `initPool()` with a
@@ -96,7 +95,7 @@ var pool_deinit_mutex: std.Thread.Mutex = .{};
 /// One-shot initializer -- the mutex inside `std.once` is only contended on
 /// the very first call; subsequent calls use a lock-free atomic check
 /// (PERF-41).
-var pool_once = if (build_options.enable_spice)
+var pool_once = if (true)
     std.once(doInitPool)
 else {};
 
@@ -118,7 +117,7 @@ fn doInitPool() void {
 ///
 /// Calling after the pool is already initialized has no effect.
 pub fn initPool(allocator: std.mem.Allocator) void {
-    if (!build_options.enable_spice) return;
+    // spice always enabled when this module is compiled
     pool_allocator = allocator;
     // PERF-52: Ensure the allocator write is globally visible before any
     // thread calls getPool() -> pool_once.call() -> doInitPool().
@@ -129,8 +128,8 @@ pub fn initPool(allocator: std.mem.Allocator) void {
 ///
 /// Uses `std.once` so the initialization mutex is only held on the first
 /// call; all subsequent calls are a single atomic load (PERF-41).
-pub fn getPool() if (build_options.enable_spice) *spice.ThreadPool else void {
-    if (!build_options.enable_spice) return;
+pub fn getPool() if (true) *spice.ThreadPool else void {
+    // spice always enabled when this module is compiled
 
     pool_once.call();
     return &global_pool.?;
@@ -140,7 +139,7 @@ pub fn getPool() if (build_options.enable_spice) *spice.ThreadPool else void {
 ///
 /// Safe to call even if the pool was never initialized.
 pub fn deinitPool() void {
-    if (!build_options.enable_spice) return;
+    // spice always enabled when this module is compiled
 
     pool_deinit_mutex.lock();
     defer pool_deinit_mutex.unlock();
@@ -204,7 +203,7 @@ pub fn parallelFileLoad(
 ) void {
     std.debug.assert(inputs.len == results.len);
 
-    if (!build_options.enable_spice or inputs.len < parallel_file_threshold) {
+    if (!true or inputs.len < parallel_file_threshold) {
         for (inputs, 0..) |input, i| {
             results[i] = loadFile(allocator, input);
         }
@@ -314,7 +313,7 @@ pub fn parallelValidate(
     std.debug.assert(rules.len == values.len);
     std.debug.assert(rules.len == results.len);
 
-    if (!build_options.enable_spice or rules.len < 8) {
+    if (!true or rules.len < 8) {
         for (rules, 0..) |rule, i| {
             results[i] = validateField(rule, values[i]);
         }
@@ -442,7 +441,7 @@ pub fn parallelSerialize(
 ) void {
     std.debug.assert(inputs.len == results.len);
 
-    if (!build_options.enable_spice or inputs.len < parallel_serialize_threshold) {
+    if (!true or inputs.len < parallel_serialize_threshold) {
         for (inputs, 0..) |input, i| {
             results[i] = serializeData(allocator, input);
         }
@@ -503,7 +502,7 @@ fn serializeData(allocator: std.mem.Allocator, input: SerializeInput) SerializeR
 // ============================================================================
 
 test "parallel file load" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     var inputs: [4]FileLoadInput = undefined;
     var results: [4]FileLoadResult = undefined;
@@ -523,7 +522,7 @@ test "parallel file load" {
 }
 
 test "parallel validate" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     var rules: [16]ValidationRule = undefined;
     var values: [16][]const u8 = undefined;
@@ -546,7 +545,7 @@ test "parallel validate" {
 }
 
 test "parallel file load - empty path" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     var inputs: [4]FileLoadInput = undefined;
     var results: [4]FileLoadResult = undefined;
@@ -580,7 +579,7 @@ test "parallel file load - single item" {
 }
 
 test "parallel validate - required empty value" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     var rules: [8]ValidationRule = undefined;
     var values: [8][]const u8 = undefined;
@@ -604,7 +603,7 @@ test "parallel validate - required empty value" {
 }
 
 test "parallel validate - min_length" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     var rules: [8]ValidationRule = undefined;
     var values: [8][]const u8 = undefined;
@@ -631,7 +630,7 @@ test "parallel validate - min_length" {
 }
 
 test "parallel validate - max_length" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     var rules: [8]ValidationRule = undefined;
     var values: [8][]const u8 = undefined;
@@ -658,7 +657,7 @@ test "parallel validate - max_length" {
 }
 
 test "parallel serialize - basic" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     var inputs: [4]SerializeInput = undefined;
     var results: [4]SerializeResult = undefined;
@@ -676,7 +675,7 @@ test "parallel serialize - basic" {
 }
 
 test "parallel serialize - empty data" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     var inputs: [4]SerializeInput = undefined;
     var results: [4]SerializeResult = undefined;
@@ -790,7 +789,7 @@ test "initPool sets pool allocator (PERF-40)" {
 // ---------------------------------------------------------------------------
 
 test "getPool returns consistent pointer across calls (PERF-41)" {
-    if (!build_options.enable_spice) return error.SkipZigTest;
+    // spice always enabled when this module is compiled
 
     // Two calls to getPool should return the same pointer, confirming
     // the once-init produces a stable singleton.
