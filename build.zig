@@ -27,12 +27,14 @@ pub fn build(b: *std.Build) void {
     const yaml_dep = b.dependency("yaml", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
     });
     const yaml_mod = yaml_dep.module("yaml");
 
     const toml_dep = b.dependency("toml", .{
         .target = target,
         .optimize = optimize,
+        .spice = false,
     });
     const toml_mod = toml_dep.module("toml");
 
