@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 
-//! Parallel config operations using spice heartbeat scheduling.
+//! Parallel config operations using thread-pool submitBatch/WaitGroup.
 //!
 //! Provides high-performance parallel implementations for configuration
 //! operations including file loading, merge operations, and validation.
@@ -9,13 +9,13 @@
 //! ## Overview
 //!
 //! This module enables parallel processing of configuration operations
-//! using the spice thread pool. Ideal for loading multiple config files
+//! using the devnw thread pool. Ideal for loading multiple config files
 //! or validating large configuration structures.
 //!
 //! ## Build Configuration
 //!
-//! Enable: `-Dspice=true` (default)
-//! Disable: `-Dspice=false`
+//! Enable: `-Dthread_pool=true` (default)
+//! Disable: `-Dthread_pool=false`
 //!
 //! ## Usage Example
 //!
@@ -58,20 +58,14 @@
 //! | Serialization  | 4 formats | Yes              |
 
 const std = @import("std");
-
-const spice = if (true) @import("spice") else struct {
-    pub const ThreadPool = void;
-    pub const Task = void;
-    pub fn Future(comptime I: type, comptime O: type) type {
-        _ = I;
-        _ = O;
-        return void;
-    }
-};
+const tp = @import("thread_pool");
 
 // ============================================================================
 // Global Thread Pool
 // ============================================================================
+
+/// Maximum number of chunks used for flat task decomposition.
+const MAX_CHUNKS: usize = 64;
 
 /// Minimum number of items before spawning the thread pool for file loads
 /// and serialization. Below this threshold, sequential execution avoids
@@ -81,7 +75,7 @@ const parallel_file_threshold: usize = 4;
 /// Minimum number of items before spawning the thread pool for serialization.
 const parallel_serialize_threshold: usize = 4;
 
-var global_pool: if (true) ?spice.ThreadPool else void = if (true) null else {};
+var global_pool: ?tp.ThreadPool = null;
 
 /// Allocator stored by `initPool()` for use during lazy initialization.
 /// Defaults to `page_allocator`; callers should call `initPool()` with a
@@ -89,19 +83,14 @@ var global_pool: if (true) ?spice.ThreadPool else void = if (true) null else {};
 /// (PERF-40).
 var pool_allocator: std.mem.Allocator = std.heap.page_allocator;
 
-/// Guards `deinitPool` against concurrent access with the once-init path.
-var pool_deinit_mutex: std.Thread.Mutex = .{};
+/// Guards pool init/deinit against concurrent access.
+var pool_mutex: std.Thread.Mutex = .{};
 
-/// One-shot initializer -- the mutex inside `std.once` is only contended on
-/// the very first call; subsequent calls use a lock-free atomic check
-/// (PERF-41).
-var pool_once = if (true)
-    std.once(doInitPool)
-else {};
+/// One-shot initializer.
+var pool_once = std.once(doInitPool);
 
 fn doInitPool() void {
-    global_pool = spice.ThreadPool.init(pool_allocator);
-    global_pool.?.start(.{});
+    global_pool = tp.ThreadPool.init(pool_allocator, .{}) catch @panic("thread pool init failed");
 }
 
 /// Pre-configure the thread pool allocator before first use.
@@ -117,7 +106,6 @@ fn doInitPool() void {
 ///
 /// Calling after the pool is already initialized has no effect.
 pub fn initPool(allocator: std.mem.Allocator) void {
-    // spice always enabled when this module is compiled
     pool_allocator = allocator;
     // PERF-52: Ensure the allocator write is globally visible before any
     // thread calls getPool() -> pool_once.call() -> doInitPool().
@@ -128,9 +116,7 @@ pub fn initPool(allocator: std.mem.Allocator) void {
 ///
 /// Uses `std.once` so the initialization mutex is only held on the first
 /// call; all subsequent calls are a single atomic load (PERF-41).
-pub fn getPool() if (true) *spice.ThreadPool else void {
-    // spice always enabled when this module is compiled
-
+pub fn getPool() *tp.ThreadPool {
     pool_once.call();
     return &global_pool.?;
 }
@@ -139,10 +125,8 @@ pub fn getPool() if (true) *spice.ThreadPool else void {
 ///
 /// Safe to call even if the pool was never initialized.
 pub fn deinitPool() void {
-    // spice always enabled when this module is compiled
-
-    pool_deinit_mutex.lock();
-    defer pool_deinit_mutex.unlock();
+    pool_mutex.lock();
+    defer pool_mutex.unlock();
 
     if (global_pool) |*pool| {
         pool.deinit();
@@ -176,12 +160,17 @@ pub const FileLoadResult = struct {
     error_msg: ?[]const u8,
 };
 
-/// Context for parallel file loading
-pub const FileLoadContext = struct {
-    inputs: []const FileLoadInput,
-    results: []FileLoadResult,
+/// Per-item context for a single parallel file-load task.
+const FileLoadItemCtx = struct {
+    input: *const FileLoadInput,
+    result: *FileLoadResult,
     allocator: std.mem.Allocator,
 };
+
+fn fileLoadTaskFn(raw_ctx: *anyopaque, _: *tp.TaskContext) void {
+    const ctx: *FileLoadItemCtx = @ptrCast(@alignCast(raw_ctx));
+    ctx.result.* = loadFile(ctx.allocator, ctx.input.*);
+}
 
 /// Load multiple configuration files in parallel.
 ///
@@ -203,51 +192,41 @@ pub fn parallelFileLoad(
 ) void {
     std.debug.assert(inputs.len == results.len);
 
-    if (!true or inputs.len < parallel_file_threshold) {
+    if (inputs.len < parallel_file_threshold) {
         for (inputs, 0..) |input, i| {
             results[i] = loadFile(allocator, input);
         }
         return;
     }
 
-    const pool = getPool();
-    const ctx = FileLoadContext{
-        .inputs = inputs,
-        .results = results,
-        .allocator = allocator,
-    };
-    _ = pool.call(void, parallelFileLoadTask, ctx);
-}
+    const n = @min(inputs.len, MAX_CHUNKS);
+    var ctxs: [MAX_CHUNKS]FileLoadItemCtx = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
 
-fn parallelFileLoadTask(t: *spice.Task, ctx: FileLoadContext) void {
-    const inputs = ctx.inputs;
-    const results = ctx.results;
-
-    if (inputs.len < 2) {
-        for (inputs, 0..) |input, i| {
-            results[i] = loadFile(ctx.allocator, input);
-        }
-        return;
+    for (0..n) |i| {
+        ctxs[i] = .{
+            .input = &inputs[i],
+            .result = &results[i],
+            .allocator = allocator,
+        };
+        batch[i] = .{ .task_fn = fileLoadTaskFn, .ctx = &ctxs[i] };
     }
 
-    const mid = inputs.len / 2;
-    const left_ctx = FileLoadContext{
-        .inputs = inputs[0..mid],
-        .results = results[0..mid],
-        .allocator = ctx.allocator,
+    var wg = getPool().waitGroup();
+    getPool().submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+        // Sequential fallback on error
+        for (inputs, 0..) |input, i| {
+            results[i] = loadFile(allocator, input);
+        }
+        return;
     };
-    const right_ctx = FileLoadContext{
-        .inputs = inputs[mid..],
-        .results = results[mid..],
-        .allocator = ctx.allocator,
-    };
+    wg.wait();
 
-    var fut = spice.Future(FileLoadContext, void).init();
-    fut.fork(t, parallelFileLoadTask, right_ctx);
-
-    t.call(void, parallelFileLoadTask, left_ctx);
-    if (fut.join(t) == null) {
-        t.call(void, parallelFileLoadTask, right_ctx);
+    // Handle any items beyond MAX_CHUNKS sequentially
+    if (inputs.len > MAX_CHUNKS) {
+        for (inputs[MAX_CHUNKS..], MAX_CHUNKS..) |input, i| {
+            results[i] = loadFile(allocator, input);
+        }
     }
 }
 
@@ -287,12 +266,17 @@ pub const ValidationResult = struct {
     error_msg: ?[]const u8,
 };
 
-/// Context for parallel validation
-pub const ValidationContext = struct {
-    rules: []const ValidationRule,
-    values: []const []const u8,
-    results: []ValidationResult,
+/// Per-item context for a single parallel validation task.
+const ValidateItemCtx = struct {
+    rule: *const ValidationRule,
+    value: []const u8,
+    result: *ValidationResult,
 };
+
+fn validateTaskFn(raw_ctx: *anyopaque, _: *tp.TaskContext) void {
+    const ctx: *ValidateItemCtx = @ptrCast(@alignCast(raw_ctx));
+    ctx.result.* = validateField(ctx.rule.*, ctx.value);
+}
 
 /// Validate multiple configuration fields in parallel.
 ///
@@ -313,52 +297,41 @@ pub fn parallelValidate(
     std.debug.assert(rules.len == values.len);
     std.debug.assert(rules.len == results.len);
 
-    if (!true or rules.len < 8) {
+    if (rules.len < 8) {
         for (rules, 0..) |rule, i| {
             results[i] = validateField(rule, values[i]);
         }
         return;
     }
 
-    const pool = getPool();
-    const ctx = ValidationContext{
-        .rules = rules,
-        .values = values,
-        .results = results,
-    };
-    _ = pool.call(void, parallelValidateTask, ctx);
-}
+    const n = @min(rules.len, MAX_CHUNKS);
+    var ctxs: [MAX_CHUNKS]ValidateItemCtx = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
 
-fn parallelValidateTask(t: *spice.Task, ctx: ValidationContext) void {
-    const rules = ctx.rules;
-    const values = ctx.values;
-    const results = ctx.results;
+    for (0..n) |i| {
+        ctxs[i] = .{
+            .rule = &rules[i],
+            .value = values[i],
+            .result = &results[i],
+        };
+        batch[i] = .{ .task_fn = validateTaskFn, .ctx = &ctxs[i] };
+    }
 
-    if (rules.len < 4) {
+    var wg = getPool().waitGroup();
+    getPool().submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+        // Sequential fallback on error
         for (rules, 0..) |rule, i| {
             results[i] = validateField(rule, values[i]);
         }
         return;
-    }
-
-    const mid = rules.len / 2;
-    const left_ctx = ValidationContext{
-        .rules = rules[0..mid],
-        .values = values[0..mid],
-        .results = results[0..mid],
     };
-    const right_ctx = ValidationContext{
-        .rules = rules[mid..],
-        .values = values[mid..],
-        .results = results[mid..],
-    };
+    wg.wait();
 
-    var fut = spice.Future(ValidationContext, void).init();
-    fut.fork(t, parallelValidateTask, right_ctx);
-
-    t.call(void, parallelValidateTask, left_ctx);
-    if (fut.join(t) == null) {
-        t.call(void, parallelValidateTask, right_ctx);
+    // Handle any items beyond MAX_CHUNKS sequentially
+    if (rules.len > MAX_CHUNKS) {
+        for (rules[MAX_CHUNKS..], MAX_CHUNKS..) |rule, i| {
+            results[i] = validateField(rule, values[i]);
+        }
     }
 }
 
@@ -415,12 +388,17 @@ pub const SerializeResult = struct {
     output: ?[]const u8,
 };
 
-/// Context for parallel serialization
-pub const SerializeContext = struct {
-    inputs: []const SerializeInput,
-    results: []SerializeResult,
+/// Per-item context for a single parallel serialization task.
+const SerializeItemCtx = struct {
+    input: *const SerializeInput,
+    result: *SerializeResult,
     allocator: std.mem.Allocator,
 };
+
+fn serializeTaskFn(raw_ctx: *anyopaque, _: *tp.TaskContext) void {
+    const ctx: *SerializeItemCtx = @ptrCast(@alignCast(raw_ctx));
+    ctx.result.* = serializeData(ctx.allocator, ctx.input.*);
+}
 
 /// Serialize configuration to multiple formats in parallel.
 ///
@@ -441,51 +419,41 @@ pub fn parallelSerialize(
 ) void {
     std.debug.assert(inputs.len == results.len);
 
-    if (!true or inputs.len < parallel_serialize_threshold) {
+    if (inputs.len < parallel_serialize_threshold) {
         for (inputs, 0..) |input, i| {
             results[i] = serializeData(allocator, input);
         }
         return;
     }
 
-    const pool = getPool();
-    const ctx = SerializeContext{
-        .inputs = inputs,
-        .results = results,
-        .allocator = allocator,
-    };
-    _ = pool.call(void, parallelSerializeTask, ctx);
-}
+    const n = @min(inputs.len, MAX_CHUNKS);
+    var ctxs: [MAX_CHUNKS]SerializeItemCtx = undefined;
+    var batch: [MAX_CHUNKS]tp.BatchTask = undefined;
 
-fn parallelSerializeTask(t: *spice.Task, ctx: SerializeContext) void {
-    const inputs = ctx.inputs;
-    const results = ctx.results;
-
-    if (inputs.len < 2) {
-        for (inputs, 0..) |input, i| {
-            results[i] = serializeData(ctx.allocator, input);
-        }
-        return;
+    for (0..n) |i| {
+        ctxs[i] = .{
+            .input = &inputs[i],
+            .result = &results[i],
+            .allocator = allocator,
+        };
+        batch[i] = .{ .task_fn = serializeTaskFn, .ctx = &ctxs[i] };
     }
 
-    const mid = inputs.len / 2;
-    const left_ctx = SerializeContext{
-        .inputs = inputs[0..mid],
-        .results = results[0..mid],
-        .allocator = ctx.allocator,
+    var wg = getPool().waitGroup();
+    getPool().submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+        // Sequential fallback on error
+        for (inputs, 0..) |input, i| {
+            results[i] = serializeData(allocator, input);
+        }
+        return;
     };
-    const right_ctx = SerializeContext{
-        .inputs = inputs[mid..],
-        .results = results[mid..],
-        .allocator = ctx.allocator,
-    };
+    wg.wait();
 
-    var fut = spice.Future(SerializeContext, void).init();
-    fut.fork(t, parallelSerializeTask, right_ctx);
-
-    t.call(void, parallelSerializeTask, left_ctx);
-    if (fut.join(t) == null) {
-        t.call(void, parallelSerializeTask, right_ctx);
+    // Handle any items beyond MAX_CHUNKS sequentially
+    if (inputs.len > MAX_CHUNKS) {
+        for (inputs[MAX_CHUNKS..], MAX_CHUNKS..) |input, i| {
+            results[i] = serializeData(allocator, input);
+        }
     }
 }
 
@@ -502,8 +470,6 @@ fn serializeData(allocator: std.mem.Allocator, input: SerializeInput) SerializeR
 // ============================================================================
 
 test "parallel file load" {
-    // spice always enabled when this module is compiled
-
     var inputs: [4]FileLoadInput = undefined;
     var results: [4]FileLoadResult = undefined;
 
@@ -522,8 +488,6 @@ test "parallel file load" {
 }
 
 test "parallel validate" {
-    // spice always enabled when this module is compiled
-
     var rules: [16]ValidationRule = undefined;
     var values: [16][]const u8 = undefined;
     var results: [16]ValidationResult = undefined;
@@ -545,8 +509,6 @@ test "parallel validate" {
 }
 
 test "parallel file load - empty path" {
-    // spice always enabled when this module is compiled
-
     var inputs: [4]FileLoadInput = undefined;
     var results: [4]FileLoadResult = undefined;
 
@@ -579,8 +541,6 @@ test "parallel file load - single item" {
 }
 
 test "parallel validate - required empty value" {
-    // spice always enabled when this module is compiled
-
     var rules: [8]ValidationRule = undefined;
     var values: [8][]const u8 = undefined;
     var results: [8]ValidationResult = undefined;
@@ -603,8 +563,6 @@ test "parallel validate - required empty value" {
 }
 
 test "parallel validate - min_length" {
-    // spice always enabled when this module is compiled
-
     var rules: [8]ValidationRule = undefined;
     var values: [8][]const u8 = undefined;
     var results: [8]ValidationResult = undefined;
@@ -630,8 +588,6 @@ test "parallel validate - min_length" {
 }
 
 test "parallel validate - max_length" {
-    // spice always enabled when this module is compiled
-
     var rules: [8]ValidationRule = undefined;
     var values: [8][]const u8 = undefined;
     var results: [8]ValidationResult = undefined;
@@ -657,8 +613,6 @@ test "parallel validate - max_length" {
 }
 
 test "parallel serialize - basic" {
-    // spice always enabled when this module is compiled
-
     var inputs: [4]SerializeInput = undefined;
     var results: [4]SerializeResult = undefined;
 
@@ -675,8 +629,6 @@ test "parallel serialize - basic" {
 }
 
 test "parallel serialize - empty data" {
-    // spice always enabled when this module is compiled
-
     var inputs: [4]SerializeInput = undefined;
     var results: [4]SerializeResult = undefined;
 
@@ -697,7 +649,7 @@ test "parallel serialize - empty data" {
 
 test "parallel file load - 2 files uses sequential fallback (PERF-42)" {
     // With threshold at 4, 2 files should use sequential path regardless
-    // of whether spice is enabled. This test verifies correct results
+    // of whether parallelism is enabled. This test verifies correct results
     // via the sequential path.
     var inputs: [2]FileLoadInput = undefined;
     var results: [2]FileLoadResult = undefined;
@@ -785,12 +737,10 @@ test "initPool sets pool allocator (PERF-40)" {
 }
 
 // ---------------------------------------------------------------------------
-// PERF-41: getPool uses std.once (lock-free after init)
+// PERF-41: getPool returns stable pointer across calls
 // ---------------------------------------------------------------------------
 
 test "getPool returns consistent pointer across calls (PERF-41)" {
-    // spice always enabled when this module is compiled
-
     // Two calls to getPool should return the same pointer, confirming
     // the once-init produces a stable singleton.
     const p1 = getPool();
