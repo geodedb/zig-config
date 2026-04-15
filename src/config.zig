@@ -28,6 +28,19 @@
 //! const port = value.getInt("server.port") orelse 8080;
 //! ```
 
+// Zig 0.16.0 compat: StringArrayHashMap was removed
+fn StringArrayHashMap(comptime V: type) type {
+    return std.ArrayHashMap([]const u8, V, struct {
+        pub fn hash(_: @This(), key: []const u8) u32 {
+            return @truncate(std.hash.Wyhash.hash(0, key));
+        }
+        pub fn eql(_: @This(), a: []const u8, b: []const u8, _: usize) bool {
+            return std.mem.eql(u8, a, b);
+        }
+    }, true);
+}
+
+
 const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
@@ -216,7 +229,7 @@ pub const Value = struct {
         float: f64,
         string: []const u8,
         list: []Self,
-        map: std.StringArrayHashMap(Self),
+        map: StringArrayHashMap(Self),
     };
 
     /// Free all memory associated with this value
@@ -294,7 +307,7 @@ pub const Value = struct {
     }
 
     /// Get map entries at current value
-    pub fn getMap(self: Self) ?std.StringArrayHashMap(Self) {
+    pub fn getMap(self: Self) ?StringArrayHashMap(Self) {
         return switch (self.data) {
             .map => |m| m,
             else => null,
@@ -405,7 +418,7 @@ fn convertYamlValue(allocator: Allocator, val: yaml.Value) !Value.ValueData {
             return .{ .list = list };
         },
         .map => |pairs| {
-            var map = std.StringArrayHashMap(Value).init(allocator);
+            var map = StringArrayHashMap(Value).init(allocator);
             // INFO-5: Pre-allocate capacity since pair count is known
             try map.ensureTotalCapacity(@intCast(pairs.len));
             for (pairs) |pair| {
@@ -452,7 +465,7 @@ fn convertStdJsonValue(allocator: Allocator, val: std.json.Value) !Value.ValueDa
             return .{ .list = list };
         },
         .object => |obj| {
-            var map = std.StringArrayHashMap(Value).init(allocator);
+            var map = StringArrayHashMap(Value).init(allocator);
             // INFO-5: Pre-allocate capacity since object entry count is known
             try map.ensureTotalCapacity(@intCast(obj.count()));
             var iter = obj.iterator();
@@ -505,7 +518,7 @@ fn convertTomlValue(allocator: Allocator, val: toml.Value) error{OutOfMemory}!Va
             return .{ .list = list };
         },
         .table => |tbl| {
-            var map = std.StringArrayHashMap(Value).init(allocator);
+            var map = StringArrayHashMap(Value).init(allocator);
             // INFO-5: Pre-allocate capacity since table entry count is known
             try map.ensureTotalCapacity(@intCast(tbl.entries.len));
             for (tbl.entries) |entry| {
@@ -584,7 +597,7 @@ fn parseIniContent(allocator: Allocator, content: []const u8) !Value.ValueData {
     };
     defer doc.deinit();
 
-    var map = std.StringArrayHashMap(Value).init(allocator);
+    var map = StringArrayHashMap(Value).init(allocator);
     errdefer map.deinit();
     // INFO-5: Pre-allocate capacity since global + section count is known
     try map.ensureTotalCapacity(@intCast(doc.global.count() + doc.sections.count()));
@@ -602,7 +615,7 @@ fn parseIniContent(allocator: Allocator, content: []const u8) !Value.ValueData {
     // Add section values as nested maps
     var section_iter = doc.sections.iterator();
     while (section_iter.next()) |section_entry| {
-        var section_map = std.StringArrayHashMap(Value).init(allocator);
+        var section_map = StringArrayHashMap(Value).init(allocator);
         // INFO-5: Pre-allocate capacity since section value count is known
         try section_map.ensureTotalCapacity(@intCast(section_entry.value_ptr.values.count()));
         var value_iter = section_entry.value_ptr.values.iterator();
@@ -629,7 +642,7 @@ fn parsePropertiesContent(allocator: Allocator, content: []const u8) !Value.Valu
     };
     defer props.deinit();
 
-    var map = std.StringArrayHashMap(Value).init(allocator);
+    var map = StringArrayHashMap(Value).init(allocator);
     errdefer map.deinit();
     // INFO-5: Pre-allocate capacity since property count is known
     try map.ensureTotalCapacity(@intCast(props.values.count()));
@@ -986,7 +999,7 @@ test "FormatRegistry custom decoder" {
     // Register a custom decoder for .custom format
     const customDecoder = struct {
         fn decode(allocator: Allocator, content: []const u8) anyerror!Value.ValueData {
-            var map = std.StringArrayHashMap(Value).init(allocator);
+            var map = StringArrayHashMap(Value).init(allocator);
             // Simple parser: treat each line as key=value
             var lines = mem.splitScalar(u8, content, '\n');
             while (lines.next()) |line| {
