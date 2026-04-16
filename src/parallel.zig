@@ -107,9 +107,10 @@ fn doInitPool() void {
 /// Calling after the pool is already initialized has no effect.
 pub fn initPool(allocator: std.mem.Allocator) void {
     pool_allocator = allocator;
-    // PERF-52: Ensure the allocator write is globally visible before any
-    // thread calls getPool() -> pool_once.call() -> doInitPool().
-    @fence(.seq_cst);
+    // PERF-52: Synchronization of the allocator write is provided by
+    // `std.once` (which performs its own acquire/release synchronization
+    // around `doInitPool`). Zig 0.16.0 removed the `@fence` builtin,
+    // so we rely on `pool_once.call()` to establish happens-before.
 }
 
 /// Return a pointer to the lazily-initialized global thread pool.

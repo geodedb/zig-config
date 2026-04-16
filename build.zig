@@ -85,6 +85,7 @@ pub fn build(b: *std.Build) void {
     if (yaml_mod) |m| lib.root_module.addImport("yaml", m);
     if (toml_mod) |m| lib.root_module.addImport("toml", m);
     if (json_mod) |m| lib.root_module.addImport("json", m);
+    if (parallel_mod) |pm| lib.root_module.addImport("parallel", pm);
     b.installArtifact(lib);
 
     // Unit tests (tests in src/config.zig)
@@ -96,6 +97,7 @@ pub fn build(b: *std.Build) void {
     if (yaml_mod) |m| unit_tests_mod.addImport("yaml", m);
     if (toml_mod) |m| unit_tests_mod.addImport("toml", m);
     if (json_mod) |m| unit_tests_mod.addImport("json", m);
+    if (parallel_mod) |pm| unit_tests_mod.addImport("parallel", pm);
     const unit_tests = b.addTest(.{
         .root_module = unit_tests_mod,
     });
@@ -111,6 +113,7 @@ pub fn build(b: *std.Build) void {
     if (yaml_mod) |m| integration_tests_mod.addImport("yaml", m);
     if (toml_mod) |m| integration_tests_mod.addImport("toml", m);
     if (json_mod) |m| integration_tests_mod.addImport("json", m);
+    if (parallel_mod) |pm| integration_tests_mod.addImport("parallel", pm);
     const integration_tests = b.addTest(.{
         .root_module = integration_tests_mod,
     });
@@ -137,6 +140,7 @@ pub fn build(b: *std.Build) void {
     if (yaml_mod) |m| check_mod.addImport("yaml", m);
     if (toml_mod) |m| check_mod.addImport("toml", m);
     if (json_mod) |m| check_mod.addImport("json", m);
+    if (parallel_mod) |pm| check_mod.addImport("parallel", pm);
     const check = b.addTest(.{
         .root_module = check_mod,
     });
@@ -152,6 +156,7 @@ pub fn build(b: *std.Build) void {
     if (yaml_mod) |m| docs_mod.addImport("yaml", m);
     if (toml_mod) |m| docs_mod.addImport("toml", m);
     if (json_mod) |m| docs_mod.addImport("json", m);
+    if (parallel_mod) |pm| docs_mod.addImport("parallel", pm);
     const docs = b.addObject(.{
         .name = "zigconfig",
         .root_module = docs_mod,

@@ -70,6 +70,9 @@ pub const validation = @import("validation.zig");
 pub const async_load = @import("async.zig");
 pub const diff = @import("diff.zig");
 
+/// Parallel operations (requires `thread_pool`).
+pub const parallel = @import("parallel");
+
 // File Size Limits - re-exported from limits.zig (CWE-400, #64, #101)
 pub const limits = @import("limits.zig");
 pub const MAX_CONFIG_FILE_SIZE = limits.MAX_CONFIG_FILE_SIZE;
@@ -1220,4 +1223,13 @@ test "ADV-01: parseContent with .auto format detects YAML correctly" {
     var config = try parseContent(std.testing.allocator, yaml_content, .auto);
     defer config.deinit();
     try std.testing.expectEqualStrings("value", config.getString("key").?);
+}
+
+test "parallel re-export is reachable" {
+    // Smoke test: verify parallel.zig is reachable through the public
+    // config module. Parallel config ops need file IO state that's fiddly
+    // to stand up in a unit test, so we just assert the pool lifecycle
+    // entry points are exposed and `deinitPool()` is safely callable.
+    _ = @TypeOf(parallel.getPool);
+    parallel.deinitPool();
 }
