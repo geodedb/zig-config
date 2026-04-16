@@ -132,7 +132,7 @@ pub fn openFileReadNoFollow(path: []const u8) OpenNoFollowError!std.Io.File {
         error.SymLinkLoop => return error.SymlinkNotAllowed,
         else => return err,
     };
-    return std.Io.File{ .handle = fd };
+    return std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
 }
 
 /// Create a file without following symlinks when supported.
@@ -157,7 +157,7 @@ pub fn createFileNoFollow(path: []const u8, mode: std.posix.mode_t, exclusive: b
         error.SymLinkLoop => return error.SymlinkNotAllowed,
         else => return err,
     };
-    return std.Io.File{ .handle = fd };
+    return std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
 }
 
 /// Read a secret from a file

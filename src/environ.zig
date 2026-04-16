@@ -50,7 +50,14 @@ pub fn getenv(key: []const u8) ?[]const u8 {
     if (comptime is_windows) {
         @compileError("environ.getenv is not available on Windows; use environ.getEnvOwned instead");
     }
-    return std.posix.getenv(key);
+    // Zig 0.16 compat: std.posix.getenv was removed; use std.c.getenv with
+    // null-terminated key. Stack buffer avoids allocation for typical env names.
+    var buf: [256]u8 = undefined;
+    if (key.len >= buf.len) return null;
+    @memcpy(buf[0..key.len], key);
+    buf[key.len] = 0;
+    const key_z: [*:0]const u8 = buf[0..key.len :0];
+    return if (std.c.getenv(key_z)) |p| std.mem.span(p) else null;
 }
 
 /// Look up an environment variable and return an owned copy.
@@ -65,7 +72,7 @@ pub fn getEnvOwned(allocator: std.mem.Allocator, key: []const u8) ?[]u8 {
     if (comptime is_windows) {
         return std.process.getEnvVarOwned(allocator, key) catch null;
     } else {
-        const val = std.posix.getenv(key) orelse return null;
+        const val = getenv(key) orelse return null;
         return allocator.dupe(u8, val) catch null;
     }
 }

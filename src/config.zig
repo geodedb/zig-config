@@ -367,8 +367,12 @@ pub fn parseFile(allocator: Allocator, path: []const u8) !Value {
     };
     defer file.close();
 
-    const content = try file.readToEndAlloc(allocator, MAX_CONFIG_FILE_SIZE);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file_len = try file.length(io);
+    if (file_len > MAX_CONFIG_FILE_SIZE) return error.FileTooBig;
+    const content = try allocator.alloc(u8, @intCast(file_len));
     defer allocator.free(content);
+    _ = try file.readPositionalAll(io, content, 0);
 
     const format = Format.fromExtension(path);
     return parseContent(allocator, content, format);
