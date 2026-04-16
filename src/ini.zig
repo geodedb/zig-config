@@ -202,7 +202,7 @@ pub fn parseFile(allocator: Allocator, path: []const u8) !IniDocument {
         error.SymlinkNotAllowed => return error.SymlinkNotAllowed,
         else => return err,
     };
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
 
     const content = try file.readToEndAlloc(allocator, limits.MAX_CONFIG_FILE_SIZE);
     defer allocator.free(content);

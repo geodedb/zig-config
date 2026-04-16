@@ -195,7 +195,7 @@ pub fn readFromFileWithOptions(path: []const u8, allocator: Allocator, options: 
             error.FileNotFound => return SecretError.FileNotFound,
             else => return SecretError.ReadError,
         };
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
 
     const content = file.readToEndAlloc(allocator, 64 * 1024) catch {
         return SecretError.ReadError;
@@ -383,7 +383,7 @@ test "readFromFile returned slice can be freed without leak (mem.trim fix)" {
     const content_with_newlines = "my-secret-value\n\r\n";
     const file = try tmp_dir.dir.createFile("secret.txt", .{});
     try file.writeAll(content_with_newlines);
-    file.close();
+    file.close(std.Io.Threaded.global_single_threaded.io());
 
     // Use the real path so readFromFileWithOptions can open it
     const path = try tmp_dir.dir.realpathAlloc(std.testing.allocator, "secret.txt");
@@ -408,7 +408,7 @@ test "readFromFile trims and returns correct content for file without trailing n
     const content_no_newlines = "exact-secret";
     const file = try tmp_dir.dir.createFile("secret2.txt", .{});
     try file.writeAll(content_no_newlines);
-    file.close();
+    file.close(std.Io.Threaded.global_single_threaded.io());
 
     const path = try tmp_dir.dir.realpathAlloc(std.testing.allocator, "secret2.txt");
     defer std.testing.allocator.free(path);

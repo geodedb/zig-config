@@ -245,7 +245,7 @@ pub fn AsyncLoader(comptime T: type) type {
             const file = openFileReadNoFollow(path) catch {
                 return; // File not found is ok for optional configs
             };
-            defer file.close();
+            defer file.close(std.Io.Threaded.global_single_threaded.io());
 
             const content = try file.readToEndAlloc(loader.allocator, limits.MAX_CONFIG_FILE_SIZE);
             defer loader.allocator.free(content);
@@ -378,7 +378,7 @@ pub fn loadParallel(comptime T: type, allocator: Allocator, paths: []const []con
                         c.err = e;
                         return;
                     };
-                    defer file.close();
+                    defer file.close(std.Io.Threaded.global_single_threaded.io());
 
                     c.result = file.readToEndAlloc(c.allocator, limits.MAX_CONFIG_FILE_SIZE) catch |e| {
                         c.err = e;

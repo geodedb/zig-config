@@ -365,7 +365,7 @@ pub fn parseFile(allocator: Allocator, path: []const u8) !Value {
         error.FileNotFound => return error.FileNotFound,
         else => return error.FileNotFound,
     };
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
 
     const io = std.Io.Threaded.global_single_threaded.io();
     const file_len = try file.length(io);
@@ -739,12 +739,12 @@ pub fn safeWriteConfig(
         errdefer cwd.deleteFile(temp_path) catch {};
         // R-01/T-01: Ensure temp file handle is closed on write/sync failure
         // so the fd is not leaked before errdefer cleanup deletes the file.
-        errdefer temp_file.close();
+        errdefer temp_file.close(std.Io.Threaded.global_single_threaded.io());
 
         temp_file.writeAll(content) catch return SafeWriteError.IoError;
         // R-01/T-01: Flush data to disk before rename to guarantee durability
         temp_file.sync() catch return SafeWriteError.IoError;
-        temp_file.close();
+        temp_file.close(std.Io.Threaded.global_single_threaded.io());
 
         // Rename temp to target
         cwd.rename(temp_path, path) catch {
@@ -754,7 +754,7 @@ pub fn safeWriteConfig(
     } else {
         // Security: Use restrictive file permissions (CWE-732, #75)
         const file = createFileNoFollow(path, 0o600, false) catch return SafeWriteError.IoError;
-        defer file.close();
+        defer file.close(std.Io.Threaded.global_single_threaded.io());
         file.writeAll(content) catch return SafeWriteError.IoError;
     }
 }
@@ -812,12 +812,12 @@ pub fn safeWriteConfigWithBackup(
         defer allocator.free(temp_path);
         errdefer cwd.deleteFile(temp_path) catch {};
         // R-01/T-01: Ensure temp file handle is closed on write/sync failure
-        errdefer temp_file.close();
+        errdefer temp_file.close(std.Io.Threaded.global_single_threaded.io());
 
         temp_file.writeAll(content) catch return SafeWriteError.IoError;
         // R-01/T-01: Flush data to disk before rename to guarantee durability
         temp_file.sync() catch return SafeWriteError.IoError;
-        temp_file.close();
+        temp_file.close(std.Io.Threaded.global_single_threaded.io());
 
         cwd.rename(temp_path, path) catch {
             cwd.deleteFile(temp_path) catch {};
@@ -826,7 +826,7 @@ pub fn safeWriteConfigWithBackup(
     } else {
         // Security: Use restrictive file permissions (CWE-732, #75)
         const file = createFileNoFollow(path, 0o600, false) catch return SafeWriteError.IoError;
-        defer file.close();
+        defer file.close(std.Io.Threaded.global_single_threaded.io());
         file.writeAll(content) catch return SafeWriteError.IoError;
     }
 }
@@ -903,7 +903,7 @@ pub const FormatRegistry = struct {
                 error.FileNotFound => return error.FileNotFound,
                 else => return error.FileNotFound,
             };
-            defer file.close();
+            defer file.close(std.Io.Threaded.global_single_threaded.io());
 
             const content = try file.readToEndAlloc(allocator, MAX_CONFIG_FILE_SIZE);
             defer allocator.free(content);
@@ -1171,7 +1171,7 @@ test "R-01/T-01: safeWriteConfigWithBackup creates backup file" {
     {
         const f = std.fs.cwd().createFile(file_path, .{}) catch return;
         f.writeAll(original) catch {};
-        f.close();
+        f.close(std.Io.Threaded.global_single_threaded.io());
     }
 
     // Write with backup

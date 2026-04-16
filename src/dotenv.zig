@@ -53,7 +53,7 @@ pub fn load(path: []const u8, allocator: Allocator) ![]EnvEntry {
     const file = openFileReadNoFollow(path) catch {
         return try allocator.alloc(EnvEntry, 0);
     };
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
 
     const content = file.readToEndAlloc(allocator, limits.MAX_DOTENV_FILE_SIZE) catch {
         return try allocator.alloc(EnvEntry, 0);
@@ -161,7 +161,7 @@ pub fn loadAndApply(path: []const u8, allocator: Allocator) !EnvMap {
     const file = openFileReadNoFollow(path) catch {
         return map; // Return empty map if file doesn't exist
     };
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
 
     const content = try file.readToEndAlloc(allocator, limits.MAX_DOTENV_FILE_SIZE);
     defer allocator.free(content);

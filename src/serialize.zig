@@ -490,7 +490,7 @@ pub fn writeToFile(comptime T: type, value: T, path: []const u8, allocator: Allo
     defer allocator.free(content);
 
     const file = try createFileNoFollow(path, 0o600, false);
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
 
     try file.writeAll(content);
 }
@@ -547,11 +547,11 @@ pub fn safeWriteToFile(comptime T: type, value: T, path: []const u8, allocator: 
     errdefer std.fs.cwd().deleteFile(temp_path) catch {};
     // P3-R5: Ensure the temp file handle is closed on write/sync failure
     // so the fd is not leaked before the errdefer cleanup deletes the file.
-    errdefer temp_file.close();
+    errdefer temp_file.close(std.Io.Threaded.global_single_threaded.io());
 
     try temp_file.writeAll(content);
     try temp_file.sync(); // Ensure data is flushed to disk
-    temp_file.close();
+    temp_file.close(std.Io.Threaded.global_single_threaded.io());
 
     // Atomically rename temp file to target path
     std.fs.cwd().rename(temp_path, path) catch |err| {
@@ -726,7 +726,7 @@ test "safeWriteToFile atomic write" {
 
     // Verify file was created
     const file = try std.fs.cwd().openFile(test_path, .{});
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
 
     const content = try file.readToEndAlloc(std.testing.allocator, 4096);
     defer std.testing.allocator.free(content);
@@ -839,7 +839,7 @@ test "ADV-05: writeToFileWithBackup rejects symlink source" {
     {
         const f = try std.fs.cwd().createFile(real_path, .{});
         try f.writeAll("{\"value\":\"old\"}");
-        f.close();
+        f.close(std.Io.Threaded.global_single_threaded.io());
     }
     defer std.fs.cwd().deleteFile(real_path) catch {};
 

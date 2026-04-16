@@ -759,7 +759,7 @@ pub fn Loader(comptime T: type) type {
             const file = openFileReadNoFollow(path) catch {
                 return LoadError.FileNotFound;
             };
-            defer file.close();
+            defer file.close(std.Io.Threaded.global_single_threaded.io());
 
             const content = file.readToEndAlloc(self.allocator, limits.MAX_CONFIG_FILE_SIZE) catch {
                 return LoadError.IoError;
@@ -1032,7 +1032,7 @@ pub fn Loader(comptime T: type) type {
             const file = openFileReadNoFollow(path) catch {
                 return LoadError.FileNotFound;
             };
-            defer file.close();
+            defer file.close(std.Io.Threaded.global_single_threaded.io());
 
             const content = file.readToEndAlloc(self.allocator, limits.MAX_DOTENV_FILE_SIZE) catch {
                 return LoadError.IoError;

@@ -257,7 +257,7 @@ fn getFileStat(path: []const u8) ?FileStat {
     }
     // Windows fallback: fstatat is not implemented on Windows
     const file = openFileReadNoFollow(path) catch return null;
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
 
     const stat = file.stat() catch return null;
     return .{
