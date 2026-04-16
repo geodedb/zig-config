@@ -30,7 +30,7 @@
 
 // Zig 0.16.0 compat: StringArrayHashMap was removed
 fn StringArrayHashMap(comptime V: type) type {
-    return std.ArrayHashMap([]const u8, V, struct {
+    return std.array_hash_map.ArrayHashMap([]const u8, V, struct {
         pub fn hash(_: @This(), key: []const u8) u32 {
             return @truncate(std.hash.Wyhash.hash(0, key));
         }
