@@ -43,7 +43,7 @@ pub fn isSymlink(path: []const u8) bool {
         // lacks an equivalent. Accepted risk: the window is narrow and exploitation
         // requires local filesystem access. For high-security deployments, consider
         // placing secret files on a dedicated volume with restricted permissions.
-        const md = fs.cwd().statFile(path) catch return false;
+        const md = std.Io.Dir.cwd().statFile(path) catch return false;
         return md.kind == .sym_link;
     }
     const stat = std.posix.fstatat(std.posix.AT.FDCWD, path, std.posix.AT.SYMLINK_NOFOLLOW) catch {
@@ -108,19 +108,19 @@ pub fn isPathSafeStrict(path: []const u8) bool {
 }
 
 /// Errors returned by no-follow file helpers.
-pub const OpenNoFollowError = error{SymlinkNotAllowed} || std.posix.OpenError || fs.File.OpenError;
+pub const OpenNoFollowError = error{SymlinkNotAllowed} || std.posix.OpenError || std.Io.File.OpenError;
 
 /// Open a file for read-only access without following symlinks when supported.
 /// On Windows, falls back to an explicit symlink check.
 /// Security (SEC-06): On Windows, the stat-then-open pattern used here has a
 /// TOCTOU race window. See isSymlink documentation for details. POSIX uses
 /// O_NOFOLLOW for atomic symlink rejection.
-pub fn openFileReadNoFollow(path: []const u8) OpenNoFollowError!fs.File {
+pub fn openFileReadNoFollow(path: []const u8) OpenNoFollowError!std.Io.File {
     if (builtin.os.tag == .windows) {
         // Security (SEC-06): TOCTOU window between isSymlink check and openFile.
         // See isSymlink for full risk assessment and mitigations.
         if (isSymlink(path)) return error.SymlinkNotAllowed;
-        return fs.cwd().openFile(path, .{});
+        return std.Io.Dir.cwd().openFile(path, .{});
     }
 
     const fd = std.posix.openat(
@@ -132,18 +132,18 @@ pub fn openFileReadNoFollow(path: []const u8) OpenNoFollowError!fs.File {
         error.SymLinkLoop => return error.SymlinkNotAllowed,
         else => return err,
     };
-    return fs.File{ .handle = fd };
+    return std.Io.File{ .handle = fd };
 }
 
 /// Create a file without following symlinks when supported.
 /// When `exclusive` is true, fail if the path already exists.
 /// Security (SEC-06): On Windows, same TOCTOU caveat as openFileReadNoFollow.
-pub fn createFileNoFollow(path: []const u8, mode: std.posix.mode_t, exclusive: bool) OpenNoFollowError!fs.File {
+pub fn createFileNoFollow(path: []const u8, mode: std.posix.mode_t, exclusive: bool) OpenNoFollowError!std.Io.File {
     if (builtin.os.tag == .windows) {
         // Security (SEC-06): TOCTOU window between isSymlink check and createFile.
         // See isSymlink for full risk assessment and mitigations.
         if (isSymlink(path)) return error.SymlinkNotAllowed;
-        return fs.cwd().createFile(path, .{ .mode = mode, .exclusive = exclusive });
+        return std.Io.Dir.cwd().createFile(path, .{ .mode = mode, .exclusive = exclusive });
     }
 
     var flags = std.posix.O{ .ACCMODE = .WRONLY, .CREAT = true, .NOFOLLOW = true, .CLOEXEC = true };
@@ -157,7 +157,7 @@ pub fn createFileNoFollow(path: []const u8, mode: std.posix.mode_t, exclusive: b
         error.SymLinkLoop => return error.SymlinkNotAllowed,
         else => return err,
     };
-    return fs.File{ .handle = fd };
+    return std.Io.File{ .handle = fd };
 }
 
 /// Read a secret from a file
@@ -185,7 +185,7 @@ pub fn readFromFileWithOptions(path: []const u8, allocator: Allocator, options: 
     }
 
     const file = if (options.follow_symlinks)
-        fs.cwd().openFile(path, .{}) catch |err| switch (err) {
+        std.Io.Dir.cwd().openFile(path, .{}) catch |err| switch (err) {
             error.FileNotFound => return SecretError.FileNotFound,
             else => return SecretError.ReadError,
         }
