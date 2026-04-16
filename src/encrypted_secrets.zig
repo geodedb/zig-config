@@ -779,6 +779,9 @@ pub const SecretManager = struct {
                 .timeout_ms = timeout_ms,
                 .io = eio,
             };
+            // daemon (one-shot): process-termination watchdog. Fires once on
+            // child exit to bound the cleanup timeout. Thread-pool would impose
+            // submission overhead on a one-off blocking wait — not worth it.
             watchdog = std.Thread.spawn(.{}, TimeoutCtx.run, .{&timeout_ctx}) catch null;
         }
 
