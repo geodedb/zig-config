@@ -110,7 +110,7 @@ pub fn compareWithOptions(
     new_config: std.StringHashMap([]const u8),
     options: CompareOptions,
 ) !DiffResult {
-    var changes: std.ArrayListUnmanaged(Change) = .{};
+    var changes: std.ArrayListUnmanaged(Change) = .empty;
     errdefer changes.deinit(allocator);
 
     var added_count: usize = 0;
@@ -294,64 +294,72 @@ fn trimmedEqual(a: []const u8, b: []const u8) bool {
 
 /// Generate a human-readable diff report
 pub fn formatDiff(allocator: Allocator, result: DiffResult) ![]u8 {
-    var output: std.ArrayListUnmanaged(u8) = .{};
+    var output: std.ArrayListUnmanaged(u8) = .empty;
     errdefer output.deinit(allocator);
 
-    const writer = output.writer(allocator);
-
-    try writer.print("Configuration Diff Report\n", .{});
-    try writer.print("========================\n\n", .{});
+    try output.appendSlice(allocator, "Configuration Diff Report\n");
+    try output.appendSlice(allocator, "========================\n\n");
 
     if (!result.hasChanges()) {
-        try writer.print("No changes detected.\n", .{});
+        try output.appendSlice(allocator, "No changes detected.\n");
     } else {
-        try writer.print("Summary: {d} added, {d} removed, {d} modified\n\n", .{
+        const summary = try std.fmt.allocPrint(allocator, "Summary: {d} added, {d} removed, {d} modified\n\n", .{
             result.added_count,
             result.removed_count,
             result.modified_count,
         });
+        defer allocator.free(summary);
+        try output.appendSlice(allocator, summary);
 
         // Single pass: collect formatted lines into per-type buffers
-        var added_buf: std.ArrayListUnmanaged(u8) = .{};
+        var added_buf: std.ArrayListUnmanaged(u8) = .empty;
         defer added_buf.deinit(allocator);
-        var removed_buf: std.ArrayListUnmanaged(u8) = .{};
+        var removed_buf: std.ArrayListUnmanaged(u8) = .empty;
         defer removed_buf.deinit(allocator);
-        var modified_buf: std.ArrayListUnmanaged(u8) = .{};
+        var modified_buf: std.ArrayListUnmanaged(u8) = .empty;
         defer modified_buf.deinit(allocator);
-
-        const added_writer = added_buf.writer(allocator);
-        const removed_writer = removed_buf.writer(allocator);
-        const modified_writer = modified_buf.writer(allocator);
 
         for (result.changes) |change| {
             switch (change.change_type) {
-                .added => try added_writer.print("  + {s} = {s}\n", .{ change.key, change.new_value orelse "" }),
-                .removed => try removed_writer.print("  - {s} = {s}\n", .{ change.key, change.old_value orelse "" }),
-                .modified => try modified_writer.print("  ~ {s}: {s} -> {s}\n", .{
-                    change.key,
-                    change.old_value orelse "",
-                    change.new_value orelse "",
-                }),
+                .added => {
+                    const line = try std.fmt.allocPrint(allocator, "  + {s} = {s}\n", .{ change.key, change.new_value orelse "" });
+                    defer allocator.free(line);
+                    try added_buf.appendSlice(allocator, line);
+                },
+                .removed => {
+                    const line = try std.fmt.allocPrint(allocator, "  - {s} = {s}\n", .{ change.key, change.old_value orelse "" });
+                    defer allocator.free(line);
+                    try removed_buf.appendSlice(allocator, line);
+                },
+                .modified => {
+                    const line = try std.fmt.allocPrint(allocator, "  ~ {s}: {s} -> {s}\n", .{
+                        change.key,
+                        change.old_value orelse "",
+                        change.new_value orelse "",
+                    });
+                    defer allocator.free(line);
+                    try modified_buf.appendSlice(allocator, line);
+                },
                 .unchanged => {},
             }
         }
 
         // Write grouped sections in order
         if (added_buf.items.len > 0) {
-            try writer.print("Added:\n", .{});
-            try writer.writeAll(added_buf.items);
-            try writer.print("\n", .{});
+            try output.appendSlice(allocator, "Added:\n");
+            try output.appendSlice(allocator, added_buf.items);
+            try output.appendSlice(allocator, "\n");
         }
 
         if (removed_buf.items.len > 0) {
-            try writer.print("Removed:\n", .{});
-            try writer.writeAll(removed_buf.items);
-            try writer.print("\n", .{});
+            try output.appendSlice(allocator, "Removed:\n");
+            try output.appendSlice(allocator, removed_buf.items);
+            try output.appendSlice(allocator, "\n");
         }
 
         if (modified_buf.items.len > 0) {
-            try writer.print("Modified:\n", .{});
-            try writer.writeAll(modified_buf.items);
+            try output.appendSlice(allocator, "Modified:\n");
+            try output.appendSlice(allocator, modified_buf.items);
         }
     }
 
@@ -391,7 +399,7 @@ pub fn intersection(
     config1: std.StringHashMap([]const u8),
     config2: std.StringHashMap([]const u8),
 ) ![]const []const u8 {
-    var result: std.ArrayListUnmanaged([]const u8) = .{};
+    var result: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer result.deinit(allocator);
 
     var iter = config1.keyIterator();
@@ -410,7 +418,7 @@ pub fn difference(
     config1: std.StringHashMap([]const u8),
     config2: std.StringHashMap([]const u8),
 ) ![]const []const u8 {
-    var result: std.ArrayListUnmanaged([]const u8) = .{};
+    var result: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer result.deinit(allocator);
 
     var iter = config1.keyIterator();

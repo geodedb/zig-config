@@ -8,6 +8,20 @@ const std = @import("std");
 const builtin = @import("builtin");
 const remote = @import("remote.zig");
 const limits = @import("limits.zig");
+const posix = std.posix;
+
+/// Zig 0.16.0 compat: std.posix.socket was removed; create a TCP socket via
+/// the raw syscall and convert the result to an fd_t.
+fn createTcpSocket() !posix.socket_t {
+    const rc = posix.system.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
+    const err = posix.errno(rc);
+    if (err != .SUCCESS) return posix.unexpectedErrno(err);
+    return @intCast(rc);
+}
+
+fn closeSocket(fd: posix.socket_t) void {
+    _ = posix.system.close(fd);
+}
 
 // Re-export types used in tests so test bodies stay unchanged.
 const Etcd = remote.Etcd;
@@ -1549,8 +1563,8 @@ test "SEC-02: setSocketTimeout sets SO_RCVTIMEO on TCP socket" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
     // Create a TCP socket
-    const sockfd = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
-    defer std.posix.close(sockfd);
+    const sockfd = try createTcpSocket();
+    defer closeSocket(sockfd);
 
     // Set 3-second timeout
     try setSocketTimeout(sockfd, 3000);
@@ -1567,8 +1581,8 @@ test "SEC-02: setSocketTimeout sets SO_RCVTIMEO on TCP socket" {
 test "SEC-02: setSocketTimeout sets sub-second timeout correctly" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    const sockfd = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
-    defer std.posix.close(sockfd);
+    const sockfd = try createTcpSocket();
+    defer closeSocket(sockfd);
 
     // Set 1500ms = 1 sec + 500000 usec
     try setSocketTimeout(sockfd, 1500);
@@ -1584,8 +1598,8 @@ test "SEC-02: setSocketTimeout sets sub-second timeout correctly" {
 test "SEC-02: setSocketTimeout with zero is a no-op" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    const sockfd = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
-    defer std.posix.close(sockfd);
+    const sockfd = try createTcpSocket();
+    defer closeSocket(sockfd);
 
     // Zero should be a no-op (no timeout set)
     try setSocketTimeout(sockfd, 0);

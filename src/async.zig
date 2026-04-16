@@ -31,9 +31,26 @@
 
 const std = @import("std");
 const mem = std.mem;
-const fs = std.fs;
 const Thread = std.Thread;
 const Allocator = mem.Allocator;
+
+/// Zig 0.16.0 compat: std.Thread.Mutex was removed; wrap std.Io.Mutex
+/// with uncancelable lock so callers keep the zero-arg lock()/unlock() API.
+const Mutex = struct {
+    inner: std.Io.Mutex = .init,
+
+    fn io() std.Io {
+        return std.Io.Threaded.global_single_threaded.io();
+    }
+
+    pub fn lock(self: *Mutex) void {
+        self.inner.lockUncancelable(io());
+    }
+
+    pub fn unlock(self: *Mutex) void {
+        self.inner.unlock(io());
+    }
+};
 
 const loader_mod = @import("loader.zig");
 const Format = loader_mod.Format;
@@ -85,7 +102,7 @@ pub fn AsyncLoader(comptime T: type) type {
         files: std.ArrayListUnmanaged(AsyncFile),
         thread: ?Thread,
         result: AsyncResult(T),
-        mutex: Thread.Mutex,
+        mutex: Mutex,
         arena: std.heap.ArenaAllocator,
 
         const Self = @This();
@@ -93,7 +110,7 @@ pub fn AsyncLoader(comptime T: type) type {
         pub fn init(allocator: Allocator) Self {
             return .{
                 .allocator = allocator,
-                .files = .{},
+                .files = .empty,
                 .thread = null,
                 .result = .{
                     .config = null,
@@ -242,12 +259,13 @@ pub fn AsyncLoader(comptime T: type) type {
                 return error.PathTraversalDetected;
             }
 
+            const aio = std.Io.Threaded.global_single_threaded.io();
             const file = openFileReadNoFollow(path) catch {
                 return; // File not found is ok for optional configs
             };
-            defer file.close(std.Io.Threaded.global_single_threaded.io());
+            defer file.close(aio);
 
-            const content = try file.readToEndAlloc(loader.allocator, limits.MAX_CONFIG_FILE_SIZE);
+            const content = try secret.readFileToEnd(file, loader.allocator, limits.MAX_CONFIG_FILE_SIZE);
             defer loader.allocator.free(content);
 
             // Parse and apply to loader
@@ -374,13 +392,14 @@ pub fn loadParallel(comptime T: type, allocator: Allocator, paths: []const []con
                         return;
                     }
 
+                    const cio = std.Io.Threaded.global_single_threaded.io();
                     const file = openFileReadNoFollow(c.path) catch |e| {
                         c.err = e;
                         return;
                     };
-                    defer file.close(std.Io.Threaded.global_single_threaded.io());
+                    defer file.close(cio);
 
-                    c.result = file.readToEndAlloc(c.allocator, limits.MAX_CONFIG_FILE_SIZE) catch |e| {
+                    c.result = secret.readFileToEnd(file, c.allocator, limits.MAX_CONFIG_FILE_SIZE) catch |e| {
                         c.err = e;
                         return;
                     };
@@ -559,9 +578,10 @@ test "AsyncLoaderWithCallback invokes callback on completion (Q-NEW-3)" {
     defer tmp_dir.cleanup();
 
     const json_content = "{\"host\": \"integration.test\", \"port\": 9090}";
-    tmp_dir.dir.writeFile(.{ .sub_path = "config.json", .data = json_content }) catch return;
+    const tst_io = std.Io.Threaded.global_single_threaded.io();
+    tmp_dir.dir.writeFile(tst_io, .{ .sub_path = "config.json", .data = json_content }) catch return;
 
-    const tmp_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, "config.json") catch return;
+    const tmp_path = tmp_dir.dir.realPathFileAlloc(tst_io, "config.json", std.testing.allocator) catch return;
     defer std.testing.allocator.free(tmp_path);
 
     // Shared state for the callback -- use a pointer so the callback can

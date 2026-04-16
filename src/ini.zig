@@ -118,7 +118,7 @@ pub const IniDocument = struct {
 
     /// Get all section names
     pub fn getSectionNames(self: *const IniDocument) ![]const []const u8 {
-        var names: std.ArrayListUnmanaged([]const u8) = .{};
+        var names: std.ArrayListUnmanaged([]const u8) = .empty;
         errdefer names.deinit(self.allocator);
 
         var iter = self.sections.keyIterator();
@@ -202,9 +202,10 @@ pub fn parseFile(allocator: Allocator, path: []const u8) !IniDocument {
         error.SymlinkNotAllowed => return error.SymlinkNotAllowed,
         else => return err,
     };
-    defer file.close(std.Io.Threaded.global_single_threaded.io());
+    const ini_io = std.Io.Threaded.global_single_threaded.io();
+    defer file.close(ini_io);
 
-    const content = try file.readToEndAlloc(allocator, limits.MAX_CONFIG_FILE_SIZE);
+    const content = try secret.readFileToEnd(file, allocator, limits.MAX_CONFIG_FILE_SIZE);
     defer allocator.free(content);
 
     return parse(allocator, content);

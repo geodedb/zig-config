@@ -14,7 +14,6 @@
 
 const std = @import("std");
 const mem = std.mem;
-const fs = std.fs;
 const builtin = @import("builtin");
 const environ = @import("environ.zig");
 

@@ -32,7 +32,6 @@
 
 const std = @import("std");
 const mem = std.mem;
-const fs = std.fs;
 const Allocator = mem.Allocator;
 
 const xdg = @import("xdg.zig");
@@ -175,7 +174,7 @@ pub fn Loader(comptime T: type) type {
                 .overrides = std.StringHashMap([]const u8).init(allocator),
                 .runtime_defaults = std.StringHashMap([]const u8).init(allocator),
                 .arena = std.heap.ArenaAllocator.init(allocator),
-                .search_paths = .{},
+                .search_paths = .empty,
             };
         }
 
@@ -316,7 +315,7 @@ pub fn Loader(comptime T: type) type {
         /// Get all keys that have been set (Viper's AllKeys)
         /// Returns a slice of all configuration keys
         pub fn allKeys(self: *const Self) ![]const []const u8 {
-            var keys: std.ArrayListUnmanaged([]const u8) = .{};
+            var keys: std.ArrayListUnmanaged([]const u8) = .empty;
             errdefer keys.deinit(self.allocator);
             // INFO-5: Pre-allocate capacity since tracker value count is known
             try keys.ensureTotalCapacity(self.allocator, @intCast(self.tracker.values.count()));
@@ -443,7 +442,7 @@ pub fn Loader(comptime T: type) type {
                 heap_path = h;
                 break :blk h;
             };
-            if (fs.cwd().access(full_path, .{})) {
+            if (std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), full_path, .{})) {
                 return self.arena.allocator().dupe(u8, full_path) catch null;
             } else |_| {}
             return null;
@@ -756,12 +755,13 @@ pub fn Loader(comptime T: type) type {
             // Security: Validate path does not contain traversal sequences (CWE-22, #107)
             if (!secret.isPathSafe(path)) return LoadError.FileNotFound;
 
+            const ldr_io = std.Io.Threaded.global_single_threaded.io();
             const file = openFileReadNoFollow(path) catch {
                 return LoadError.FileNotFound;
             };
-            defer file.close(std.Io.Threaded.global_single_threaded.io());
+            defer file.close(ldr_io);
 
-            const content = file.readToEndAlloc(self.allocator, limits.MAX_CONFIG_FILE_SIZE) catch {
+            const content = secret.readFileToEnd(file, self.allocator, limits.MAX_CONFIG_FILE_SIZE) catch {
                 return LoadError.IoError;
             };
             defer self.allocator.free(content);
@@ -1029,12 +1029,13 @@ pub fn Loader(comptime T: type) type {
             if (!secret.isPathSafe(path)) return;
 
             // Security: Use openFileReadNoFollow to prevent symlink attacks (CWE-59, #108)
+            const de_io = std.Io.Threaded.global_single_threaded.io();
             const file = openFileReadNoFollow(path) catch {
                 return LoadError.FileNotFound;
             };
-            defer file.close(std.Io.Threaded.global_single_threaded.io());
+            defer file.close(de_io);
 
-            const content = file.readToEndAlloc(self.allocator, limits.MAX_DOTENV_FILE_SIZE) catch {
+            const content = secret.readFileToEnd(file, self.allocator, limits.MAX_DOTENV_FILE_SIZE) catch {
                 return LoadError.IoError;
             };
             defer self.allocator.free(content);
@@ -1339,7 +1340,7 @@ pub fn getBaseName(filename: []const u8) []const u8 {
 
 /// Detect format from file content for extensionless files (#44)
 pub fn detectFormatFromContent(content: []const u8) Format {
-    const trimmed = mem.trimLeft(u8, content, " \t\r\n");
+    const trimmed = mem.trimStart(u8, content, " \t\r\n");
     if (trimmed.len == 0) return .toml;
 
     // JSON starts with { or [
@@ -1360,7 +1361,7 @@ pub fn detectFormatFromContent(content: []const u8) Format {
             {
                 // Check if next non-whitespace after ] is a newline (INI style)
                 const after_bracket = trimmed[end + 1 ..];
-                const after_trimmed = mem.trimLeft(u8, after_bracket, " \t");
+                const after_trimmed = mem.trimStart(u8, after_bracket, " \t");
                 if (after_trimmed.len == 0 or after_trimmed[0] == '\n' or after_trimmed[0] == '\r') {
                     return .ini;
                 }

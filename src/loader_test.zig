@@ -721,9 +721,9 @@ test "loadDotEnv normalizes keys when case_insensitive is true (GAP-0026)" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    tmp_dir.dir.writeFile(.{ .sub_path = ".env", .data = content }) catch return;
+    tmp_dir.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = ".env", .data = content }) catch return;
 
-    const tmp_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, ".env") catch return;
+    const tmp_path = tmp_dir.dir.realPathFileAlloc(std.Io.Threaded.global_single_threaded.io(), ".env", std.testing.allocator) catch return;
     defer std.testing.allocator.free(tmp_path);
 
     try ldr.loadDotEnv(tmp_path, .project);
@@ -756,9 +756,9 @@ test "loadDotEnv handles export prefix via dotenv delegation (QUAL-12)" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    tmp_dir.dir.writeFile(.{ .sub_path = ".env", .data = content }) catch return;
+    tmp_dir.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = ".env", .data = content }) catch return;
 
-    const tmp_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, ".env") catch return;
+    const tmp_path = tmp_dir.dir.realPathFileAlloc(std.Io.Threaded.global_single_threaded.io(), ".env", std.testing.allocator) catch return;
     defer std.testing.allocator.free(tmp_path);
 
     try ldr.loadDotEnv(tmp_path, .project);
@@ -784,9 +784,9 @@ test "loadDotEnv handles whitespace around equals via dotenv delegation (QUAL-12
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    tmp_dir.dir.writeFile(.{ .sub_path = ".env", .data = content }) catch return;
+    tmp_dir.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = ".env", .data = content }) catch return;
 
-    const tmp_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, ".env") catch return;
+    const tmp_path = tmp_dir.dir.realPathFileAlloc(std.Io.Threaded.global_single_threaded.io(), ".env", std.testing.allocator) catch return;
     defer std.testing.allocator.free(tmp_path);
 
     try ldr.loadDotEnv(tmp_path, .project);
@@ -937,8 +937,8 @@ test "GAP-0067: setFieldFromEnvKey matches uppercase env keys to lowercase field
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    tmp_dir.dir.writeFile(.{ .sub_path = ".env", .data = "HOST=env-host\nNAME=env-name\n" }) catch return;
-    const tmp_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, ".env") catch return;
+    tmp_dir.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = ".env", .data = "HOST=env-host\nNAME=env-name\n" }) catch return;
+    const tmp_path = tmp_dir.dir.realPathFileAlloc(std.Io.Threaded.global_single_threaded.io(), ".env", std.testing.allocator) catch return;
     defer std.testing.allocator.free(tmp_path);
 
     try ldr.loadDotEnv(tmp_path, .project);
@@ -960,8 +960,8 @@ test "GAP-0067: setFieldFromEnvKey matches mixed-case env keys" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    tmp_dir.dir.writeFile(.{ .sub_path = ".env", .data = "MYHOST=mixed-case-value\n" }) catch return;
-    const tmp_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, ".env") catch return;
+    tmp_dir.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = ".env", .data = "MYHOST=mixed-case-value\n" }) catch return;
+    const tmp_path = tmp_dir.dir.realPathFileAlloc(std.Io.Threaded.global_single_threaded.io(), ".env", std.testing.allocator) catch return;
     defer std.testing.allocator.free(tmp_path);
 
     try ldr.loadDotEnv(tmp_path, .project);

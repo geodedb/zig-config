@@ -8,7 +8,6 @@
 
 const std = @import("std");
 const mem = std.mem;
-const fs = std.fs;
 const Allocator = mem.Allocator;
 const environ = @import("environ.zig");
 const secret = @import("secret.zig");
@@ -50,12 +49,13 @@ pub fn load(path: []const u8, allocator: Allocator) ![]EnvEntry {
         return try allocator.alloc(EnvEntry, 0);
     }
 
+    const de_io = std.Io.Threaded.global_single_threaded.io();
     const file = openFileReadNoFollow(path) catch {
         return try allocator.alloc(EnvEntry, 0);
     };
-    defer file.close(std.Io.Threaded.global_single_threaded.io());
+    defer file.close(de_io);
 
-    const content = file.readToEndAlloc(allocator, limits.MAX_DOTENV_FILE_SIZE) catch {
+    const content = secret.readFileToEnd(file, allocator, limits.MAX_DOTENV_FILE_SIZE) catch {
         return try allocator.alloc(EnvEntry, 0);
     };
     defer allocator.free(content);
@@ -158,12 +158,13 @@ pub fn loadAndApply(path: []const u8, allocator: Allocator) !EnvMap {
         return map; // Return empty map for security violations
     }
 
+    const lm_io = std.Io.Threaded.global_single_threaded.io();
     const file = openFileReadNoFollow(path) catch {
         return map; // Return empty map if file doesn't exist
     };
-    defer file.close(std.Io.Threaded.global_single_threaded.io());
+    defer file.close(lm_io);
 
-    const content = try file.readToEndAlloc(allocator, limits.MAX_DOTENV_FILE_SIZE);
+    const content = try secret.readFileToEnd(file, allocator, limits.MAX_DOTENV_FILE_SIZE);
     defer allocator.free(content);
 
     try applyContent(&map, content);
@@ -481,14 +482,16 @@ test "dotenv: load returns owned entries that survive content deallocation" {
 
     // Write a .env file into the temp directory
     const env_content = "MY_KEY=my_value\nexport OTHER_KEY=\"quoted_value\"\n";
-    tmp_dir.dir.writeFile(.{
+    const tst_io = std.Io.Threaded.global_single_threaded.io();
+    tmp_dir.dir.writeFile(tst_io, .{
         .sub_path = "test_load.env",
         .data = env_content,
     }) catch unreachable;
 
     // Obtain the real path for load()
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const real_path = tmp_dir.dir.realpath("test_load.env", &path_buf) catch unreachable;
+    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const real_path_len = tmp_dir.dir.realPathFile(tst_io, "test_load.env", &path_buf) catch unreachable;
+    const real_path = path_buf[0..real_path_len];
 
     const entries = try load(real_path, std.testing.allocator);
     defer freeEntries(entries, std.testing.allocator);
@@ -507,13 +510,14 @@ test "dotenv: freeEntries releases all owned memory" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    tmp_dir.dir.writeFile(.{
+    const tst_io2 = std.Io.Threaded.global_single_threaded.io();
+    tmp_dir.dir.writeFile(tst_io2, .{
         .sub_path = "test_free.env",
         .data = "A=1\nB=2\nC=3\n",
     }) catch unreachable;
 
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const real_path = tmp_dir.dir.realpath("test_free.env", &path_buf) catch unreachable;
+    const real_path = tmp_dir.dir.realPathFileAlloc(tst_io2, "test_free.env", std.testing.allocator) catch unreachable;
+    defer std.testing.allocator.free(real_path);
 
     const entries = try load(real_path, std.testing.allocator);
     // If freeEntries is wrong, the testing allocator will flag a leak.

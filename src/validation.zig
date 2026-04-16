@@ -125,7 +125,7 @@ pub const Validator = struct {
     pub fn init(allocator: Allocator) Validator {
         return .{
             .allocator = allocator,
-            .rules = .{},
+            .rules = .empty,
             .arena = std.heap.ArenaAllocator.init(allocator),
         };
     }
@@ -259,7 +259,7 @@ pub const Validator = struct {
 
     /// Validate all fields in a map
     pub fn validateAll(self: *const Validator, values: std.StringHashMap([]const u8)) ![]ValidationResult {
-        var results: std.ArrayListUnmanaged(ValidationResult) = .{};
+        var results: std.ArrayListUnmanaged(ValidationResult) = .empty;
         errdefer results.deinit(self.allocator);
 
         // Check each rule
@@ -853,7 +853,7 @@ pub fn email(value: []const u8) ValidationError!void {
 
 /// Validate file path exists
 pub fn pathExists(path: []const u8) ValidationError!void {
-    std.fs.cwd().access(path, .{}) catch {
+    std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), path, .{}) catch {
         return ValidationError.CustomFailed;
     };
 }

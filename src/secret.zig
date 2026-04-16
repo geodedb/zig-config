@@ -8,9 +8,17 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const mem = std.mem;
-const fs = std.fs;
 const Allocator = mem.Allocator;
 const environ = @import("environ.zig");
+
+/// Zig 0.16.0 compat: File.readToEndAlloc was removed; read via a streaming
+/// reader instead. Returns an owned slice allocated with `allocator`.
+pub fn readFileToEnd(file: std.Io.File, allocator: Allocator, max_size: usize) ![]u8 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var read_buf: [4096]u8 = undefined;
+    var reader = file.readerStreaming(io, &read_buf);
+    return reader.interface.allocRemaining(allocator, std.Io.Limit.limited(max_size));
+}
 
 /// Secret loading errors
 pub const SecretError = error{
@@ -34,8 +42,10 @@ pub const SecretError = error{
 /// Security: Used to prevent symlink following attacks (CWE-59, #69)
 /// Note: Uses fstatat with SYMLINK_NOFOLLOW to detect symlinks without following them.
 pub fn isSymlink(path: []const u8) bool {
+    // Zig 0.16.0: fstatat was removed from posix; use Dir.statFile with
+    // follow_symlinks=false which maps to a single fstatat syscall on POSIX.
+    const io = std.Io.Threaded.global_single_threaded.io();
     if (comptime builtin.os.tag == .windows) {
-        // Windows: use std.fs to check for symlinks.
         // Security (SEC-06): This stat-then-open pattern has a TOCTOU race window
         // on Windows. Between the stat check here and the subsequent file open in
         // openFileReadNoFollow/createFileNoFollow, the file could be replaced with
@@ -43,13 +53,11 @@ pub fn isSymlink(path: []const u8) bool {
         // lacks an equivalent. Accepted risk: the window is narrow and exploitation
         // requires local filesystem access. For high-security deployments, consider
         // placing secret files on a dedicated volume with restricted permissions.
-        const md = std.Io.Dir.cwd().statFile(path) catch return false;
+        const md = std.Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = false }) catch return false;
         return md.kind == .sym_link;
     }
-    const stat = std.posix.fstatat(std.posix.AT.FDCWD, path, std.posix.AT.SYMLINK_NOFOLLOW) catch {
-        return false; // If we can't stat, assume not a symlink (file may not exist)
-    };
-    return stat.mode & std.posix.S.IFMT == std.posix.S.IFLNK;
+    const md = std.Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = false }) catch return false;
+    return md.kind == .sym_link;
 }
 
 /// Validate a path does not contain path traversal sequences.
@@ -120,7 +128,8 @@ pub fn openFileReadNoFollow(path: []const u8) OpenNoFollowError!std.Io.File {
         // Security (SEC-06): TOCTOU window between isSymlink check and openFile.
         // See isSymlink for full risk assessment and mitigations.
         if (isSymlink(path)) return error.SymlinkNotAllowed;
-        return std.Io.Dir.cwd().openFile(path, .{});
+        const io = std.Io.Threaded.global_single_threaded.io();
+        return std.Io.Dir.cwd().openFile(io, path, .{});
     }
 
     const fd = std.posix.openat(
@@ -132,7 +141,7 @@ pub fn openFileReadNoFollow(path: []const u8) OpenNoFollowError!std.Io.File {
         error.SymLinkLoop => return error.SymlinkNotAllowed,
         else => return err,
     };
-    return std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
+    return .{ .handle = fd, .flags = .{ .nonblocking = false } };
 }
 
 /// Create a file without following symlinks when supported.
@@ -143,7 +152,8 @@ pub fn createFileNoFollow(path: []const u8, mode: std.posix.mode_t, exclusive: b
         // Security (SEC-06): TOCTOU window between isSymlink check and createFile.
         // See isSymlink for full risk assessment and mitigations.
         if (isSymlink(path)) return error.SymlinkNotAllowed;
-        return std.Io.Dir.cwd().createFile(path, .{ .mode = mode, .exclusive = exclusive });
+        const io = std.Io.Threaded.global_single_threaded.io();
+        return std.Io.Dir.cwd().createFile(io, path, .{ .mode = mode, .exclusive = exclusive });
     }
 
     var flags = std.posix.O{ .ACCMODE = .WRONLY, .CREAT = true, .NOFOLLOW = true, .CLOEXEC = true };
@@ -157,7 +167,7 @@ pub fn createFileNoFollow(path: []const u8, mode: std.posix.mode_t, exclusive: b
         error.SymLinkLoop => return error.SymlinkNotAllowed,
         else => return err,
     };
-    return std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
+    return .{ .handle = fd, .flags = .{ .nonblocking = false } };
 }
 
 /// Read a secret from a file
@@ -184,8 +194,9 @@ pub fn readFromFileWithOptions(path: []const u8, allocator: Allocator, options: 
         }
     }
 
+    const io = std.Io.Threaded.global_single_threaded.io();
     const file = if (options.follow_symlinks)
-        std.Io.Dir.cwd().openFile(path, .{}) catch |err| switch (err) {
+        std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
             error.FileNotFound => return SecretError.FileNotFound,
             else => return SecretError.ReadError,
         }
@@ -195,9 +206,10 @@ pub fn readFromFileWithOptions(path: []const u8, allocator: Allocator, options: 
             error.FileNotFound => return SecretError.FileNotFound,
             else => return SecretError.ReadError,
         };
-    defer file.close(std.Io.Threaded.global_single_threaded.io());
+    const rfio = std.Io.Threaded.global_single_threaded.io();
+    defer file.close(rfio);
 
-    const content = file.readToEndAlloc(allocator, 64 * 1024) catch {
+    const content = readFileToEnd(file, allocator, 64 * 1024) catch {
         return SecretError.ReadError;
     };
 
@@ -221,15 +233,21 @@ pub fn readFromFileWithOptions(path: []const u8, allocator: Allocator, options: 
 
 /// Read a secret from stdin
 pub fn readFromStdin(allocator: Allocator) SecretError![]const u8 {
-    const stdin = std.io.getStdIn();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const stdin = std.Io.File.stdin();
 
     // Check if stdin is a pipe or has data
     if (stdin.isTty()) {
         // Interactive mode - prompt for input
-        const stderr = std.io.getStdErr().writer();
-        stderr.print("Enter secret: ", .{}) catch {};
+        const stderr_file = std.Io.File.stderr();
+        var stderr_buf: [256]u8 = undefined;
+        var stderr_writer = stderr_file.writer(io, &stderr_buf);
+        stderr_writer.print("Enter secret: ", .{}) catch {};
 
-        const content = stdin.reader().readUntilDelimiterAlloc(allocator, '\n', 64 * 1024) catch {
+        // Read a single line from stdin
+        var read_buf: [4096]u8 = undefined;
+        var reader = stdin.readerStreaming(io, &read_buf);
+        const content = reader.readAlloc(allocator, 64 * 1024) catch {
             return SecretError.StdinNotAvailable;
         };
 
@@ -248,7 +266,7 @@ pub fn readFromStdin(allocator: Allocator) SecretError![]const u8 {
         return result;
     } else {
         // Pipe mode - read all
-        const content = stdin.readToEndAlloc(allocator, 64 * 1024) catch {
+        const content = readFileToEnd(stdin, allocator, 64 * 1024) catch {
             return SecretError.StdinNotAvailable;
         };
 
@@ -381,12 +399,13 @@ test "readFromFile returned slice can be freed without leak (mem.trim fix)" {
     defer tmp_dir.cleanup();
 
     const content_with_newlines = "my-secret-value\n\r\n";
-    const file = try tmp_dir.dir.createFile("secret.txt", .{});
-    try file.writeAll(content_with_newlines);
-    file.close(std.Io.Threaded.global_single_threaded.io());
+    const tst_io = std.Io.Threaded.global_single_threaded.io();
+    const file = try tmp_dir.dir.createFile(tst_io, "secret.txt", .{});
+    try file.writeStreamingAll(tst_io, content_with_newlines);
+    file.close(tst_io);
 
     // Use the real path so readFromFileWithOptions can open it
-    const path = try tmp_dir.dir.realpathAlloc(std.testing.allocator, "secret.txt");
+    const path = try tmp_dir.dir.realPathFileAlloc(tst_io, "secret.txt", std.testing.allocator);
     defer std.testing.allocator.free(path);
 
     // Read the secret -- std.testing.allocator will detect leaks if the
@@ -406,11 +425,12 @@ test "readFromFile trims and returns correct content for file without trailing n
     defer tmp_dir.cleanup();
 
     const content_no_newlines = "exact-secret";
-    const file = try tmp_dir.dir.createFile("secret2.txt", .{});
-    try file.writeAll(content_no_newlines);
-    file.close(std.Io.Threaded.global_single_threaded.io());
+    const tst_io = std.Io.Threaded.global_single_threaded.io();
+    const file = try tmp_dir.dir.createFile(tst_io, "secret2.txt", .{});
+    try file.writeStreamingAll(tst_io, content_no_newlines);
+    file.close(tst_io);
 
-    const path = try tmp_dir.dir.realpathAlloc(std.testing.allocator, "secret2.txt");
+    const path = try tmp_dir.dir.realPathFileAlloc(tst_io, "secret2.txt", std.testing.allocator);
     defer std.testing.allocator.free(path);
 
     const secret = try readFromFileWithOptions(path, std.testing.allocator, .{

@@ -23,10 +23,37 @@
 
 const std = @import("std");
 const mem = std.mem;
+const builtin = @import("builtin");
 const Allocator = mem.Allocator;
 const environ = @import("environ.zig");
 const secret = @import("secret.zig");
 const process = std.process;
+
+/// Zig 0.16.0 compat: std.Thread.sleep was removed; use posix nanosleep directly.
+fn nanosleep(nanoseconds: u64) void {
+    if (builtin.os.tag == .windows) {
+        const ms: u32 = @intCast(@min(nanoseconds / std.time.ns_per_ms, @as(u64, std.math.maxInt(u32))));
+        std.os.windows.kernel32.Sleep(ms);
+        return;
+    }
+    const ns_per_s = std.time.ns_per_s;
+    var req: std.posix.timespec = .{
+        .sec = @intCast(nanoseconds / ns_per_s),
+        .nsec = @intCast(nanoseconds % ns_per_s),
+    };
+    var rem: std.posix.timespec = undefined;
+    while (true) {
+        const rc = std.posix.system.nanosleep(&req, &rem);
+        switch (std.posix.errno(rc)) {
+            .SUCCESS => return,
+            .INTR => {
+                req = rem;
+                continue;
+            },
+            else => return,
+        }
+    }
+}
 
 const DEFAULT_COMMAND_TIMEOUT_MS: u32 = 30_000;
 
@@ -84,7 +111,7 @@ pub const SensitiveString = struct {
     /// Conforms to the Zig 0.15 std.fmt {f} protocol so that
     /// `std.fmt.bufPrint(&buf, "{f}", .{sensitive})` produces "[REDACTED]".
     /// Security: Prevents credential exposure in logs (CWE-532).
-    pub fn format(self: Self, w: *std.io.Writer) !void {
+    pub fn format(self: Self, w: *std.Io.Writer) !void {
         _ = self;
         try w.writeAll("[REDACTED]");
     }
@@ -212,11 +239,12 @@ pub fn isValidVaultPath(path: []const u8) bool {
 
 fn findExecutableInPath(allocator: Allocator, name: []const u8) ?[]u8 {
     const path_env = environ.getenv("PATH") orelse return null;
-    var it = mem.splitScalar(u8, path_env, std.fs.path.delimiter);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var it = mem.splitScalar(u8, path_env, std.Io.Dir.path.delimiter);
     while (it.next()) |dir| {
         if (dir.len == 0) continue;
-        const full = std.fs.path.join(allocator, &.{ dir, name }) catch continue;
-        if (std.fs.accessAbsolute(full, .{})) {
+        const full = std.Io.Dir.path.join(allocator, &.{ dir, name }) catch continue;
+        if (std.Io.Dir.accessAbsolute(io, full, .{})) {
             return full;
         } else |_| {
             allocator.free(full);
@@ -259,12 +287,12 @@ pub fn resolveOpPath(allocator: Allocator, path: []const u8) SecretError![]u8 {
 /// Security: Prevents undefined behavior from accessing wrong union field (#103).
 pub fn handleTermination(term: process.Child.Term) SecretError!void {
     switch (term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) return SecretError.CommandFailed;
         },
-        .Signal => return SecretError.CommandFailed,
-        .Stopped => return SecretError.CommandFailed,
-        .Unknown => return SecretError.CommandFailed,
+        .signal => return SecretError.CommandFailed,
+        .stopped => return SecretError.CommandFailed,
+        .unknown => return SecretError.CommandFailed,
     }
 }
 
@@ -635,13 +663,13 @@ pub const SecretManager = struct {
     /// Build a minimal environment for Vault child processes (#117).
     /// Only includes required Vault variables plus PATH and HOME.
     /// Security: Prevents leaking the full process environment to child processes.
-    fn buildVaultEnvMap(allocator: Allocator, config: VaultConfig) SecretError!process.EnvMap {
+    fn buildVaultEnvMap(allocator: Allocator, config: VaultConfig) SecretError!process.Environ.Map {
         return buildMinimalVaultEnvMap(allocator, config);
     }
 
     /// Builds a minimal Vault env map with only required variables.
-    pub fn buildMinimalVaultEnvMap(allocator: Allocator, config: VaultConfig) SecretError!process.EnvMap {
-        var env_map = process.EnvMap.init(allocator);
+    pub fn buildMinimalVaultEnvMap(allocator: Allocator, config: VaultConfig) SecretError!process.Environ.Map {
+        var env_map = process.Environ.Map.init(allocator);
         errdefer env_map.deinit();
 
         // Required system variables for binary resolution and tool operation
@@ -669,13 +697,13 @@ pub const SecretManager = struct {
     /// Build a minimal environment for 1Password child processes (#117).
     /// Only includes required 1Password variables plus PATH and HOME.
     /// Security: Prevents leaking the full process environment to child processes.
-    fn buildOnePasswordEnvMap(allocator: Allocator, config: OnePasswordConfig) SecretError!process.EnvMap {
+    fn buildOnePasswordEnvMap(allocator: Allocator, config: OnePasswordConfig) SecretError!process.Environ.Map {
         return buildMinimalOnePasswordEnvMap(allocator, config);
     }
 
     /// Builds a minimal 1Password env map with only required variables.
-    pub fn buildMinimalOnePasswordEnvMap(allocator: Allocator, config: OnePasswordConfig) SecretError!process.EnvMap {
-        var env_map = process.EnvMap.init(allocator);
+    pub fn buildMinimalOnePasswordEnvMap(allocator: Allocator, config: OnePasswordConfig) SecretError!process.Environ.Map {
+        var env_map = process.Environ.Map.init(allocator);
         errdefer env_map.deinit();
 
         // Required system variables for binary resolution and tool operation
@@ -698,26 +726,28 @@ pub const SecretManager = struct {
         self: *Self,
         args: []const []const u8,
         json_field: ?[]const u8,
-        env_map: ?*process.EnvMap,
+        env_map: ?*process.Environ.Map,
         timeout_ms: u32,
     ) SecretError![]u8 {
-        var child = process.Child.init(args, self.allocator);
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Pipe;
-        child.env_map = env_map;
+        const eio = std.Io.Threaded.global_single_threaded.io();
+        var child = process.spawn(eio, .{
+            .argv = args,
+            .stdout = .pipe,
+            .stderr = .pipe,
+            .environ_map = if (env_map) |m| m else null,
+        }) catch return SecretError.CommandFailed;
 
-        child.spawn() catch return SecretError.CommandFailed;
-
-        var stdout_buf: std.ArrayList(u8) = .empty;
-        var stderr_buf: std.ArrayList(u8) = .empty;
+        // Read stdout and stderr from pipes
+        var stdout_data: []u8 = &.{};
+        const stderr_data: []u8 = &.{};
         // Security (SEC-08): Zero buffers before freeing to prevent secret leakage (CWE-316)
         defer {
-            if (stdout_buf.items.len > 0) secret.secureZero(stdout_buf.items);
-            stdout_buf.deinit(self.allocator);
+            if (stdout_data.len > 0) secret.secureZero(stdout_data);
+            self.allocator.free(stdout_data);
         }
         defer {
-            if (stderr_buf.items.len > 0) secret.secureZero(stderr_buf.items);
-            stderr_buf.deinit(self.allocator);
+            if (stderr_data.len > 0) secret.secureZero(stderr_data);
+            self.allocator.free(stderr_data);
         }
 
         var done = std.atomic.Value(bool).init(false);
@@ -729,12 +759,13 @@ pub const SecretManager = struct {
             done: *std.atomic.Value(bool),
             timed_out: *std.atomic.Value(bool),
             timeout_ms: u32,
+            io: std.Io,
 
             fn run(ctx: *@This()) void {
-                std.Thread.sleep(@as(u64, ctx.timeout_ms) * std.time.ns_per_ms);
+                nanosleep(@as(u64, ctx.timeout_ms) * std.time.ns_per_ms);
                 if (!ctx.done.load(.acquire)) {
                     ctx.timed_out.store(true, .release);
-                    _ = ctx.child.kill() catch {};
+                    ctx.child.kill(ctx.io);
                 }
             }
         };
@@ -746,17 +777,23 @@ pub const SecretManager = struct {
                 .done = &done,
                 .timed_out = &timed_out,
                 .timeout_ms = timeout_ms,
+                .io = eio,
             };
             watchdog = std.Thread.spawn(.{}, TimeoutCtx.run, .{&timeout_ctx}) catch null;
         }
 
-        process.Child.collectOutput(child, self.allocator, &stdout_buf, &stderr_buf, 1024 * 1024) catch {
-            done.store(true, .release);
-            if (watchdog) |t| t.join();
-            return SecretError.IoError;
-        };
+        // Read stdout pipe
+        if (child.stdout) |stdout_file| {
+            var read_buf: [4096]u8 = undefined;
+            var reader = stdout_file.readerStreaming(eio, &read_buf);
+            stdout_data = reader.interface.allocRemaining(self.allocator, std.Io.Limit.limited(1024 * 1024)) catch {
+                done.store(true, .release);
+                if (watchdog) |t| t.join();
+                return SecretError.IoError;
+            };
+        }
 
-        const term = child.wait() catch {
+        const term = child.wait(eio) catch {
             done.store(true, .release);
             if (watchdog) |t| t.join();
             return SecretError.CommandFailed;
@@ -770,7 +807,7 @@ pub const SecretManager = struct {
 
         try handleTermination(term);
 
-        const trimmed = mem.trimRight(u8, stdout_buf.items, "\n\r");
+        const trimmed = mem.trimEnd(u8, stdout_data, "\n\r");
         if (json_field) |field| {
             return extractJsonField(self.allocator, trimmed, field);
         }

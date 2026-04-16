@@ -489,10 +489,11 @@ pub fn writeToFile(comptime T: type, value: T, path: []const u8, allocator: Allo
     const content = try serialize(T, value, allocator, options);
     defer allocator.free(content);
 
+    const wf_io = std.Io.Threaded.global_single_threaded.io();
     const file = try createFileNoFollow(path, 0o600, false);
-    defer file.close(std.Io.Threaded.global_single_threaded.io());
+    defer file.close(wf_io);
 
-    try file.writeAll(content);
+    try file.writeStreamingAll(wf_io, content);
 }
 
 /// Atomically write a config struct to a file (safe write).
@@ -526,11 +527,12 @@ pub fn safeWriteToFile(comptime T: type, value: T, path: []const u8, allocator: 
     // Create temp file path with cryptographically secure random suffix
     // Security: Uses crypto random instead of predictable timestamp (CWE-377, #61)
     var temp_path: []u8 = &.{};
-    var temp_file: std.fs.File = undefined;
+    const sio = std.Io.Threaded.global_single_threaded.io();
+    var temp_file: std.Io.File = undefined;
     var attempt: u8 = 0;
     while (attempt < 5) : (attempt += 1) {
         var random_bytes: [8]u8 = undefined;
-        crypto.random.bytes(&random_bytes);
+        sio.randomSecure(&random_bytes) catch return error.EntropyUnavailable;
         const random_suffix = std.fmt.bytesToHex(random_bytes, .lower);
         temp_path = try std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, &random_suffix });
         temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
@@ -544,19 +546,19 @@ pub fn safeWriteToFile(comptime T: type, value: T, path: []const u8, allocator: 
     }
     if (attempt == 5) return error.PathAlreadyExists;
     defer allocator.free(temp_path);
-    errdefer std.fs.cwd().deleteFile(temp_path) catch {};
+    errdefer std.Io.Dir.cwd().deleteFile(sio, temp_path) catch {};
     // P3-R5: Ensure the temp file handle is closed on write/sync failure
     // so the fd is not leaked before the errdefer cleanup deletes the file.
-    errdefer temp_file.close(std.Io.Threaded.global_single_threaded.io());
+    errdefer temp_file.close(sio);
 
-    try temp_file.writeAll(content);
-    try temp_file.sync(); // Ensure data is flushed to disk
-    temp_file.close(std.Io.Threaded.global_single_threaded.io());
+    try temp_file.writeStreamingAll(sio, content);
+    try temp_file.sync(sio); // Ensure data is flushed to disk
+    temp_file.close(sio);
 
     // Atomically rename temp file to target path
-    std.fs.cwd().rename(temp_path, path) catch |err| {
+    std.Io.Dir.cwd().rename(temp_path, std.Io.Dir.cwd(), path, sio) catch |err| {
         // If rename fails, try to clean up temp file
-        std.fs.cwd().deleteFile(temp_path) catch {};
+        std.Io.Dir.cwd().deleteFile(sio, temp_path) catch {};
         return err;
     };
 }
@@ -569,8 +571,9 @@ pub fn writeToFileIfNotExists(comptime T: type, value: T, path: []const u8, allo
         return secret.SecretError.PathTraversalDetected;
     }
 
+    const wio = std.Io.Threaded.global_single_threaded.io();
     // Check if file exists
-    std.fs.cwd().access(path, .{}) catch {
+    std.Io.Dir.cwd().access(wio, path, .{}) catch {
         // File doesn't exist, write it
         try safeWriteToFile(T, value, path, allocator, options);
         return true;
@@ -587,8 +590,9 @@ pub fn writeToFileWithBackup(comptime T: type, value: T, path: []const u8, alloc
         return secret.SecretError.PathTraversalDetected;
     }
 
+    const bio = std.Io.Threaded.global_single_threaded.io();
     // Check if file exists and create backup
-    std.fs.cwd().access(path, .{}) catch {
+    std.Io.Dir.cwd().access(bio, path, .{}) catch {
         // File doesn't exist, just write it
         try safeWriteToFile(T, value, path, allocator, options);
         return;
@@ -610,8 +614,8 @@ pub fn writeToFileWithBackup(comptime T: type, value: T, path: []const u8, alloc
     }
 
     // Copy existing file to backup (delete old backup first if exists)
-    std.fs.cwd().deleteFile(backup_path) catch {};
-    std.fs.cwd().copyFile(path, std.fs.cwd(), backup_path, .{}) catch |err| {
+    std.Io.Dir.cwd().deleteFile(bio, backup_path) catch {};
+    std.Io.Dir.cwd().copyFile(path, std.Io.Dir.cwd(), backup_path, bio, .{}) catch |err| {
         // If copy fails due to source not existing, ignore and proceed
         if (err != error.FileNotFound) return err;
     };
@@ -724,17 +728,19 @@ test "safeWriteToFile atomic write" {
     // Write config atomically
     try safeWriteToFile(Config, config, test_path, std.testing.allocator, .{ .format = .json });
 
-    // Verify file was created
-    const file = try std.fs.cwd().openFile(test_path, .{});
-    defer file.close(std.Io.Threaded.global_single_threaded.io());
+    const tst_io = std.Io.Threaded.global_single_threaded.io();
 
-    const content = try file.readToEndAlloc(std.testing.allocator, 4096);
+    // Verify file was created
+    const file = try std.Io.Dir.cwd().openFile(tst_io, test_path, .{});
+    defer file.close(tst_io);
+
+    const content = try secret.readFileToEnd(file, std.testing.allocator, 4096);
     defer std.testing.allocator.free(content);
 
     try std.testing.expect(mem.indexOf(u8, content, "localhost") != null);
 
     // Clean up
-    std.fs.cwd().deleteFile(test_path) catch {};
+    std.Io.Dir.cwd().deleteFile(tst_io, test_path) catch {};
 }
 
 test "writeToFileIfNotExists" {
@@ -742,10 +748,11 @@ test "writeToFileIfNotExists" {
         value: []const u8 = "original",
     };
 
+    const tst_io2 = std.Io.Threaded.global_single_threaded.io();
     const test_path = "/tmp/zigconfig_test_if_not_exists.json";
 
     // Ensure file doesn't exist
-    std.fs.cwd().deleteFile(test_path) catch {};
+    std.Io.Dir.cwd().deleteFile(tst_io2, test_path) catch {};
 
     // First write should succeed
     const written = try writeToFileIfNotExists(Config, .{}, test_path, std.testing.allocator, .{ .format = .json });
@@ -756,7 +763,7 @@ test "writeToFileIfNotExists" {
     try std.testing.expect(!written2);
 
     // Clean up
-    std.fs.cwd().deleteFile(test_path) catch {};
+    std.Io.Dir.cwd().deleteFile(tst_io2, test_path) catch {};
 }
 
 // ============================================================================
@@ -835,17 +842,19 @@ test "ADV-05: writeToFileWithBackup rejects symlink source" {
     const real_path = "test_adv05_real.json";
     const link_path = "test_adv05_link.json";
 
+    const tst_io3 = std.Io.Threaded.global_single_threaded.io();
+
     // Write something to the real file
     {
-        const f = try std.fs.cwd().createFile(real_path, .{});
-        try f.writeAll("{\"value\":\"old\"}");
-        f.close(std.Io.Threaded.global_single_threaded.io());
+        const f = try std.Io.Dir.cwd().createFile(tst_io3, real_path, .{});
+        try f.writeStreamingAll(tst_io3, "{\"value\":\"old\"}");
+        f.close(tst_io3);
     }
-    defer std.fs.cwd().deleteFile(real_path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(tst_io3, real_path) catch {};
 
     // Create symlink
-    std.fs.cwd().symLink(real_path, link_path, .{}) catch return; // skip if symlinks not supported
-    defer std.fs.cwd().deleteFile(link_path) catch {};
+    std.Io.Dir.cwd().symLink(tst_io3, real_path, link_path, .{}) catch return; // skip if symlinks not supported
+    defer std.Io.Dir.cwd().deleteFile(tst_io3, link_path) catch {};
 
     // writeToFileWithBackup should reject the symlink source
     const result = writeToFileWithBackup(Config, .{}, link_path, allocator, .{});

@@ -84,7 +84,7 @@ var global_pool: ?tp.ThreadPool = null;
 var pool_allocator: std.mem.Allocator = std.heap.page_allocator;
 
 /// Guards pool init/deinit against concurrent access.
-var pool_mutex: std.Thread.Mutex = .{};
+var pool_mutex: std.Io.Mutex = .init;
 
 /// One-shot initializer.
 var pool_once = std.once(doInitPool);
@@ -125,8 +125,9 @@ pub fn getPool() *tp.ThreadPool {
 ///
 /// Safe to call even if the pool was never initialized.
 pub fn deinitPool() void {
-    pool_mutex.lock();
-    defer pool_mutex.unlock();
+    const pio = std.Io.Threaded.global_single_threaded.io();
+    pool_mutex.lockUncancelable(pio);
+    defer pool_mutex.unlock(pio);
 
     if (global_pool) |*pool| {
         pool.deinit();

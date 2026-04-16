@@ -40,7 +40,6 @@ fn StringArrayHashMap(comptime V: type) type {
     }, true);
 }
 
-
 const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
@@ -360,19 +359,16 @@ pub fn parseFile(allocator: Allocator, path: []const u8) !Value {
     // INFO-4: Removed redundant isSymlink() stat check. openFileReadNoFollow()
     // uses O_NOFOLLOW which atomically rejects symlinks at the kernel level,
     // eliminating the TOCTOU window from the prior stat+open sequence.
+    const pf_io = std.Io.Threaded.global_single_threaded.io();
     const file = secret.openFileReadNoFollow(path) catch |err| switch (err) {
         error.SymlinkNotAllowed => return error.SymlinkNotAllowed,
         error.FileNotFound => return error.FileNotFound,
         else => return error.FileNotFound,
     };
-    defer file.close(std.Io.Threaded.global_single_threaded.io());
+    defer file.close(pf_io);
 
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const file_len = try file.length(io);
-    if (file_len > MAX_CONFIG_FILE_SIZE) return error.FileTooBig;
-    const content = try allocator.alloc(u8, @intCast(file_len));
+    const content = try secret.readFileToEnd(file, allocator, MAX_CONFIG_FILE_SIZE);
     defer allocator.free(content);
-    _ = try file.readPositionalAll(io, content, 0);
 
     const format = Format.fromExtension(path);
     return parseContent(allocator, content, format);
@@ -422,16 +418,16 @@ fn convertYamlValue(allocator: Allocator, val: yaml.Value) !Value.ValueData {
             return .{ .list = list };
         },
         .map => |pairs| {
-            var map = StringArrayHashMap(Value).init(allocator);
+            var map = StringArrayHashMap(Value).empty;
             // INFO-5: Pre-allocate capacity since pair count is known
-            try map.ensureTotalCapacity(@intCast(pairs.len));
+            try map.ensureTotalCapacity(allocator, @intCast(pairs.len));
             for (pairs) |pair| {
                 // pair.k and pair.v are yaml.Value
                 const key = switch (pair.k) {
                     .str => |s| try allocator.dupe(u8, s),
                     else => continue, // Skip non-string keys
                 };
-                try map.put(key, Value{
+                try map.put(allocator, key, Value{
                     .allocator = allocator,
                     .data = try convertYamlValue(allocator, pair.v),
                 });
@@ -469,13 +465,13 @@ fn convertStdJsonValue(allocator: Allocator, val: std.json.Value) !Value.ValueDa
             return .{ .list = list };
         },
         .object => |obj| {
-            var map = StringArrayHashMap(Value).init(allocator);
+            var map = StringArrayHashMap(Value).empty;
             // INFO-5: Pre-allocate capacity since object entry count is known
-            try map.ensureTotalCapacity(@intCast(obj.count()));
+            try map.ensureTotalCapacity(allocator, @intCast(obj.count()));
             var iter = obj.iterator();
             while (iter.next()) |entry| {
                 const key = try allocator.dupe(u8, entry.key_ptr.*);
-                try map.put(key, Value{
+                try map.put(allocator, key, Value{
                     .allocator = allocator,
                     .data = try convertStdJsonValue(allocator, entry.value_ptr.*),
                 });
@@ -522,12 +518,12 @@ fn convertTomlValue(allocator: Allocator, val: toml.Value) error{OutOfMemory}!Va
             return .{ .list = list };
         },
         .table => |tbl| {
-            var map = StringArrayHashMap(Value).init(allocator);
+            var map = StringArrayHashMap(Value).empty;
             // INFO-5: Pre-allocate capacity since table entry count is known
-            try map.ensureTotalCapacity(@intCast(tbl.entries.len));
+            try map.ensureTotalCapacity(allocator, @intCast(tbl.entries.len));
             for (tbl.entries) |entry| {
                 const key = try allocator.dupe(u8, entry.key);
-                try map.put(key, Value{
+                try map.put(allocator, key, Value{
                     .allocator = allocator,
                     .data = try convertTomlValue(allocator, entry.value.*),
                 });
@@ -568,7 +564,7 @@ fn formatTomlDatetimeFields(comptime T: type, val: T, buf: []u8) usize {
         val.hour,
         val.minute,
         val.second,
-    }) catch buf[0..0]).len;
+    }) catch @as([]u8, buf[0..0])).len;
 }
 
 fn formatTomlDatetime(buf: []u8, dt: toml.DateTime) usize {
@@ -584,7 +580,7 @@ fn formatTomlDateLocal(buf: []u8, d: toml.DateLocal) usize {
         d.year,
         d.month,
         d.day,
-    }) catch buf[0..0]).len;
+    }) catch @as([]u8, buf[0..0])).len;
 }
 
 fn formatTomlTimeLocal(buf: []u8, t: toml.TimeLocal) usize {
@@ -592,7 +588,7 @@ fn formatTomlTimeLocal(buf: []u8, t: toml.TimeLocal) usize {
         t.hour,
         t.minute,
         t.second,
-    }) catch buf[0..0]).len;
+    }) catch @as([]u8, buf[0..0])).len;
 }
 
 fn parseIniContent(allocator: Allocator, content: []const u8) !Value.ValueData {
@@ -601,16 +597,16 @@ fn parseIniContent(allocator: Allocator, content: []const u8) !Value.ValueData {
     };
     defer doc.deinit();
 
-    var map = StringArrayHashMap(Value).init(allocator);
-    errdefer map.deinit();
+    var map = StringArrayHashMap(Value).empty;
+    errdefer map.deinit(allocator);
     // INFO-5: Pre-allocate capacity since global + section count is known
-    try map.ensureTotalCapacity(@intCast(doc.global.count() + doc.sections.count()));
+    try map.ensureTotalCapacity(allocator, @intCast(doc.global.count() + doc.sections.count()));
 
     // Add global values
     var global_iter = doc.global.iterator();
     while (global_iter.next()) |entry| {
         const key = try allocator.dupe(u8, entry.key_ptr.*);
-        try map.put(key, Value{
+        try map.put(allocator, key, Value{
             .allocator = allocator,
             .data = .{ .string = try allocator.dupe(u8, entry.value_ptr.*) },
         });
@@ -619,19 +615,19 @@ fn parseIniContent(allocator: Allocator, content: []const u8) !Value.ValueData {
     // Add section values as nested maps
     var section_iter = doc.sections.iterator();
     while (section_iter.next()) |section_entry| {
-        var section_map = StringArrayHashMap(Value).init(allocator);
+        var section_map = StringArrayHashMap(Value).empty;
         // INFO-5: Pre-allocate capacity since section value count is known
-        try section_map.ensureTotalCapacity(@intCast(section_entry.value_ptr.values.count()));
+        try section_map.ensureTotalCapacity(allocator, @intCast(section_entry.value_ptr.values.count()));
         var value_iter = section_entry.value_ptr.values.iterator();
         while (value_iter.next()) |value_entry| {
             const key = try allocator.dupe(u8, value_entry.key_ptr.*);
-            try section_map.put(key, Value{
+            try section_map.put(allocator, key, Value{
                 .allocator = allocator,
                 .data = .{ .string = try allocator.dupe(u8, value_entry.value_ptr.*) },
             });
         }
         const section_name = try allocator.dupe(u8, section_entry.key_ptr.*);
-        try map.put(section_name, Value{
+        try map.put(allocator, section_name, Value{
             .allocator = allocator,
             .data = .{ .map = section_map },
         });
@@ -646,15 +642,15 @@ fn parsePropertiesContent(allocator: Allocator, content: []const u8) !Value.Valu
     };
     defer props.deinit();
 
-    var map = StringArrayHashMap(Value).init(allocator);
-    errdefer map.deinit();
+    var map = StringArrayHashMap(Value).empty;
+    errdefer map.deinit(allocator);
     // INFO-5: Pre-allocate capacity since property count is known
-    try map.ensureTotalCapacity(@intCast(props.values.count()));
+    try map.ensureTotalCapacity(allocator, @intCast(props.values.count()));
 
     var iter = props.values.iterator();
     while (iter.next()) |entry| {
         const key = try allocator.dupe(u8, entry.key_ptr.*);
-        try map.put(key, Value{
+        try map.put(allocator, key, Value{
             .allocator = allocator,
             .data = .{ .string = try allocator.dupe(u8, entry.value_ptr.*) },
         });
@@ -707,22 +703,22 @@ pub fn safeWriteConfig(
         return SafeWriteError.PathTraversalDetected;
     }
 
-    const fs = std.fs;
-    const cwd = fs.cwd();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
 
     // Check if file exists
-    if (cwd.access(path, .{})) {
+    if (cwd.access(io, path, .{})) {
         return SafeWriteError.FileExists;
     } else |_| {}
 
     if (options.atomic) {
         // Write to temp file first (randomized, exclusive)
         var temp_path: []u8 = &.{};
-        var temp_file: std.fs.File = undefined;
+        var temp_file: std.Io.File = undefined;
         var attempt: u8 = 0;
         while (attempt < 5) : (attempt += 1) {
             var random_bytes: [8]u8 = undefined;
-            std.crypto.random.bytes(&random_bytes);
+            io.randomSecure(&random_bytes) catch return SafeWriteError.IoError;
             const random_suffix = std.fmt.bytesToHex(random_bytes, .lower);
             temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, &random_suffix }) catch return SafeWriteError.OutOfMemory;
             temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
@@ -736,26 +732,26 @@ pub fn safeWriteConfig(
         }
         if (attempt == 5) return SafeWriteError.IoError;
         defer allocator.free(temp_path);
-        errdefer cwd.deleteFile(temp_path) catch {};
+        errdefer cwd.deleteFile(io, temp_path) catch {};
         // R-01/T-01: Ensure temp file handle is closed on write/sync failure
         // so the fd is not leaked before errdefer cleanup deletes the file.
-        errdefer temp_file.close(std.Io.Threaded.global_single_threaded.io());
+        errdefer temp_file.close(io);
 
-        temp_file.writeAll(content) catch return SafeWriteError.IoError;
+        temp_file.writeStreamingAll(io, content) catch return SafeWriteError.IoError;
         // R-01/T-01: Flush data to disk before rename to guarantee durability
-        temp_file.sync() catch return SafeWriteError.IoError;
-        temp_file.close(std.Io.Threaded.global_single_threaded.io());
+        temp_file.sync(io) catch return SafeWriteError.IoError;
+        temp_file.close(io);
 
         // Rename temp to target
-        cwd.rename(temp_path, path) catch {
-            cwd.deleteFile(temp_path) catch {};
+        cwd.rename(temp_path, cwd, path, io) catch {
+            cwd.deleteFile(io, temp_path) catch {};
             return SafeWriteError.IoError;
         };
     } else {
         // Security: Use restrictive file permissions (CWE-732, #75)
         const file = createFileNoFollow(path, 0o600, false) catch return SafeWriteError.IoError;
-        defer file.close(std.Io.Threaded.global_single_threaded.io());
-        file.writeAll(content) catch return SafeWriteError.IoError;
+        defer file.close(io);
+        file.writeStreamingAll(io, content) catch return SafeWriteError.IoError;
     }
 }
 
@@ -777,26 +773,26 @@ pub fn safeWriteConfigWithBackup(
         return SafeWriteError.PathTraversalDetected;
     }
 
-    const fs = std.fs;
-    const cwd = fs.cwd();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
 
     // Check if file exists and create backup if requested
-    if (cwd.access(path, .{})) {
+    if (cwd.access(io, path, .{})) {
         if (options.create_backup) {
             const backup_path = std.fmt.allocPrint(allocator, "{s}{s}", .{ path, options.backup_suffix }) catch return SafeWriteError.OutOfMemory;
             defer allocator.free(backup_path);
 
-            cwd.copyFile(path, cwd, backup_path, .{}) catch return SafeWriteError.IoError;
+            cwd.copyFile(path, cwd, backup_path, io, .{}) catch return SafeWriteError.IoError;
         }
     } else |_| {}
 
     if (options.atomic) {
         var temp_path: []u8 = &.{};
-        var temp_file: std.fs.File = undefined;
+        var temp_file: std.Io.File = undefined;
         var attempt: u8 = 0;
         while (attempt < 5) : (attempt += 1) {
             var random_bytes: [8]u8 = undefined;
-            std.crypto.random.bytes(&random_bytes);
+            io.randomSecure(&random_bytes) catch return SafeWriteError.IoError;
             const random_suffix = std.fmt.bytesToHex(random_bytes, .lower);
             temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, &random_suffix }) catch return SafeWriteError.OutOfMemory;
             temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
@@ -810,24 +806,24 @@ pub fn safeWriteConfigWithBackup(
         }
         if (attempt == 5) return SafeWriteError.IoError;
         defer allocator.free(temp_path);
-        errdefer cwd.deleteFile(temp_path) catch {};
+        errdefer cwd.deleteFile(io, temp_path) catch {};
         // R-01/T-01: Ensure temp file handle is closed on write/sync failure
-        errdefer temp_file.close(std.Io.Threaded.global_single_threaded.io());
+        errdefer temp_file.close(io);
 
-        temp_file.writeAll(content) catch return SafeWriteError.IoError;
+        temp_file.writeStreamingAll(io, content) catch return SafeWriteError.IoError;
         // R-01/T-01: Flush data to disk before rename to guarantee durability
-        temp_file.sync() catch return SafeWriteError.IoError;
-        temp_file.close(std.Io.Threaded.global_single_threaded.io());
+        temp_file.sync(io) catch return SafeWriteError.IoError;
+        temp_file.close(io);
 
-        cwd.rename(temp_path, path) catch {
-            cwd.deleteFile(temp_path) catch {};
+        cwd.rename(temp_path, cwd, path, io) catch {
+            cwd.deleteFile(io, temp_path) catch {};
             return SafeWriteError.IoError;
         };
     } else {
         // Security: Use restrictive file permissions (CWE-732, #75)
         const file = createFileNoFollow(path, 0o600, false) catch return SafeWriteError.IoError;
-        defer file.close(std.Io.Threaded.global_single_threaded.io());
-        file.writeAll(content) catch return SafeWriteError.IoError;
+        defer file.close(io);
+        file.writeStreamingAll(io, content) catch return SafeWriteError.IoError;
     }
 }
 
@@ -898,14 +894,15 @@ pub const FormatRegistry = struct {
 
         // Check custom decoders first
         if (self.decoders.get(ext)) |decoder| {
+            const cfg_io = std.Io.Threaded.global_single_threaded.io();
             const file = secret.openFileReadNoFollow(path) catch |err| switch (err) {
                 error.SymlinkNotAllowed => return error.SymlinkNotAllowed,
                 error.FileNotFound => return error.FileNotFound,
                 else => return error.FileNotFound,
             };
-            defer file.close(std.Io.Threaded.global_single_threaded.io());
+            defer file.close(cfg_io);
 
-            const content = try file.readToEndAlloc(allocator, MAX_CONFIG_FILE_SIZE);
+            const content = try secret.readFileToEnd(file, allocator, MAX_CONFIG_FILE_SIZE);
             defer allocator.free(content);
 
             var arena = std.heap.ArenaAllocator.init(allocator);
@@ -940,13 +937,14 @@ const config_parseFile = parseFile;
 /// For multi-threaded applications, prefer creating and managing your own
 /// FormatRegistry instance per-thread or use external synchronization.
 var global_registry: ?FormatRegistry = null;
-var global_registry_mutex: std.Thread.Mutex = .{};
+var global_registry_mutex: std.Io.Mutex = .init;
 
 /// Get or create global format registry
 /// Thread-safe initialization using mutex (#51 fix)
 pub fn getGlobalRegistry(allocator: Allocator) *FormatRegistry {
-    global_registry_mutex.lock();
-    defer global_registry_mutex.unlock();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    global_registry_mutex.lockUncancelable(io);
+    defer global_registry_mutex.unlock(io);
 
     if (global_registry == null) {
         global_registry = FormatRegistry.init(allocator);
@@ -1003,13 +1001,13 @@ test "FormatRegistry custom decoder" {
     // Register a custom decoder for .custom format
     const customDecoder = struct {
         fn decode(allocator: Allocator, content: []const u8) anyerror!Value.ValueData {
-            var map = StringArrayHashMap(Value).init(allocator);
+            var map = StringArrayHashMap(Value).empty;
             // Simple parser: treat each line as key=value
             var lines = mem.splitScalar(u8, content, '\n');
             while (lines.next()) |line| {
                 if (mem.indexOf(u8, line, "=")) |eq| {
                     const key = try allocator.dupe(u8, line[0..eq]);
-                    try map.put(key, Value{
+                    try map.put(allocator, key, Value{
                         .allocator = allocator,
                         .data = .{ .string = try allocator.dupe(u8, line[eq + 1 ..]) },
                     });
@@ -1129,8 +1127,10 @@ test "R-01/T-01: safeWriteConfig creates correct file with atomic write" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
+    const tst_io = std.Io.Threaded.global_single_threaded.io();
+
     // Get real path for the temp dir
-    const dir_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, ".") catch return;
+    const dir_path = tmp_dir.dir.realPathFileAlloc(tst_io, ".", std.testing.allocator) catch return;
     defer std.testing.allocator.free(dir_path);
 
     const file_path = std.fmt.allocPrint(std.testing.allocator, "{s}/test_write.json", .{dir_path}) catch return;
@@ -1140,7 +1140,7 @@ test "R-01/T-01: safeWriteConfig creates correct file with atomic write" {
     try safeWriteConfig(std.testing.allocator, file_path, content, .{ .atomic = true });
 
     // Verify file content is correct
-    const read_content = std.fs.cwd().readFileAlloc(std.testing.allocator, file_path, 4096) catch return;
+    const read_content = std.Io.Dir.cwd().readFileAlloc(tst_io, file_path, std.testing.allocator, std.Io.Limit.limited(4096)) catch return;
     defer std.testing.allocator.free(read_content);
     try std.testing.expectEqualStrings(content, read_content);
 }
@@ -1157,10 +1157,11 @@ test "R-01/T-01: safeWriteConfig rejects path traversal" {
 }
 
 test "R-01/T-01: safeWriteConfigWithBackup creates backup file" {
+    const tst_io2 = std.Io.Threaded.global_single_threaded.io();
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const dir_path = tmp_dir.dir.realpathAlloc(std.testing.allocator, ".") catch return;
+    const dir_path = tmp_dir.dir.realPathFileAlloc(tst_io2, ".", std.testing.allocator) catch return;
     defer std.testing.allocator.free(dir_path);
 
     const file_path = std.fmt.allocPrint(std.testing.allocator, "{s}/config.json", .{dir_path}) catch return;
@@ -1169,9 +1170,9 @@ test "R-01/T-01: safeWriteConfigWithBackup creates backup file" {
     // Create original file
     const original = "original content";
     {
-        const f = std.fs.cwd().createFile(file_path, .{}) catch return;
-        f.writeAll(original) catch {};
-        f.close(std.Io.Threaded.global_single_threaded.io());
+        const f = std.Io.Dir.cwd().createFile(tst_io2, file_path, .{}) catch return;
+        f.writeStreamingAll(tst_io2, original) catch {};
+        f.close(tst_io2);
     }
 
     // Write with backup
@@ -1179,14 +1180,14 @@ test "R-01/T-01: safeWriteConfigWithBackup creates backup file" {
     try safeWriteConfigWithBackup(std.testing.allocator, file_path, updated, .{ .create_backup = true, .atomic = true });
 
     // Verify updated content
-    const read_content = std.fs.cwd().readFileAlloc(std.testing.allocator, file_path, 4096) catch return;
+    const read_content = std.Io.Dir.cwd().readFileAlloc(tst_io2, file_path, std.testing.allocator, std.Io.Limit.limited(4096)) catch return;
     defer std.testing.allocator.free(read_content);
     try std.testing.expectEqualStrings(updated, read_content);
 
     // Verify backup exists
     const backup_path = std.fmt.allocPrint(std.testing.allocator, "{s}.bak", .{file_path}) catch return;
     defer std.testing.allocator.free(backup_path);
-    const backup_content = std.fs.cwd().readFileAlloc(std.testing.allocator, backup_path, 4096) catch return;
+    const backup_content = std.Io.Dir.cwd().readFileAlloc(tst_io2, backup_path, std.testing.allocator, std.Io.Limit.limited(4096)) catch return;
     defer std.testing.allocator.free(backup_content);
     try std.testing.expectEqualStrings(original, backup_content);
 }

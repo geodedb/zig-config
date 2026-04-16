@@ -75,7 +75,7 @@ pub const Properties = struct {
 
     /// Get all keys
     pub fn keys(self: *const Properties) ![]const []const u8 {
-        var result: std.ArrayListUnmanaged([]const u8) = .{};
+        var result: std.ArrayListUnmanaged([]const u8) = .empty;
         errdefer result.deinit(self.allocator);
 
         var iter = self.values.keyIterator();
@@ -104,16 +104,16 @@ pub fn parse(allocator: Allocator, content: []const u8) PropertiesError!Properti
 
     var lines = mem.splitScalar(u8, content, '\n');
     var pending_key: ?[]const u8 = null;
-    var pending_value: std.ArrayListUnmanaged(u8) = .{};
+    var pending_value: std.ArrayListUnmanaged(u8) = .empty;
     defer pending_value.deinit(allocator);
 
     while (lines.next()) |raw_line| {
-        var line = mem.trimRight(u8, raw_line, "\r");
+        var line = mem.trimEnd(u8, raw_line, "\r");
 
         // Handle line continuation
         if (pending_key != null) {
             // Continue previous line - trim leading whitespace
-            line = mem.trimLeft(u8, line, " \t");
+            line = mem.trimStart(u8, line, " \t");
             const continues = line.len > 0 and line[line.len - 1] == '\\';
             const line_content = if (continues) line[0 .. line.len - 1] else line;
 
@@ -130,7 +130,7 @@ pub fn parse(allocator: Allocator, content: []const u8) PropertiesError!Properti
         }
 
         // Skip leading whitespace
-        const trimmed = mem.trimLeft(u8, line, " \t");
+        const trimmed = mem.trimStart(u8, line, " \t");
 
         // Skip empty lines and comments
         if (trimmed.len == 0) continue;
@@ -151,7 +151,7 @@ pub fn parse(allocator: Allocator, content: []const u8) PropertiesError!Properti
             if (c == ' ' or c == '\t') {
                 sep_pos = i;
                 // Check if followed by = or :
-                const after_ws = mem.trimLeft(u8, trimmed[i..], " \t");
+                const after_ws = mem.trimStart(u8, trimmed[i..], " \t");
                 if (after_ws.len > 0 and (after_ws[0] == '=' or after_ws[0] == ':')) {
                     sep_pos = trimmed.len - after_ws.len;
                     sep_len = trimmed.len - after_ws.len - i + 1;
@@ -164,12 +164,12 @@ pub fn parse(allocator: Allocator, content: []const u8) PropertiesError!Properti
             const raw_key = mem.trim(u8, trimmed[0..pos], " \t");
             const raw_value_start = pos + sep_len;
             const raw_value = if (raw_value_start < trimmed.len)
-                mem.trimLeft(u8, trimmed[raw_value_start..], " \t")
+                mem.trimStart(u8, trimmed[raw_value_start..], " \t")
             else
                 "";
 
             // Unescape key
-            var key_buf: std.ArrayListUnmanaged(u8) = .{};
+            var key_buf: std.ArrayListUnmanaged(u8) = .empty;
             defer key_buf.deinit(allocator);
             try appendUnescaped(allocator, &key_buf, raw_key);
             const owned_key = props.arena.allocator().dupe(u8, key_buf.items) catch return PropertiesError.OutOfMemory;
@@ -182,7 +182,7 @@ pub fn parse(allocator: Allocator, content: []const u8) PropertiesError!Properti
                 pending_key = owned_key;
                 try appendUnescaped(allocator, &pending_value, value_content);
             } else {
-                var value_buf: std.ArrayListUnmanaged(u8) = .{};
+                var value_buf: std.ArrayListUnmanaged(u8) = .empty;
                 defer value_buf.deinit(allocator);
                 try appendUnescaped(allocator, &value_buf, value_content);
                 const owned_value = props.arena.allocator().dupe(u8, value_buf.items) catch return PropertiesError.OutOfMemory;
@@ -267,9 +267,10 @@ pub fn parseFile(allocator: Allocator, path: []const u8) !Properties {
         error.SymlinkNotAllowed => return error.SymlinkNotAllowed,
         else => return err,
     };
-    defer file.close(std.Io.Threaded.global_single_threaded.io());
+    const pio = std.Io.Threaded.global_single_threaded.io();
+    defer file.close(pio);
 
-    const content = try file.readToEndAlloc(allocator, limits.MAX_CONFIG_FILE_SIZE);
+    const content = try secret.readFileToEnd(file, allocator, limits.MAX_CONFIG_FILE_SIZE);
     defer allocator.free(content);
 
     return parse(allocator, content);
@@ -277,7 +278,7 @@ pub fn parseFile(allocator: Allocator, path: []const u8) !Properties {
 
 /// Serialize properties to string format
 pub fn serialize(props: *const Properties, allocator: Allocator) ![]u8 {
-    var result: std.ArrayListUnmanaged(u8) = .{};
+    var result: std.ArrayListUnmanaged(u8) = .empty;
     errdefer result.deinit(allocator);
 
     var iter = props.values.iterator();

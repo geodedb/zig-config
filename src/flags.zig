@@ -67,8 +67,8 @@ pub const FlagParser = struct {
             .allocator = allocator,
             .flags = std.StringHashMap(Flag).init(allocator),
             .short_flags = std.AutoHashMap(u8, []const u8).init(allocator),
-            .values = .{},
-            .positional = .{},
+            .values = .empty,
+            .positional = .empty,
             .arena = std.heap.ArenaAllocator.init(allocator),
         };
     }

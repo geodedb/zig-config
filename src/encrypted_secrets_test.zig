@@ -375,27 +375,27 @@ test "OnePasswordConfig token uses SensitiveString for redaction" {
 // ============================================================================
 
 test "handleTermination returns success for Exited 0" {
-    const term = process.Child.Term{ .Exited = 0 };
+    const term = process.Child.Term{ .exited = 0 };
     try handleTermination(term);
 }
 
 test "handleTermination returns CommandFailed for non-zero exit" {
-    const term = process.Child.Term{ .Exited = 1 };
+    const term = process.Child.Term{ .exited = 1 };
     try std.testing.expectError(SecretError.CommandFailed, handleTermination(term));
 }
 
 test "handleTermination returns CommandFailed for Signal" {
-    const term = process.Child.Term{ .Signal = 9 };
+    const term = process.Child.Term{ .signal = .KILL };
     try std.testing.expectError(SecretError.CommandFailed, handleTermination(term));
 }
 
 test "handleTermination returns CommandFailed for Stopped" {
-    const term = process.Child.Term{ .Stopped = 19 };
+    const term = process.Child.Term{ .stopped = .STOP };
     try std.testing.expectError(SecretError.CommandFailed, handleTermination(term));
 }
 
 test "handleTermination returns CommandFailed for Unknown" {
-    const term = process.Child.Term{ .Unknown = 0 };
+    const term = process.Child.Term{ .unknown = 0 };
     try std.testing.expectError(SecretError.CommandFailed, handleTermination(term));
 }
 

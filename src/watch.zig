@@ -39,12 +39,33 @@
 const std = @import("std");
 const secret = @import("secret.zig");
 const mem = std.mem;
-const fs = std.fs;
 const Allocator = mem.Allocator;
 const Thread = std.Thread;
 
 // Security: Import no-follow open helper for symlink attack prevention (CWE-59, #69)
 const openFileReadNoFollow = secret.openFileReadNoFollow;
+const posix = std.posix;
+
+/// Zig 0.16.0 compat: std.Thread.sleep was removed; use posix nanosleep directly.
+fn nanosleep(nanoseconds: u64) void {
+    const ns_per_s = std.time.ns_per_s;
+    var req: posix.timespec = .{
+        .sec = @intCast(nanoseconds / ns_per_s),
+        .nsec = @intCast(nanoseconds % ns_per_s),
+    };
+    var rem: posix.timespec = undefined;
+    while (true) {
+        const rc = posix.system.nanosleep(&req, &rem);
+        switch (posix.errno(rc)) {
+            .SUCCESS => return,
+            .INTR => {
+                req = rem;
+                continue;
+            },
+            else => return,
+        }
+    }
+}
 
 /// Watch errors
 pub const WatchError = error{
@@ -81,7 +102,7 @@ const WatchedFile = struct {
     path: []const u8,
     callback: ChangeCallback,
     user_data: ?*anyopaque,
-    last_mtime: i128,
+    last_mtime: std.Io.Timestamp,
     last_size: u64,
     exists: bool,
 };
@@ -100,7 +121,7 @@ pub const Watcher = struct {
         return .{
             .allocator = allocator,
             .options = options,
-            .watches = .{},
+            .watches = .empty,
             .running = std.atomic.Value(bool).init(false),
             .thread = null,
             .arena = std.heap.ArenaAllocator.init(allocator),
@@ -134,7 +155,7 @@ pub const Watcher = struct {
             .path = owned_path,
             .callback = callback,
             .user_data = user_data,
-            .last_mtime = if (stat) |s| s.mtime else 0,
+            .last_mtime = if (stat) |s| s.mtime else std.Io.Timestamp.zero,
             .last_size = if (stat) |s| s.size else 0,
             .exists = exists,
         });
@@ -198,7 +219,7 @@ pub const Watcher = struct {
     fn watchLoop(self: *Watcher) void {
         while (self.running.load(.acquire)) {
             self.checkForChanges();
-            std.Thread.sleep(self.options.poll_interval_ms * std.time.ns_per_ms);
+            nanosleep(self.options.poll_interval_ms * std.time.ns_per_ms);
         }
     }
 
@@ -222,7 +243,7 @@ pub const Watcher = struct {
             } else if (currently_exists) {
                 // Check for modification
                 if (current_stat) |stat| {
-                    if (stat.mtime != watch.last_mtime or stat.size != watch.last_size) {
+                    if (stat.mtime.nanoseconds != watch.last_mtime.nanoseconds or stat.size != watch.last_size) {
                         watch.last_mtime = stat.mtime;
                         watch.last_size = stat.size;
                         watch.callback(watch.path, .modified, watch.user_data);
@@ -235,31 +256,15 @@ pub const Watcher = struct {
 
 /// File stat information
 const FileStat = struct {
-    mtime: i128,
+    mtime: std.Io.Timestamp,
     size: u64,
 };
 
 fn getFileStat(path: []const u8) ?FileStat {
-    // INFO-6: Use fstatat with AT_SYMLINK_NOFOLLOW on POSIX to reduce
-    // from 3 syscalls (open+fstat+close) to 1 syscall (fstatat).
-    // Falls back to the open+stat+close path on Windows where fstatat
-    // is not available.
-    const builtin = @import("builtin");
-    if (builtin.os.tag != .windows) {
-        const posix = std.posix;
-        const stat = posix.fstatat(posix.AT.FDCWD, path, posix.AT.SYMLINK_NOFOLLOW) catch return null;
-        const mtime = stat.mtime();
-        return .{
-            // Convert to nanoseconds (i128) to match fs.File.Stat.mtime format
-            .mtime = @as(i128, mtime.sec) * std.time.ns_per_s + mtime.nsec,
-            .size = @intCast(stat.size),
-        };
-    }
-    // Windows fallback: fstatat is not implemented on Windows
-    const file = openFileReadNoFollow(path) catch return null;
-    defer file.close(std.Io.Threaded.global_single_threaded.io());
-
-    const stat = file.stat() catch return null;
+    // Zig 0.16.0: fstatat was removed from posix; use Dir.statFile with
+    // follow_symlinks=false which maps to a single fstatat syscall on POSIX.
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const stat = std.Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = false }) catch return null;
     return .{
         .mtime = stat.mtime,
         .size = stat.size,

@@ -326,11 +326,10 @@ test "provenance: printJson outputs valid format" {
     try tracker.set("host", "localhost", .project, null);
 
     var buffer: [1024]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
-    const writer = stream.writer();
+    var writer = std.Io.Writer.fixed(&buffer);
 
-    try tracker.printJson(writer);
-    const output = stream.getWritten();
+    try tracker.printJson(&writer);
+    const output = writer.buffered();
 
     // Verify JSON structure
     try std.testing.expect(std.mem.startsWith(u8, output, "["));
@@ -344,11 +343,10 @@ test "provenance: printJson empty tracker" {
     defer tracker.deinit();
 
     var buffer: [1024]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
-    const writer = stream.writer();
+    var writer = std.Io.Writer.fixed(&buffer);
 
-    try tracker.printJson(writer);
-    const output = stream.getWritten();
+    try tracker.printJson(&writer);
+    const output = writer.buffered();
 
     try std.testing.expectEqualStrings("[]\n", output);
 }
@@ -391,11 +389,10 @@ test "provenance: printJson escapes special characters (GAP-0024)" {
     try tracker.set("special", "test\"value\\with\nnew\tlines", .env, null);
 
     var buffer: [2048]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
-    const writer = stream.writer();
+    var writer = std.Io.Writer.fixed(&buffer);
 
-    try tracker.printJson(writer);
-    const output = stream.getWritten();
+    try tracker.printJson(&writer);
+    const output = writer.buffered();
 
     // Verify the output is parseable as valid JSON
     const parsed = std.json.parseFromSlice(
@@ -429,11 +426,10 @@ test "provenance: printJson escapes control characters (GAP-0024)" {
     try tracker.set("ctrl", ctrl_value, .default, null);
 
     var buffer: [2048]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
-    const writer = stream.writer();
+    var writer = std.Io.Writer.fixed(&buffer);
 
-    try tracker.printJson(writer);
-    const output = stream.getWritten();
+    try tracker.printJson(&writer);
+    const output = writer.buffered();
 
     // Must be parseable as valid JSON
     const parsed = std.json.parseFromSlice(
@@ -456,34 +452,33 @@ test "provenance: printJson escapes control characters (GAP-0024)" {
 
 test "provenance: writeJsonString escapes correctly" {
     var buffer: [256]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
-    const writer = stream.writer();
+    var writer = std.Io.Writer.fixed(&buffer);
 
-    try writeJsonString(writer, "hello\"world");
-    try std.testing.expectEqualStrings("\"hello\\\"world\"", stream.getWritten());
+    try writeJsonString(&writer, "hello\"world");
+    try std.testing.expectEqualStrings("\"hello\\\"world\"", writer.buffered());
 
-    stream.reset();
-    try writeJsonString(writer, "back\\slash");
-    try std.testing.expectEqualStrings("\"back\\\\slash\"", stream.getWritten());
+    writer.end = 0;
+    try writeJsonString(&writer, "back\\slash");
+    try std.testing.expectEqualStrings("\"back\\\\slash\"", writer.buffered());
 
-    stream.reset();
-    try writeJsonString(writer, "new\nline");
-    try std.testing.expectEqualStrings("\"new\\nline\"", stream.getWritten());
+    writer.end = 0;
+    try writeJsonString(&writer, "new\nline");
+    try std.testing.expectEqualStrings("\"new\\nline\"", writer.buffered());
 
-    stream.reset();
-    try writeJsonString(writer, "tab\there");
-    try std.testing.expectEqualStrings("\"tab\\there\"", stream.getWritten());
+    writer.end = 0;
+    try writeJsonString(&writer, "tab\there");
+    try std.testing.expectEqualStrings("\"tab\\there\"", writer.buffered());
 
-    stream.reset();
-    try writeJsonString(writer, "cr\rhere");
-    try std.testing.expectEqualStrings("\"cr\\rhere\"", stream.getWritten());
+    writer.end = 0;
+    try writeJsonString(&writer, "cr\rhere");
+    try std.testing.expectEqualStrings("\"cr\\rhere\"", writer.buffered());
 
-    stream.reset();
-    try writeJsonString(writer, "\x00\x1f");
-    try std.testing.expectEqualStrings("\"\\u0000\\u001f\"", stream.getWritten());
+    writer.end = 0;
+    try writeJsonString(&writer, "\x00\x1f");
+    try std.testing.expectEqualStrings("\"\\u0000\\u001f\"", writer.buffered());
 
     // Normal string should pass through unchanged
-    stream.reset();
-    try writeJsonString(writer, "normal");
-    try std.testing.expectEqualStrings("\"normal\"", stream.getWritten());
+    writer.end = 0;
+    try writeJsonString(&writer, "normal");
+    try std.testing.expectEqualStrings("\"normal\"", writer.buffered());
 }
