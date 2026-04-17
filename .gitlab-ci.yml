@@ -20,7 +20,7 @@ include:
   - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.7.1
 
 variables:
-  ZIG_VERSION: "0.15.2"
+  ZIG_VERSION: "0.16.0"
 
 # Cache the Zig toolchain and build artifacts across pipeline jobs.
 # The existing install-zig conditional (if [ ! -f "zig-${ZIG_VERSION}/zig" ])
@@ -86,7 +86,7 @@ stages:
 # Override variables, before_script, and script to use our Zig 0.15.2.
 zig-format:
   variables:
-    ZIG_VERSION: "0.15.2"
+    ZIG_VERSION: "0.16.0"
   before_script:
     - *install-zig
   script:
