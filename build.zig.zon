@@ -13,8 +13,8 @@
             .hash = "toml-0.1.0-MHnSh9gsAgD5RNXKcN72j6kNmOq2VpZvbhiKpShNsb-_",
         },
         .json = .{
-            .url = "git+https://gitlab.com/devnw/zig/json.git?ref=main#6281a8508117921096004d05e452e52041de3c60",
-            .hash = "json-0.1.0-tOue4RqoCwBR_QTbDnTYNloo6_CLLzV3MYywaF0OU8_l",
+            .url = "git+https://gitlab.com/devnw/zig/json.git#6319c6dc90ca9998141a9890f33467d20e0458e1",
+            .hash = "json-0.1.0-tOue4ampCwDzmgo1rcTfpJ2zK3aoiby7PG4cp5DW1H0G",
         },
         .thread_pool = .{
             .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#56c109a355eb4316450a216a74cc619b7809183b",
