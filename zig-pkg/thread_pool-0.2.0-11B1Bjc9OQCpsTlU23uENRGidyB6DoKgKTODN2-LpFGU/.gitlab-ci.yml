@@ -1,0 +1,166 @@
+---
+# GitLab CI/CD Pipeline for thread-pool
+# SPDX-License-Identifier: Apache-2.0
+
+include:
+  - component: gitlab.com/devnw/ci-catalog/security-sast@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/security-secrets@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.2.1
+  - component: gitlab.com/devnw/ci-catalog/sbom-generate@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/sbom-scan@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.7.1
+
+variables:
+  ZIG_VERSION: "0.15.2"
+
+stages:
+  - lint
+  - build
+  - test
+  - fuzz
+  - performance
+  - security
+  - sbom
+  - release
+
+.install-zig: &install-zig
+  - bash scripts/install-zig.sh "${ZIG_VERSION}"
+  - export PATH="$PWD/zig-${ZIG_VERSION}:$PATH"
+  - zig version
+
+.zig-job:
+  image: debian:bookworm-slim
+  before_script:
+    - apt-get update && apt-get install -y bash curl python3 xz-utils git
+    - *install-zig
+
+zig-format:
+  before_script:
+    - apt-get update && apt-get install -y bash curl python3 xz-utils
+    - *install-zig
+
+build:
+  extends: .zig-job
+  stage: build
+  script:
+    - zig build build
+    - zig build check
+
+test-unit:
+  extends: .zig-job
+  stage: test
+  script:
+    - zig build test --summary all
+  needs: ["build"]
+
+test-integration:
+  extends: .zig-job
+  stage: test
+  script:
+    - zig build test-integration --summary all
+  needs: ["build"]
+
+test-stress:
+  extends: .zig-job
+  stage: test
+  script:
+    - zig build test-stress --summary all
+  needs: ["build"]
+
+test-release-safe:
+  extends: .zig-job
+  stage: test
+  script:
+    - zig build test -Doptimize=ReleaseSafe --summary all
+  needs: ["build"]
+
+test-release-fast:
+  extends: .zig-job
+  stage: test
+  script:
+    - zig build test -Doptimize=ReleaseFast --summary all
+  needs: ["build"]
+
+test-release-small:
+  extends: .zig-job
+  stage: test
+  script:
+    - zig build test -Doptimize=ReleaseSmall --summary all
+  needs: ["build"]
+
+cross-linux:
+  extends: .zig-job
+  stage: test
+  script:
+    - zig build-lib src/root.zig -target x86_64-linux
+  needs: ["build"]
+
+cross-macos:
+  extends: .zig-job
+  stage: test
+  script:
+    - zig build-lib src/root.zig -target aarch64-macos
+  needs: ["build"]
+
+cross-windows:
+  extends: .zig-job
+  stage: test
+  script:
+    - zig build-lib src/root.zig -target x86_64-windows-gnu
+  needs: ["build"]
+
+fuzz-regression:
+  extends: .zig-job
+  stage: fuzz
+  script:
+    - timeout 60 zig build test --fuzz
+  needs: ["build"]
+  allow_failure: true
+
+benchmark-regression:
+  extends: .zig-job
+  stage: performance
+  script:
+    - zig build bench -- --output benchmarks/results/ci-current.json
+    - zig build compare-bench -- --baseline benchmarks/results/baseline.json --current benchmarks/results/ci-current.json
+  artifacts:
+    when: always
+    paths:
+      - benchmarks/results/ci-current.json
+  needs: ["build"]
+
+bench-micro:
+  extends: .zig-job
+  stage: performance
+  script:
+    - zig build bench-micro-submit > micro-submit.txt
+    - zig build bench-micro-steal > micro-steal.txt
+    - zig build bench-micro-wake > micro-wake.txt
+    - zig build bench-tokio-parity > tokio-parity.txt
+    - cat micro-submit.txt micro-steal.txt micro-wake.txt tokio-parity.txt
+  artifacts:
+    when: always
+    paths:
+      - micro-submit.txt
+      - micro-steal.txt
+      - micro-wake.txt
+      - tokio-parity.txt
+  needs: ["build"]
+  allow_failure: true # advisory until thresholds are tuned
+
+scale-bench-manual:
+  extends: .zig-job
+  stage: performance
+  script:
+    - timeout 120 zig build scale-bench -- --output benchmarks/results/scale-current.json
+  artifacts:
+    when: always
+    paths:
+      - benchmarks/results/scale-current.json
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - when: manual
+      allow_failure: true
+  needs: ["build"]
