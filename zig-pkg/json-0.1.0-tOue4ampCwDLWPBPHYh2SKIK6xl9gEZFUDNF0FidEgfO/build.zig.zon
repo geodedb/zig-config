@@ -1,0 +1,22 @@
+.{
+    .name = .json,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.15.2",
+    .fingerprint = 0x6b072545e19eebb4,
+    .dependencies = .{
+        .uri = .{
+            .url = "git+https://gitlab.com/devnw/zig/uri.git#bb722596310556e4ef3ccff3fb7fed27f9478109",
+            .hash = "uri-0.1.0-zVvOsYtkAgDslbRjHg2zUphr6xN8hBBU8KgaIvLcT1rK",
+        },
+        .thread_pool = .{
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#882eef980888d29cdfddaeede9cee20629084d07",
+            .hash = "thread_pool-0.2.0-11B1BvnedQC2QdmiFQrqqlWvD2pKeEx8Dg5dSkrv2oj-",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+    },
+}
