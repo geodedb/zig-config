@@ -511,24 +511,25 @@ fn convertTomlValue(allocator: Allocator, val: toml.Value) error{OutOfMemory}!Va
         .float => |f| .{ .float = f },
         .bool => |b| .{ .bool = b },
         .array => |arr| {
-            var list = try allocator.alloc(Value, arr.items.len);
-            for (arr.items, 0..) |item, i| {
+            const items = arr.items.items;
+            var list = try allocator.alloc(Value, items.len);
+            for (items, 0..) |item, i| {
                 list[i] = Value{
                     .allocator = allocator,
-                    .data = try convertTomlValue(allocator, item.*),
+                    .data = try convertTomlValue(allocator, item),
                 };
             }
             return .{ .list = list };
         },
         .table => |tbl| {
             var map = StringArrayHashMap(Value).empty;
-            // INFO-5: Pre-allocate capacity since table entry count is known
-            try map.ensureTotalCapacity(allocator, @intCast(tbl.entries.len));
-            for (tbl.entries) |entry| {
-                const key = try allocator.dupe(u8, entry.key);
+            try map.ensureTotalCapacity(allocator, @intCast(tbl.map.count()));
+            var it = tbl.map.iterator();
+            while (it.next()) |entry| {
+                const key = try allocator.dupe(u8, entry.key_ptr.*);
                 try map.put(allocator, key, Value{
                     .allocator = allocator,
-                    .data = try convertTomlValue(allocator, entry.value.*),
+                    .data = try convertTomlValue(allocator, entry.value_ptr.*.*),
                 });
             }
             return .{ .map = map };
