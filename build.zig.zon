@@ -5,20 +5,20 @@
     .minimum_zig_version = "0.15.1",
     .dependencies = .{
         .yaml = .{
-            .url = "git+https://gitlab.com/devnw/zig/yaml.git#c079432fc89c9ea9ce89eb7426e24c1d766c2676",
-            .hash = "yaml-0.1.1-lcW-hHyjBADK4676B38zpfZB-ghkqENjcTgZxYXlBU6_",
+            .url = "git+https://gitlab.com/devnw/zig/yaml.git#468f95020e6f49da84dfa718f0d4561fa822d8d1",
+            .hash = "yaml-0.1.1-lcW-hHyjBAB33E0Lv4d2WQEcgzHLay0pVL0Wh23SAziX",
         },
         .toml = .{
-            .url = "git+https://gitlab.com/devnw/zig/toml.git#0f3fa4edd5e546d5b2f9888bbcfa960f5e6bb4a6",
-            .hash = "toml-0.2.0-MHnSh4OWBQBB3CnUpynHOnQz4hUsbOPaxMojflNEUKou",
+            .url = "git+https://gitlab.com/devnw/zig/toml.git#10b7e2a3cf505b211192ef38049999c186c2fed5",
+            .hash = "toml-0.2.0-MHnSh4OWBQDx507m2X4gNzt_kY7_f_MuRtcWydeNzQSz",
         },
         .json = .{
-            .url = "git+https://gitlab.com/devnw/zig/json.git#cbb1c620cb93965c8f5b9b3eef5a37316c24c068",
-            .hash = "json-0.1.0-tOue4cGpCwAKMCTJquFbHz9Im68cXcHRzLQKBJwYpsxv",
+            .url = "git+https://gitlab.com/devnw/zig/json.git#b04c00924114d85da442ecedf727a8fa0a47ab69",
+            .hash = "json-0.1.0-tOue4cGpCwC1XAWh-24CNMEkZLXcTSy2WCV1rxiAiAd7",
         },
         .thread_pool = .{
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#930d41bcd52b0f92f5405da69a72949a970a2990",
-            .hash = "thread_pool-0.2.1-11B1BobIdgAJ7WWVFfqS0BxtbO_vXdSevdXwauTZhSuS",
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#fa7ce790ca2b59d1170644ce9e9b190a6aad8d1b",
+            .hash = "thread_pool-0.2.1-11B1BobIdgD7WQ2I5rgfsqZxogEhnhOssfgDH_N_0Vjd",
         },
     },
     .paths = .{
