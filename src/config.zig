@@ -1017,6 +1017,7 @@ test {
     _ = validation;
     _ = async_load;
     _ = diff;
+    _ = parallel;
     _ = @import("integration_test.zig");
 }
 
@@ -1320,6 +1321,169 @@ test "parallel re-export is reachable" {
     // entry points are exposed and `deinitPool()` is safely callable.
     _ = @TypeOf(parallel.getPool);
     parallel.deinitPool();
+}
+
+// ---------------------------------------------------------------------------
+// Q-NEW-09 / S-NEW-03: parallel.zig is compiled as its own module, so its
+// in-file `test` blocks do NOT run under this build's test root. These rooted
+// tests drive the public `config.parallel.*` re-export so the behavioral
+// contracts (real file load, real serialization, thread-safe worker
+// allocation) are actually exercised by `zig build test`.
+// ---------------------------------------------------------------------------
+
+test "Q-NEW-09: parallel.parallelFileLoad reads real file content (caller frees)" {
+    const builtin = @import("builtin");
+    // The no-follow open path relies on POSIX O_NOFOLLOW semantics.
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const bodies = [_][]const u8{ "a: 1\n", "b: 22\n", "c: 333\n", "d: 4444\n", "e: 55555\n" };
+    var paths: [bodies.len][:0]u8 = undefined;
+    var path_count: usize = 0;
+    defer for (paths[0..path_count]) |p| std.testing.allocator.free(p);
+
+    var inputs: [bodies.len]parallel.FileLoadInput = undefined;
+    var results: [bodies.len]parallel.FileLoadResult = undefined;
+    inline for (bodies, 0..) |b, i| {
+        const name = std.fmt.comptimePrint("f{d}.yaml", .{i});
+        try tmp.dir.writeFile(io, .{ .sub_path = name, .data = b });
+        paths[i] = try tmp.dir.realPathFileAlloc(io, name, std.testing.allocator);
+        path_count += 1;
+        inputs[i] = .{ .path = paths[i], .format = .yaml };
+    }
+
+    parallel.parallelFileLoad(std.testing.allocator, &inputs, &results);
+    defer for (results) |r| if (r.content) |c| std.testing.allocator.free(c);
+
+    inline for (bodies, 0..) |b, i| {
+        try std.testing.expect(results[i].success);
+        try std.testing.expect(results[i].error_msg == null);
+        try std.testing.expect(results[i].content != null);
+        try std.testing.expectEqualStrings(b, results[i].content.?);
+    }
+}
+
+test "Q-NEW-09: parallel.parallelFileLoad on missing file reports failure" {
+    var inputs: [1]parallel.FileLoadInput = .{
+        .{ .path = "/nonexistent/definitely/not/here.yaml", .format = .yaml },
+    };
+    var results: [1]parallel.FileLoadResult = undefined;
+
+    parallel.parallelFileLoad(std.testing.allocator, &inputs, &results);
+    defer for (results) |r| if (r.content) |c| std.testing.allocator.free(c);
+
+    try std.testing.expect(!results[0].success);
+    try std.testing.expect(results[0].content == null);
+    try std.testing.expect(results[0].error_msg != null);
+}
+
+test "Q-NEW-09: parallel.parallelFileLoad on empty path reports failure" {
+    var inputs: [1]parallel.FileLoadInput = .{
+        .{ .path = "", .format = .yaml },
+    };
+    var results: [1]parallel.FileLoadResult = undefined;
+
+    parallel.parallelFileLoad(std.testing.allocator, &inputs, &results);
+    defer for (results) |r| if (r.content) |c| std.testing.allocator.free(c);
+
+    try std.testing.expect(!results[0].success);
+    try std.testing.expect(results[0].content == null);
+    try std.testing.expect(results[0].error_msg != null);
+}
+
+test "Q-NEW-09: parallel.parallelSerialize produces real owned output" {
+    var inputs: [4]parallel.SerializeInput = .{
+        .{ .format = .json, .data = "hello\"world" },
+        .{ .format = .yaml, .data = "a: b" },
+        .{ .format = .toml, .data = "x = 1" },
+        .{ .format = .json, .data = "nested\\path" },
+    };
+    var results: [4]parallel.SerializeResult = undefined;
+
+    parallel.parallelSerialize(std.testing.allocator, &inputs, &results);
+    defer for (results) |r| if (r.output) |o| std.testing.allocator.free(o);
+
+    for (results) |r| {
+        try std.testing.expect(r.success);
+        try std.testing.expect(r.output != null);
+        try std.testing.expect(r.output.?.len > 0);
+    }
+}
+
+test "Q-NEW-09: parallel.parallelSerialize on empty data reports failure" {
+    var inputs: [4]parallel.SerializeInput = undefined;
+    for (&inputs) |*in| in.* = .{ .format = .json, .data = "" };
+    var results: [4]parallel.SerializeResult = undefined;
+
+    parallel.parallelSerialize(std.testing.allocator, &inputs, &results);
+    defer for (results) |r| if (r.output) |o| std.testing.allocator.free(o);
+
+    for (results) |r| {
+        try std.testing.expect(!r.success);
+        try std.testing.expect(r.output == null);
+    }
+}
+
+test "S-NEW-03: parallelSerialize with non-thread-safe arena over many items" {
+    // Drive a contended, high-item-count parallel run through a NON-thread-safe
+    // arena allocator. Before the internal thread-safe wrapper, concurrent
+    // alloc/free on the shared arena would race (CWE-362 -> CWE-787). This must
+    // complete correctly with no corruption.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const N = 48; // > serialize threshold, <= MAX_CHUNKS: spawns many workers
+    var iter: usize = 0;
+    while (iter < 16) : (iter += 1) {
+        var inputs: [N]parallel.SerializeInput = undefined;
+        var results: [N]parallel.SerializeResult = undefined;
+        for (&inputs) |*in| in.* = .{ .format = .json, .data = "payload-data" };
+
+        parallel.parallelSerialize(aa, &inputs, &results);
+
+        for (results) |r| {
+            try std.testing.expect(r.success);
+            try std.testing.expect(r.output != null);
+            try std.testing.expect(r.output.?.len > 0);
+        }
+    }
+}
+
+test "S-NEW-03: parallelFileLoad with non-thread-safe arena over many items" {
+    const builtin = @import("builtin");
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const N = 32; // enough items/threads to have raced on a shared allocator
+    try tmp.dir.writeFile(io, .{ .sub_path = "shared.yaml", .data = "shared: payload\n" });
+    const path = try tmp.dir.realPathFileAlloc(io, "shared.yaml", std.testing.allocator);
+    defer std.testing.allocator.free(path);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var iter: usize = 0;
+    while (iter < 16) : (iter += 1) {
+        var inputs: [N]parallel.FileLoadInput = undefined;
+        var results: [N]parallel.FileLoadResult = undefined;
+        for (&inputs) |*in| in.* = .{ .path = path, .format = .yaml };
+
+        parallel.parallelFileLoad(aa, &inputs, &results);
+
+        for (results) |r| {
+            try std.testing.expect(r.success);
+            try std.testing.expect(r.content != null);
+            try std.testing.expectEqualStrings("shared: payload\n", r.content.?);
+        }
+    }
 }
 
 test "Q-NEW-07: parseFile propagates real open error instead of FileNotFound" {
