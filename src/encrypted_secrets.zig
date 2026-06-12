@@ -29,31 +29,20 @@ const environ = @import("environ.zig");
 const secret = @import("secret.zig");
 const process = std.process;
 
-/// Zig 0.16.0 compat: std.Thread.sleep was removed; use posix nanosleep directly.
-fn nanosleep(nanoseconds: u64) void {
-    if (builtin.os.tag == .windows) {
-        const ms: u32 = @intCast(@min(nanoseconds / std.time.ns_per_ms, @as(u64, std.math.maxInt(u32))));
-        std.os.windows.kernel32.Sleep(ms);
-        return;
-    }
-    const ns_per_s = std.time.ns_per_s;
-    var req: std.posix.timespec = .{
-        .sec = @intCast(nanoseconds / ns_per_s),
-        .nsec = @intCast(nanoseconds % ns_per_s),
-    };
-    var rem: std.posix.timespec = undefined;
-    while (true) {
-        const rc = std.posix.system.nanosleep(&req, &rem);
-        switch (std.posix.errno(rc)) {
-            .SUCCESS => return,
-            .INTR => {
-                req = rem;
-                continue;
-            },
-            else => return,
-        }
-    }
-}
+/// Scoped logger for provider subprocess diagnostics.
+/// Security: only ever logs bounded, non-secret diagnostics (e.g. a truncated
+/// prefix of a failed provider's stderr); secret material in stdout/stderr is
+/// secureZero'd and never logged (CWE-532).
+const log = std.log.scoped(.encrypted_secrets);
+
+/// Upper bound on captured stderr from a provider subprocess. Stderr is drained
+/// concurrently with stdout so a child cannot deadlock by filling the stderr
+/// pipe buffer (CWE-833) while the parent blocks reading stdout (AS-04).
+const MAX_STDERR_BYTES: usize = 64 * 1024;
+
+/// Upper bound on the stderr prefix surfaced to the log on command failure.
+/// Keeps diagnostics useful without flooding logs.
+const MAX_STDERR_LOG_BYTES: usize = 1024;
 
 const DEFAULT_COMMAND_TIMEOUT_MS: u32 = 30_000;
 
@@ -721,6 +710,92 @@ pub const SecretManager = struct {
         return env_map;
     }
 
+    /// Shared signal flag between `execCommand` and its watchdog/drainer threads.
+    ///
+    /// Modeled as a 4-byte atomic so it can be used directly as a futex word
+    /// (`io.futexWaitTimeout`/`io.futexWake`). The main thread stores `1` and
+    /// wakes the watchdog the instant the child finishes, so a successful fast
+    /// exec returns promptly instead of blocking for the full `timeout_ms`
+    /// (Q-NEW-04). 0 = child still running, 1 = main thread done with the child.
+    const DoneFlag = enum(u32) { running = 0, done = 1 };
+
+    /// Signal completion to the watchdog and wake it immediately.
+    /// Security/reliability (Q-NEW-04): the futex wake means the watchdog's
+    /// `futexWaitTimeout` returns at once on success instead of sleeping out
+    /// the whole timeout.
+    fn signalDone(io: std.Io, done: *std.atomic.Value(DoneFlag)) void {
+        done.store(.done, .release);
+        io.futexWake(DoneFlag, &done.raw, 1);
+    }
+
+    /// Concurrently drains a child's stderr pipe into an owned, bounded buffer.
+    ///
+    /// Security/reliability (AS-04, CWE-833/CWE-400): stderr MUST be drained
+    /// concurrently with stdout, and MUST be drained *completely*. If stderr
+    /// were left undrained (or drained only after stdout), a child that writes
+    /// more than the OS pipe buffer (~64 KB) to stderr would block on the stderr
+    /// write while the parent blocks reading stdout — a classic two-pipe
+    /// deadlock. Running this on its own thread breaks the cycle. The drainer
+    /// keeps at most `MAX_STDERR_BYTES` for diagnostics but continues reading
+    /// (discarding the overflow) to EOF so the child can never block.
+    ///
+    /// IO note: the drainer creates its own `std.Io.Threaded` instance. Two
+    /// independent threads performing blocking pipe reads through the *same*
+    /// `Io.Threaded` interrupt each other's syscalls (it uses `SIG.IO` to
+    /// interrupt blocking operations), which corrupts the streamed read. A
+    /// dedicated io per draining thread avoids that.
+    ///
+    /// Allocation note: the drainer uses `std.heap.page_allocator` (thread-safe)
+    /// rather than the manager's allocator. The stdout read on the main thread
+    /// allocates from `self.allocator` at the same time, and that allocator is
+    /// not guaranteed to be thread-safe; sharing it across the two threads would
+    /// be a data race. stderr is only ever used as a bounded log diagnostic
+    /// (never returned to the caller), so an independent allocator is sufficient.
+    const StderrDrainCtx = struct {
+        file: std.Io.File,
+        /// Drained stderr bytes (owned by `page_allocator`, capped at
+        /// `MAX_STDERR_BYTES`). Read only after the thread is joined; freed via
+        /// `deinit`.
+        data: []u8 = &.{},
+
+        fn run(ctx: *@This()) void {
+            // Dedicated io for this thread's blocking reads (see IO note above).
+            var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+            defer threaded.deinit();
+            const dio = threaded.io();
+
+            var read_buf: [4096]u8 = undefined;
+            var reader = ctx.file.readerStreaming(dio, &read_buf);
+
+            var kept: std.ArrayListUnmanaged(u8) = .empty;
+            var scratch: [4096]u8 = undefined;
+            // Fully drain the pipe to EOF so the child never blocks writing to
+            // stderr, but retain only a bounded prefix for diagnostics.
+            while (true) {
+                const n = reader.interface.readSliceShort(&scratch) catch break;
+                if (n == 0) break; // EOF
+                if (kept.items.len < MAX_STDERR_BYTES) {
+                    const room = MAX_STDERR_BYTES - kept.items.len;
+                    const take = @min(room, n);
+                    kept.appendSlice(std.heap.page_allocator, scratch[0..take]) catch break;
+                }
+                // Beyond the cap: keep reading to drain, but discard.
+            }
+            ctx.data = kept.toOwnedSlice(std.heap.page_allocator) catch &.{};
+        }
+
+        /// Securely zero then free the drained stderr buffer.
+        /// Security (SEC-08/CWE-316): provider diagnostics may echo secret
+        /// material, so zero before freeing.
+        fn deinit(ctx: *@This()) void {
+            if (ctx.data.len > 0) {
+                secret.secureZero(ctx.data);
+                std.heap.page_allocator.free(ctx.data);
+                ctx.data = &.{};
+            }
+        }
+    };
+
     /// Execute a command and return its output
     fn execCommand(
         self: *Self,
@@ -729,43 +804,129 @@ pub const SecretManager = struct {
         env_map: ?*process.Environ.Map,
         timeout_ms: u32,
     ) SecretError![]u8 {
-        const eio = std.Io.Threaded.global_single_threaded.io();
+        // A real, initialized Threaded io is required: process spawning must
+        // allocate the child's argv/env before fork(), and the statically
+        // initialized `global_single_threaded` io carries a `.failing`
+        // allocator, so spawning through it always fails. Back this io with the
+        // thread-safe SMP allocator since the io is shared with the watchdog
+        // thread (futex + kill).
+        var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+        defer threaded.deinit();
+        const eio = threaded.io();
+
+        const is_posix = builtin.os.tag != .windows;
         var child = process.spawn(eio, .{
             .argv = args,
             .stdout = .pipe,
             .stderr = .pipe,
             .environ_map = if (env_map) |m| m else null,
+            // POSIX: make the child its own process-group leader so the watchdog
+            // can terminate the *entire* group on timeout. Without this, a
+            // grandchild (e.g. a shell's `sleep`) can keep the stdout pipe open
+            // after the direct child is killed, leaving the parent blocked on
+            // its stdout read for the grandchild's full lifetime (Q-NEW-04).
+            .pgid = if (is_posix) 0 else null,
         }) catch return SecretError.CommandFailed;
+        // Group id equals the child pid because it leads its own group (pgid=0).
+        const child_pgid: ?std.posix.pid_t = if (is_posix) child.id else null;
 
-        // Read stdout and stderr from pipes
+        // Read stdout from its pipe; stderr is drained concurrently on a
+        // separate thread (see StderrDrainCtx) so a large-stderr child cannot
+        // deadlock the caller (AS-04, CWE-833).
         var stdout_data: []u8 = &.{};
-        const stderr_data: []u8 = &.{};
-        // Security (SEC-08): Zero buffers before freeing to prevent secret leakage (CWE-316)
+        // Security (SEC-08): Zero buffers before freeing to prevent secret
+        // leakage (CWE-316). stderr can contain provider diagnostics that may
+        // echo secret material, so it is zeroed on the same footing as stdout.
         defer {
             if (stdout_data.len > 0) secret.secureZero(stdout_data);
             self.allocator.free(stdout_data);
         }
+
+        // Start draining stderr immediately and concurrently with the stdout
+        // read below. If the drainer thread cannot be spawned, fall back to
+        // discarding stderr (.ignore-equivalent) by closing the pipe so the
+        // child still cannot block writing to it.
+        var stderr_ctx: ?StderrDrainCtx = null;
+        var stderr_thread: ?std.Thread = null;
+        if (child.stderr) |stderr_file| {
+            stderr_ctx = .{
+                .file = stderr_file,
+            };
+            stderr_thread = std.Thread.spawn(.{}, StderrDrainCtx.run, .{&stderr_ctx.?}) catch null;
+            if (stderr_thread == null) {
+                // Could not spawn a drainer: close stderr so the child cannot
+                // deadlock writing to an unread pipe. Diagnostics are lost but
+                // correctness/availability is preserved.
+                stderr_file.close(eio);
+                child.stderr = null;
+                stderr_ctx = null;
+            }
+        }
+        // Drained stderr is owned by the ctx; secureZero + free on every exit
+        // path. Safe to read/free only after the drainer thread is joined
+        // (handled by `cleanup` below before any use of `stderr_ctx.data`).
         defer {
-            if (stderr_data.len > 0) secret.secureZero(stderr_data);
-            self.allocator.free(stderr_data);
+            if (stderr_ctx) |*sctx| sctx.deinit();
         }
 
-        var done = std.atomic.Value(bool).init(false);
+        var done = std.atomic.Value(DoneFlag).init(.running);
         var timed_out = std.atomic.Value(bool).init(false);
+        // Reaper guard: `child.kill` and `child.wait` both reap the child and
+        // null out `child.id`; calling either twice panics. This CAS ensures
+        // exactly one party (the main thread on normal/error exit, or the
+        // watchdog on timeout) reaps the child.
+        var reaped = std.atomic.Value(bool).init(false);
         var watchdog: ?std.Thread = null;
 
         const TimeoutCtx = struct {
             child: *process.Child,
-            done: *std.atomic.Value(bool),
+            child_pgid: ?std.posix.pid_t,
+            done: *std.atomic.Value(DoneFlag),
             timed_out: *std.atomic.Value(bool),
+            reaped: *std.atomic.Value(bool),
             timeout_ms: u32,
             io: std.Io,
 
             fn run(ctx: *@This()) void {
-                nanosleep(@as(u64, ctx.timeout_ms) * std.time.ns_per_ms);
-                if (!ctx.done.load(.acquire)) {
-                    ctx.timed_out.store(true, .release);
-                    ctx.child.kill(ctx.io);
+                // Wait until either the child completes (main thread stores
+                // `.done` and wakes us via futexWake) or the timeout elapses.
+                // Unlike a plain sleep-then-check, futexWaitTimeout returns the
+                // instant the child finishes, so a fast successful exec no
+                // longer stalls for the full timeout (Q-NEW-04). Spurious
+                // wakeups are handled by re-checking `done` against the fixed
+                // deadline.
+                const deadline = std.Io.Clock.Timestamp.fromNow(ctx.io, .{
+                    .clock = .awake,
+                    .raw = .{ .nanoseconds = @as(i96, ctx.timeout_ms) * std.time.ns_per_ms },
+                });
+                while (ctx.done.load(.acquire) == .running) {
+                    ctx.io.futexWaitTimeout(
+                        DoneFlag,
+                        &ctx.done.raw,
+                        .running,
+                        .{ .deadline = deadline },
+                    ) catch {};
+                    if (ctx.done.load(.acquire) != .running) return;
+                    // Timed out if the deadline has passed and the child is
+                    // still running.
+                    const now = std.Io.Clock.Timestamp.now(ctx.io, .awake);
+                    if (now.raw.nanoseconds >= deadline.raw.nanoseconds) {
+                        ctx.timed_out.store(true, .release);
+                        // POSIX: SIGKILL the whole process group so grandchildren
+                        // holding the stdout/stderr pipes also die, promptly
+                        // unblocking the parent's reads (Q-NEW-04). Best-effort.
+                        if (ctx.child_pgid) |pgid| {
+                            std.posix.kill(-pgid, .KILL) catch {};
+                        }
+                        // Reap only if the main thread has not already claimed
+                        // it. `kill` blocks until the child terminates, reaps
+                        // it, and closes its pipes (which unblocks the main
+                        // thread's stdout read and the stderr drainer).
+                        if (ctx.reaped.cmpxchgStrong(false, true, .acq_rel, .monotonic) == null) {
+                            ctx.child.kill(ctx.io);
+                        }
+                        return;
+                    }
                 }
             }
         };
@@ -774,41 +935,77 @@ pub const SecretManager = struct {
         if (timeout_ms > 0) {
             timeout_ctx = .{
                 .child = &child,
+                .child_pgid = child_pgid,
                 .done = &done,
                 .timed_out = &timed_out,
+                .reaped = &reaped,
                 .timeout_ms = timeout_ms,
                 .io = eio,
             };
-            // daemon (one-shot): process-termination watchdog. Fires once on
-            // child exit to bound the cleanup timeout. Thread-pool would impose
-            // submission overhead on a one-off blocking wait — not worth it.
+            // daemon (one-shot): process-termination watchdog. Wakes the moment
+            // the child exits (futexWake) and otherwise fires once at the
+            // timeout to bound a hang. Thread-pool would impose submission
+            // overhead on a one-off blocking wait — not worth it.
             watchdog = std.Thread.spawn(.{}, TimeoutCtx.run, .{&timeout_ctx}) catch null;
         }
 
-        // Read stdout pipe
+        // Join the stderr drainer and the watchdog, signaling completion so the
+        // watchdog wakes immediately. Centralized so every early-return path
+        // tears the helper threads down deterministically (no leaked threads,
+        // no full-timeout stall).
+        const cleanup = struct {
+            fn run(io: std.Io, d: *std.atomic.Value(DoneFlag), wd: ?std.Thread, st: ?std.Thread) void {
+                signalDone(io, d);
+                if (st) |t| t.join();
+                if (wd) |t| t.join();
+            }
+        }.run;
+
+        // Read stdout pipe (stderr is being drained concurrently). If the
+        // watchdog fires it closes stdout, so this read returns rather than
+        // blocking forever.
         if (child.stdout) |stdout_file| {
             var read_buf: [4096]u8 = undefined;
             var reader = stdout_file.readerStreaming(eio, &read_buf);
             stdout_data = reader.interface.allocRemaining(self.allocator, std.Io.Limit.limited(1024 * 1024)) catch {
-                done.store(true, .release);
-                if (watchdog) |t| t.join();
+                cleanup(eio, &done, watchdog, stderr_thread);
+                if (timed_out.load(.acquire)) return SecretError.Timeout;
                 return SecretError.IoError;
             };
         }
 
-        const term = child.wait(eio) catch {
-            done.store(true, .release);
-            if (watchdog) |t| t.join();
-            return SecretError.CommandFailed;
-        };
-        done.store(true, .release);
-        if (watchdog) |t| t.join();
+        // Reap the child unless the watchdog already claimed it (timeout). When
+        // the watchdog wins the CAS, skip wait() entirely to avoid a double-reap
+        // panic; the timeout is surfaced below.
+        var term: process.Child.Term = .{ .unknown = 0 };
+        const we_reap = reaped.cmpxchgStrong(false, true, .acq_rel, .monotonic) == null;
+        if (we_reap) {
+            term = child.wait(eio) catch {
+                cleanup(eio, &done, watchdog, stderr_thread);
+                if (timed_out.load(.acquire)) return SecretError.Timeout;
+                return SecretError.CommandFailed;
+            };
+        }
+        cleanup(eio, &done, watchdog, stderr_thread);
 
-        if (timed_out.load(.acquire)) {
+        if (timed_out.load(.acquire) or !we_reap) {
             return SecretError.Timeout;
         }
 
-        try handleTermination(term);
+        handleTermination(term) catch |err| {
+            // Surface a bounded, non-secret prefix of the provider's stderr to
+            // aid debugging of failed secret loads. The full buffer is
+            // secureZero'd by the defer above.
+            if (stderr_ctx) |sctx| {
+                if (sctx.data.len > 0) {
+                    const diag = mem.trimEnd(u8, sctx.data[0..@min(sctx.data.len, MAX_STDERR_LOG_BYTES)], "\n\r");
+                    if (diag.len > 0) {
+                        log.warn("provider command failed (argv[0]={s}): {s}", .{ args[0], diag });
+                    }
+                }
+            }
+            return err;
+        };
 
         const trimmed = mem.trimEnd(u8, stdout_data, "\n\r");
         if (json_field) |field| {
@@ -816,6 +1013,20 @@ pub const SecretManager = struct {
         }
 
         return self.allocator.dupe(u8, trimmed) catch return SecretError.OutOfMemory;
+    }
+
+    /// TEST-ONLY: drive `execCommand` with a caller-supplied argv so the
+    /// stderr-draining (AS-04) and wakeable-watchdog (Q-NEW-04) logic can be
+    /// exercised against a controlled child process in CI (where no real
+    /// `vault`/`op` binary exists). Not part of the supported public API; only
+    /// reachable from the test build.
+    pub fn execCommandTestHook(
+        self: *Self,
+        args: []const []const u8,
+        timeout_ms: u32,
+    ) SecretError![]u8 {
+        if (!builtin.is_test) @compileError("execCommandTestHook is test-only");
+        return self.execCommand(args, null, null, timeout_ms);
     }
 
     fn extractJsonField(allocator: Allocator, json_bytes: []const u8, field: []const u8) SecretError![]u8 {

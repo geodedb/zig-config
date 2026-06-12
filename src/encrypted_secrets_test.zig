@@ -5,6 +5,7 @@
 //! Extracted to reduce encrypted_secrets.zig to production code only (Q-NEW-6).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const process = std.process;
 const es = @import("encrypted_secrets.zig");
 
@@ -596,4 +597,106 @@ test "buildMinimalOnePasswordEnvMap omits optional fields when not set" {
         count += 1;
     }
     try std.testing.expectEqual(@as(usize, 2), count);
+}
+
+// ============================================================================
+// Gap Closure Tests: execCommand subprocess draining + wakeable watchdog
+// (AS-04 / Q-NEW-10: stderr deadlock, CWE-833/CWE-400; Q-NEW-04: watchdog stall)
+//
+// These drive the real `execCommand` via `execCommandTestHook` against a child
+// we fully control (`/bin/sh -c ...`), since CI has no real `vault`/`op` binary.
+// POSIX-only: guarded on a non-Windows shell.
+// ============================================================================
+
+/// Monotonic nanosecond reading using the Zig 0.16 clock idiom (no std.time.Timer).
+fn monotonicNs() i96 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    return std.Io.Clock.Timestamp.now(io, .awake).raw.nanoseconds;
+}
+
+test "execCommand: fast success returns promptly (Q-NEW-04)" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var manager = SecretManager.init(std.testing.allocator);
+
+    // Default 30s timeout. Before the fix, the watchdog slept the full timeout
+    // and join() blocked for ~30s even though the child exited instantly.
+    // After the fix, the watchdog wakes on completion, so this must return in
+    // well under the timeout. Assert < 2s wall-time.
+    const argv = [_][]const u8{ "/bin/sh", "-c", "printf '%s' my-secret-value" };
+
+    const start = monotonicNs();
+    const out = try manager.execCommandTestHook(&argv, 30_000);
+    const elapsed_ns = monotonicNs() - start;
+    defer manager.freeSecret(out);
+
+    try std.testing.expectEqualStrings("my-secret-value", out);
+    // Must be far below the 30s timeout (and below 2s) -- proves the watchdog
+    // wakes on completion rather than sleeping out the timeout.
+    try std.testing.expect(elapsed_ns < 2 * std.time.ns_per_s);
+}
+
+test "execCommand: large stderr does not deadlock (AS-04)" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var manager = SecretManager.init(std.testing.allocator);
+
+    // Child writes ~256 KB to stderr (well past the ~64 KB pipe buffer) and a
+    // small payload to stdout. If stderr were not drained concurrently, the
+    // child would block on the stderr write while we block reading stdout -> a
+    // classic two-pipe deadlock. With concurrent draining this returns quickly.
+    //
+    // `yes` emits an unbounded stream; `head -c` bounds it to 256 KB on stderr.
+    const script =
+        \\head -c 262144 /dev/zero | tr '\0' 'E' 1>&2
+        \\printf '%s' ok-stdout
+    ;
+    const argv = [_][]const u8{ "/bin/sh", "-c", script };
+
+    const start = monotonicNs();
+    const out = try manager.execCommandTestHook(&argv, 30_000);
+    const elapsed_ns = monotonicNs() - start;
+    defer manager.freeSecret(out);
+
+    try std.testing.expectEqualStrings("ok-stdout", out);
+    // No deadlock: completes promptly despite the large stderr volume.
+    try std.testing.expect(elapsed_ns < 5 * std.time.ns_per_s);
+}
+
+test "execCommand: hanging child hits timeout (Q-NEW-04)" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var manager = SecretManager.init(std.testing.allocator);
+
+    // Child sleeps far longer than the timeout. The watchdog must fire and kill
+    // it, surfacing Timeout. Use a short timeout so the test is fast.
+    const argv = [_][]const u8{ "/bin/sh", "-c", "sleep 30" };
+
+    const start = monotonicNs();
+    const result = manager.execCommandTestHook(&argv, 300);
+    const elapsed_ns = monotonicNs() - start;
+
+    if (result) |out| {
+        manager.freeSecret(out);
+        return error.@"expected Timeout but command succeeded";
+    } else |err| {
+        try std.testing.expectEqual(SecretError.Timeout, err);
+    }
+    // Watchdog enforced the ~300ms timeout rather than waiting out the sleep.
+    try std.testing.expect(elapsed_ns < 5 * std.time.ns_per_s);
+}
+
+test "execCommand: non-zero exit surfaces CommandFailed (AS-04 diagnostics)" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var manager = SecretManager.init(std.testing.allocator);
+
+    // Child writes a diagnostic to stderr and exits non-zero. stderr must be
+    // drained (no hang) and the failure surfaced as CommandFailed. The stderr
+    // prefix is logged at warn level (not asserted here -- it must not leak via
+    // the returned value/error).
+    const argv = [_][]const u8{ "/bin/sh", "-c", "printf 'boom diagnostic' 1>&2; exit 3" };
+
+    const result = manager.execCommandTestHook(&argv, 30_000);
+    try std.testing.expectError(SecretError.CommandFailed, result);
 }
