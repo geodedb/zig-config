@@ -44,7 +44,17 @@ pub fn mergeMaps(
     var result = std.StringHashMap(V).init(allocator);
     // PERF-59: Pre-allocate capacity to avoid O(log N) rehashes during insertion
     try result.ensureTotalCapacity(@intCast(base.count() + overlay.count()));
-    errdefer result.deinit();
+    // Q-NEW-13: On a later allocation failure, free every key already duped via
+    // allocator.dupe before deinit -- result.deinit() alone frees only the
+    // table, leaking the owned keys. The success path must NOT free keys: the
+    // caller owns them (see tests below).
+    errdefer {
+        var err_it = result.iterator();
+        while (err_it.next()) |err_entry| {
+            allocator.free(err_entry.key_ptr.*);
+        }
+        result.deinit();
+    }
 
     // Copy all base values
     var base_iter = base.iterator();
@@ -382,4 +392,53 @@ test "mergeMaps concat_arrays with overlapping keys does not leak" {
 
     try std.testing.expectEqual(@as(u32, 2), result.get("key").?);
     try std.testing.expectEqual(@as(usize, 1), result.count());
+}
+
+test "mergeMaps frees duped keys on mid-operation OOM (Q-NEW-13)" {
+    // Q-NEW-13 regression test: when an allocation fails partway through
+    // mergeMaps, the errdefer used to call only result.deinit(), which frees
+    // the hashmap's table but NOT the keys already duped via allocator.dupe.
+    // Those keys leaked. We drive the failure with a FailingAllocator backed by
+    // the leak-checking testing allocator: if any already-inserted key is not
+    // freed on the error path, the backing allocator reports a leak and the
+    // test fails.
+    var base = std.StringHashMap(u32).init(std.testing.allocator);
+    defer base.deinit();
+    try base.put("alpha", 1);
+    try base.put("bravo", 2);
+    try base.put("charlie", 3);
+    try base.put("delta", 4);
+
+    var overlay = std.StringHashMap(u32).init(std.testing.allocator);
+    defer overlay.deinit();
+    try overlay.put("echo", 5);
+
+    // Find a fail_index that lands mid-merge (at least one key already duped),
+    // then assert the failure is surfaced and no leak occurs. Sweep a range so
+    // the test is robust to the exact allocation count of ensureTotalCapacity.
+    var failed_at_least_once = false;
+    var idx: usize = 0;
+    while (idx < 12) : (idx += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = idx });
+        const alloc = failing.allocator();
+
+        if (mergeMaps(u32, alloc, base, overlay, .{ .strategy = .override })) |*result_const| {
+            // Success path: caller owns the keys and must free them.
+            var result = result_const.*;
+            var it = result.iterator();
+            while (it.next()) |entry| {
+                alloc.free(entry.key_ptr.*);
+            }
+            result.deinit();
+        } else |err| {
+            // Failure path: errdefer inside mergeMaps must have freed every
+            // already-duped key. If not, the backing testing allocator detects
+            // the leak. We only require the error to be OutOfMemory.
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            failed_at_least_once = true;
+        }
+    }
+
+    // Make sure the sweep actually exercised the failure path.
+    try std.testing.expect(failed_at_least_once);
 }

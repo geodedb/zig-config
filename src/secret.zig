@@ -219,6 +219,9 @@ pub fn readFromFileWithOptions(path: []const u8, allocator: Allocator, options: 
     // through the trimmed sub-slice).
     const trimmed = mem.trim(u8, content, "\n\r");
     const result = allocator.dupe(u8, trimmed) catch {
+        // Q-NEW-14 (CWE-316): zero the plaintext secret before freeing on the
+        // error path too -- otherwise secret bytes linger in freed heap.
+        secureZero(content);
         allocator.free(content);
         return SecretError.ReadError;
     };
@@ -275,6 +278,9 @@ pub fn readFromStdin(allocator: Allocator) SecretError![]const u8 {
         // result and free the original to avoid pointer-mismatch leak.
         const trimmed = mem.trim(u8, content, "\n\r");
         const result = allocator.dupe(u8, trimmed) catch {
+            // Q-NEW-14 (CWE-316): zero the plaintext secret before freeing on
+            // the error path too (the interactive branch above already does).
+            secureZero(content);
             allocator.free(content);
             return SecretError.StdinNotAvailable;
         };
@@ -483,4 +489,99 @@ test "isPathSafe rejects Windows-style backslash traversal (SEC-05)" {
 test "readFromFile rejects Windows-style backslash traversal (SEC-05)" {
     const result = readFromFile("..\\..\\..\\Windows\\System32\\config\\SAM", std.testing.allocator);
     try std.testing.expectError(SecretError.PathTraversalDetected, result);
+}
+
+// Q-NEW-14: A test allocator that fails the dupe of the trimmed secret (the
+// allocation whose requested length equals `fail_len`) while passing every
+// other request through to a leak-checking backing allocator. The dupe of the
+// trimmed secret requests exactly `trimmed.len` bytes, so setting
+// `fail_len = trimmed.len` drives the read-from-file dupe-OOM error path: the
+// read succeeds, `content` is materialized, then the dupe fails. The backing
+// (testing) allocator then verifies that the error path frees `content` (no
+// leak). The secureZero-before-free ordering on that path is enforced by code
+// inspection -- the allocator vtable cannot observe it because
+// std.mem.Allocator.free overwrites freed slices with `undefined` in safe
+// builds before dispatching to the vtable.
+const DupeFailAllocator = struct {
+    backing: Allocator,
+    fail_len: usize,
+    induced_failure: bool = false,
+
+    fn allocator(self: *DupeFailAllocator) Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = allocFn,
+                .resize = resizeFn,
+                .remap = remapFn,
+                .free = freeFn,
+            },
+        };
+    }
+
+    fn allocFn(ctx: *anyopaque, len: usize, alignment: mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *DupeFailAllocator = @ptrCast(@alignCast(ctx));
+        if (len == self.fail_len) {
+            self.induced_failure = true;
+            return null;
+        }
+        return self.backing.vtable.alloc(self.backing.ptr, len, alignment, ra);
+    }
+
+    fn resizeFn(ctx: *anyopaque, buf: []u8, alignment: mem.Alignment, new_len: usize, ra: usize) bool {
+        const self: *DupeFailAllocator = @ptrCast(@alignCast(ctx));
+        return self.backing.vtable.resize(self.backing.ptr, buf, alignment, new_len, ra);
+    }
+
+    fn remapFn(ctx: *anyopaque, buf: []u8, alignment: mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        const self: *DupeFailAllocator = @ptrCast(@alignCast(ctx));
+        return self.backing.vtable.remap(self.backing.ptr, buf, alignment, new_len, ra);
+    }
+
+    fn freeFn(ctx: *anyopaque, buf: []u8, alignment: mem.Alignment, ra: usize) void {
+        const self: *DupeFailAllocator = @ptrCast(@alignCast(ctx));
+        self.backing.vtable.free(self.backing.ptr, buf, alignment, ra);
+    }
+};
+
+test "readFromFileWithOptions handles dupe OOM without leaking secret (Q-NEW-14)" {
+    // Q-NEW-14 regression test (CWE-316): when the dupe of the trimmed secret
+    // fails (OOM), the read-from-file path must (a) surface the error and
+    // (b) free `content` (the plaintext secret) -- after secureZero'ing it.
+    // We drive the dupe failure deterministically and back it with the
+    // leak-checking testing allocator: if `content` is not freed on the error
+    // path, the backing allocator reports a leak. The secureZero-before-free
+    // ordering is enforced by code inspection (see readFromFileWithOptions and
+    // readFromStdin: every secret error path zeroes `content` before free).
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const secret_text = "top-secret-value-q-new-14";
+    const tst_io = std.Io.Threaded.global_single_threaded.io();
+    const file = try tmp_dir.dir.createFile(tst_io, "secret_oom.txt", .{});
+    try file.writeStreamingAll(tst_io, secret_text ++ "\n");
+    file.close(tst_io);
+
+    const path = try tmp_dir.dir.realPathFileAlloc(tst_io, "secret_oom.txt", std.testing.allocator);
+    defer std.testing.allocator.free(path);
+
+    // The dupe requests exactly the trimmed length (secret_text.len). Failing
+    // that allocation runs the dupe-OOM error branch after the read succeeds.
+    var fail_alloc = DupeFailAllocator{
+        .backing = std.testing.allocator,
+        .fail_len = secret_text.len,
+    };
+    const alloc = fail_alloc.allocator();
+
+    const result = readFromFileWithOptions(path, alloc, .{
+        .skip_traversal_check = true,
+        .follow_symlinks = true,
+    });
+
+    // The dupe failure must surface as ReadError.
+    try std.testing.expectError(SecretError.ReadError, result);
+    // Confirm we actually induced the dupe failure (otherwise the test is moot).
+    try std.testing.expect(fail_alloc.induced_failure);
+    // No leak assertion is explicit: std.testing.allocator (the backing) will
+    // fail the test on teardown if `content` was not freed on the error path.
 }

@@ -219,6 +219,32 @@ test "Loader supports float types" {
     try std.testing.expectApproxEqAbs(@as(f64, 60.25), loader.config.timeout, 0.001);
 }
 
+test "Q-NEW-15: large float field is applied and does not drop siblings" {
+    // Q-NEW-15 regression test: formatting a large-magnitude f64 (1e308 has
+    // ~309 digits) with "{d}" into a 64-byte buffer overflowed -> NoSpaceLeft,
+    // and the old code did a bare `return`, silently dropping that field AND
+    // every not-yet-applied sibling. JSON object iteration order is not
+    // guaranteed, so we assert BOTH the large float and its sibling survive.
+    const Config = struct {
+        big: f64 = 0.0,
+        after: u32 = 0,
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+
+    const json_content =
+        \\{"big": 1e308, "after": 42}
+    ;
+
+    try ldr.parseContent(json_content, .json, .project, "test.json");
+
+    // The large float must be applied (not dropped).
+    try std.testing.expectApproxEqAbs(@as(f64, 1e308), ldr.config.big, 1e300);
+    // The sibling must still be applied regardless of iteration order.
+    try std.testing.expectEqual(@as(u32, 42), ldr.config.after);
+}
+
 test "Loader supports optional types" {
     const Config = struct {
         host: []const u8 = "localhost",

@@ -55,8 +55,15 @@ pub fn load(path: []const u8, allocator: Allocator) ![]EnvEntry {
     };
     defer file.close(de_io);
 
-    const content = secret.readFileToEnd(file, allocator, limits.MAX_DOTENV_FILE_SIZE) catch {
-        return try allocator.alloc(EnvEntry, 0);
+    // Q-NEW-08: A successful OPEN means the file exists and is readable, so a
+    // subsequent READ error is real and must NOT be masked as "no file".
+    // Propagate OutOfMemory and StreamTooLong (file exceeds MAX_DOTENV_FILE_SIZE);
+    // only the file-OPEN catch above keeps the optional-file "missing → empty"
+    // behavior.
+    const content = secret.readFileToEnd(file, allocator, limits.MAX_DOTENV_FILE_SIZE) catch |e| switch (e) {
+        error.OutOfMemory => return e,
+        error.StreamTooLong => return e,
+        else => return try allocator.alloc(EnvEntry, 0),
     };
     defer allocator.free(content);
 
@@ -571,4 +578,32 @@ test "dotenv: load and parseContent propagate OutOfMemory" {
     const ParseErrorSet = @typeInfo(ParseReturnType).error_union.error_set;
     const parse_oom: ParseErrorSet = error.OutOfMemory;
     try std.testing.expect(parse_oom == error.OutOfMemory);
+}
+
+test "dotenv: load propagates StreamTooLong for oversize .env (Q-NEW-08)" {
+    // Q-NEW-08 regression test: before the fix, the read-catch in load()
+    // turned a real read error (StreamTooLong / OutOfMemory) into an empty
+    // slice, making an over-limit .env indistinguishable from a missing file.
+    // After the fix, an over-limit file surfaces error.StreamTooLong.
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // Build content larger than MAX_DOTENV_FILE_SIZE. One valid line followed
+    // by filler comment bytes so the file is well-formed but over the limit.
+    const filler_len = limits.MAX_DOTENV_FILE_SIZE + 1024;
+    const filler = try std.testing.allocator.alloc(u8, filler_len);
+    defer std.testing.allocator.free(filler);
+    @memset(filler, '#'); // comment bytes; harmless if ever parsed
+
+    const tst_io = std.Io.Threaded.global_single_threaded.io();
+    tmp_dir.dir.writeFile(tst_io, .{
+        .sub_path = "oversize.env",
+        .data = filler,
+    }) catch unreachable;
+
+    const real_path = tmp_dir.dir.realPathFileAlloc(tst_io, "oversize.env", std.testing.allocator) catch unreachable;
+    defer std.testing.allocator.free(real_path);
+
+    const result = load(real_path, std.testing.allocator);
+    try std.testing.expectError(error.StreamTooLong, result);
 }

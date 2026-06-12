@@ -850,8 +850,19 @@ pub fn Loader(comptime T: type) type {
                     };
                 },
                 .float => |f| {
-                    var buf: [64]u8 = undefined;
-                    const str = std.fmt.bufPrint(&buf, "{d}", .{f}) catch return;
+                    // Q-NEW-15: a large-magnitude f64 (e.g. 1e308 has ~309
+                    // digits) overflows a small stack buffer. Size for the
+                    // worst case and fall back to a heap allocation on the rare
+                    // NoSpaceLeft so we never silently drop this field (and its
+                    // siblings) via a bare `return`.
+                    var buf: [512]u8 = undefined;
+                    var heap_str: ?[]u8 = null;
+                    defer if (heap_str) |h| self.allocator.free(h);
+                    const str = std.fmt.bufPrint(&buf, "{d}", .{f}) catch blk: {
+                        const h = std.fmt.allocPrint(self.allocator, "{d}", .{f}) catch return LoadError.OutOfMemory;
+                        heap_str = h;
+                        break :blk @as([]const u8, h);
+                    };
                     self.setField(prefix, str, source, path) catch |err| switch (err) {
                         LoadError.OutOfMemory => return LoadError.OutOfMemory,
                         else => {}, // Unknown key or type mismatch is non-fatal during parsing
