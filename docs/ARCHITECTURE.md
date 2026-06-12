@@ -1,10 +1,10 @@
 # Architecture
 
-This document describes the architecture of the zigconfig library (Zig 0.15.2).
+This document describes the architecture of the zigconfig library (Zig 0.16.0).
 
 ## Module Structure
 
-```
+```text
 src/
 ├── config.zig             # Main entry point and unified API (Value, Config builder, safeWriteConfig)
 ├── loader.zig             # Typed config loader with comptime struct reflection (Loader(T))
@@ -38,6 +38,7 @@ The `Value` type provides a format-agnostic interface for working with configura
 All internal modules are re-exported through `config.zig` as the single public entry point.
 
 Supported formats (6):
+
 - **YAML** -- External `yaml` library
 - **JSON** -- External `json` library (std.json used internally for remote responses)
 - **TOML** -- External `toml` library
@@ -96,6 +97,7 @@ Uses `environ.zig` for cross-platform env var access.
 Two-tier secret architecture:
 
 **`secret.zig`** -- Local secret operations:
+
 - Read secrets only from files or stdin (never flags or env)
 - `secureZero` for memory sanitization
 - `isPathSafe` / `isPathSafeStrict` for path traversal prevention
@@ -103,6 +105,7 @@ Two-tier secret architecture:
 - `createFileNoFollow` with 0o600 permissions for safe writes
 
 **`encrypted_secrets.zig`** -- External secret providers:
+
 - HashiCorp Vault (PATH allowlist via `resolveVaultPath`)
 - 1Password CLI (binary allowlist via `resolveOpPath`)
 - `SensitiveString` wrapper with `[REDACTED]` formatting (CWE-532)
@@ -117,6 +120,7 @@ Clients for remote configuration stores:
 - **Consul KV** -- Standard KV API
 
 Security hardening:
+
 - SSRF protection: `validateUrl`, `isPrivateIPv4Bytes`, CGNAT range blocking, percent-decode normalization
 - DNS rebinding mitigation
 - Redirect blocking
@@ -127,6 +131,7 @@ Security hardening:
 ### Validation (`validation.zig`)
 
 Unified validation module with:
+
 - Pattern matching via decomposed `matchPatternImpl`
 - Escape sequence handling
 - ReDoS hardening for user-supplied patterns
@@ -140,6 +145,7 @@ Unified validation module with:
 ### Environment Variable Expansion (`expand.zig`)
 
 Expands variable references in configuration values:
+
 - `${VAR}` and `$VAR` syntax
 - `${VAR:-default}` for fallback values
 - `${VAR:+alternate}` for conditional substitution
@@ -173,7 +179,7 @@ All size limits in one place to prevent resource exhaustion (CWE-400):
 
 ## Data Flow
 
-```
+```text
                         ┌──────────────┐
                         │  Config File │
                         │ (YAML/JSON/  │
@@ -242,6 +248,7 @@ Standard library usage: `std.json` for remote API response parsing (etcd/Consul)
 ## Security Considerations
 
 The library addresses the following CWE categories:
+
 - **CWE-59** -- Symlink following (`O_NOFOLLOW`, `isSymlink` checks)
 - **CWE-214** -- Env-based secret exposure (env:// provider disabled by default)
 - **CWE-367** -- TOCTOU in file watching (documented, mitigated by validation-on-reload)

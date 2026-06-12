@@ -1,7 +1,7 @@
 # Roadmap
 
 This document outlines the development roadmap for zigconfig, a configuration
-library for Zig 0.15.2.
+library for Zig 0.16.0.
 
 ## Current Status (v0.3.x)
 
@@ -195,6 +195,7 @@ See [VIPER_COMPARISON.md](./VIPER_COMPARISON.md) for feature parity analysis wit
 Want to help? See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
 
 Priority areas:
+
 1. Viper parity gaps (v0.4.0): parseReader() (#38)
 2. JSON Schema validation (#5)
 3. Nested YAML parsing (#4)
@@ -204,6 +205,7 @@ Priority areas:
 ## Feedback
 
 We welcome feedback on this roadmap. Open an issue to discuss:
+
 - Feature prioritization
 - New feature requests
 - Use cases we should support

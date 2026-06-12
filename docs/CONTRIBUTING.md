@@ -6,11 +6,14 @@ Thank you for your interest in contributing to zigconfig!
 
 1. Fork the repository
 2. Clone your fork:
+
    ```bash
    git clone git@gitlab.com:YOUR_USERNAME/zig/config.git
    ```
-3. Set up the development environment (Zig 0.15.2+)
+
+3. Set up the development environment (Zig 0.16.0+)
 4. Run tests to verify setup:
+
    ```bash
    zig build test
    ```
@@ -112,7 +115,7 @@ Looking for a place to start? Check these issues:
 
 ### MR Title Format
 
-```
+```text
 type(scope): description
 
 Examples:

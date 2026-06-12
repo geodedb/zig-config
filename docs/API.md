@@ -65,19 +65,30 @@ defer parser.deinit();
 try parser.string("config", 'c', "Config file", null);
 try parser.boolean("debug", 'd', "Enable debug");
 
-try parser.parseArgs();  // Parse from process args
+// Zig 0.16 delivers argv to `main`; pass the args you received.
+// `parseArgs` skips the program name (args[0]).
+try parser.parseArgs(args);
 
-loader.applyFlags(&parser);  // Apply to loader
+try loader.applyFlags(&parser);  // Apply to loader
 ```
 
 ### XDG Directories
 
 ```zig
-const paths = try config.getPaths(allocator, "myapp");
+// Per-application directories (the path already includes the app name):
+const config_dir = try config.getConfigDir(allocator, "myapp"); // ~/.config/myapp
+defer allocator.free(config_dir);
+const data_dir = try config.getDataDir(allocator, "myapp");     // ~/.local/share/myapp
+defer allocator.free(data_dir);
+const cache_dir = try config.getCacheDir(allocator, "myapp");   // ~/.cache/myapp
+defer allocator.free(cache_dir);
+
+// Or the XDG base directories (no app subdir):
+var paths = try config.getPaths(allocator);
 defer paths.deinit();
-// paths.config = ~/.config/myapp
-// paths.data = ~/.local/share/myapp
-// paths.cache = ~/.cache/myapp
+// paths.config_home = ~/.config
+// paths.data_home   = ~/.local/share
+// paths.cache_home  = ~/.cache
 ```
 
 ### Secret Handling

@@ -1,6 +1,6 @@
 # zigconfig
 
-A comprehensive configuration management library for Zig 0.15.2, inspired by [Viper](https://github.com/spf13/viper).
+A comprehensive configuration management library for Zig 0.16.0, inspired by [Viper](https://github.com/spf13/viper).
 
 [![GitLab](https://img.shields.io/badge/GitLab-devnw%2Fzig%2Fconfig-orange)](https://gitlab.com/devnw/zig/config)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -10,7 +10,7 @@ A comprehensive configuration management library for Zig 0.15.2, inspired by [Vi
 | Aspect | Info |
 |--------|------|
 | API Stability | Beta |
-| Zig Version | 0.15.2 |
+| Zig Version | 0.16.0 |
 | Platforms | Linux, macOS, Windows |
 
 ## Features
@@ -69,7 +69,7 @@ const config = @import("config");
 const std = @import("std");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -363,7 +363,7 @@ open zig-out/docs/index.html
 
 ## Project Status
 
-### Current Version: v0.3.x
+### Current Version: v0.1.4
 
 Full feature parity with Viper plus additional features. See the [Roadmap](docs/ROADMAP.md) for planned enhancements.
 
@@ -372,6 +372,7 @@ Full feature parity with Viper plus additional features. See the [Roadmap](docs/
 zigconfig has achieved feature parity with [Viper](https://github.com/spf13/viper). See [VIPER_COMPARISON.md](docs/VIPER_COMPARISON.md) for details.
 
 **zigconfig advantages over Viper:**
+
 - Provenance tracking (know where each value came from)
 - Secure secret handling (never from flags/env)
 - XDG Base Directory compliance
@@ -445,6 +446,7 @@ zig build install
 Contributions are welcome! Please see [CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidelines.
 
 **Areas for contribution:**
+
 - Additional format parsers (HCL, HOCON)
 - More secret providers
 - Performance optimizations
@@ -458,6 +460,7 @@ Apache-2.0 License - see [LICENSE](LICENSE) file for details.
 ---
 
 **Links:**
+
 - [GitLab Repository](https://gitlab.com/devnw/zig/config)
 - [Issue Tracker](https://gitlab.com/devnw/zig/config/-/issues)
 - [Milestones](https://gitlab.com/devnw/zig/config/-/milestones)
