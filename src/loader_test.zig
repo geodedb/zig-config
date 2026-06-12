@@ -651,6 +651,144 @@ test "case-insensitive alias resolution" {
     try std.testing.expectEqualStrings("verbose", ldr.resolveAlias("loud"));
 }
 
+// ============================================================================
+// P-NEW-01 (regression of PERF-20): case-insensitive reads of a mixed-case key
+// must NOT grow the arena. Previously normalizeKey arena-allocated a lowercase
+// copy on every read, leaking key.len bytes per lookup (unbounded growth on a
+// load-once/read-many workload). The read paths now use a transient stack
+// buffer, so repeated reads allocate nothing.
+// ============================================================================
+
+test "P-NEW-01: case-insensitive get does not grow arena across repeated reads" {
+    const Config = struct {
+        mixedcasekey: []const u8 = "default",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+    ldr.case_insensitive = true;
+
+    // Store a value under the canonical (lowercase) key.
+    try ldr.set("MIXEDCaseKey", "value");
+
+    // Warm up: perform an initial read so any one-time arena growth (e.g. the
+    // tracker/alias map backing buffers) settles before we measure.
+    try std.testing.expectEqualStrings("value", ldr.get("MIXEDCaseKey").?);
+
+    const baseline = ldr.arena.queryCapacity();
+
+    // Read the mixed-case key many times. Pre-fix, each read arena-allocates a
+    // lowercase copy (key.len bytes), so capacity grows ~N*key.len. Post-fix,
+    // the transient stack buffer means zero arena allocation, so capacity stays
+    // flat.
+    var i: usize = 0;
+    while (i < 2000) : (i += 1) {
+        try std.testing.expectEqualStrings("value", ldr.get("MIXEDCaseKey").?);
+    }
+
+    const after = ldr.arena.queryCapacity();
+    try std.testing.expectEqual(baseline, after);
+}
+
+test "P-NEW-01: case-insensitive has/isSet do not grow arena across repeated reads" {
+    const Config = struct {
+        mixedcasekey: []const u8 = "default",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+    ldr.case_insensitive = true;
+
+    try ldr.set("MIXEDCaseKey", "value");
+
+    // Warm up both read paths.
+    try std.testing.expect(ldr.has("MIXEDCaseKey"));
+    try std.testing.expect(ldr.isSet("MIXEDCaseKey"));
+
+    const baseline = ldr.arena.queryCapacity();
+
+    var i: usize = 0;
+    while (i < 2000) : (i += 1) {
+        try std.testing.expect(ldr.has("MIXEDCaseKey"));
+        try std.testing.expect(ldr.isSet("MIXEDCaseKey"));
+    }
+
+    const after = ldr.arena.queryCapacity();
+    try std.testing.expectEqual(baseline, after);
+}
+
+test "P-NEW-01: case-insensitive get still returns correct values for any case" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+    ldr.case_insensitive = true;
+
+    try ldr.set("HOST", "example.com");
+
+    // Functional correctness must be preserved through the transient path.
+    try std.testing.expectEqualStrings("example.com", ldr.get("HOST").?);
+    try std.testing.expectEqualStrings("example.com", ldr.get("host").?);
+    try std.testing.expectEqualStrings("example.com", ldr.get("Host").?);
+    try std.testing.expectEqualStrings("example.com", ldr.get("HoSt").?);
+}
+
+test "P-NEW-01: case-insensitive get handles oversized keys via arena fallback" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+    ldr.case_insensitive = true;
+
+    // A key longer than the transient stack buffer (256B) must still normalize
+    // correctly via the arena fallback. Build a 300-char mixed-case key.
+    var key_buf: [300]u8 = undefined;
+    for (&key_buf, 0..) |*c, idx| {
+        c.* = if (idx % 2 == 0) 'A' else 'b';
+    }
+    const long_key = key_buf[0..];
+
+    try ldr.set(long_key, "long-value");
+    try std.testing.expectEqualStrings("long-value", ldr.get(long_key).?);
+
+    // A lowercase variant of the same oversized key must resolve to the same
+    // value (proving the fallback lowercases correctly).
+    var lower_buf: [300]u8 = undefined;
+    for (long_key, 0..) |c, idx| {
+        lower_buf[idx] = std.ascii.toLower(c);
+    }
+    try std.testing.expectEqualStrings("long-value", ldr.get(lower_buf[0..]).?);
+}
+
+test "P-NEW-01: case-sensitive get performs no allocation (fast path)" {
+    const Config = struct {
+        host: []const u8 = "localhost",
+    };
+
+    var ldr = Loader(Config).init(std.testing.allocator);
+    defer ldr.deinit();
+    // case_insensitive defaults to false; the read fast path must not allocate.
+
+    try ldr.set("Host", "example.com");
+
+    // Warm up.
+    try std.testing.expectEqualStrings("example.com", ldr.get("Host").?);
+
+    const baseline = ldr.arena.queryCapacity();
+
+    var i: usize = 0;
+    while (i < 2000) : (i += 1) {
+        try std.testing.expectEqualStrings("example.com", ldr.get("Host").?);
+    }
+
+    const after = ldr.arena.queryCapacity();
+    try std.testing.expectEqual(baseline, after);
+}
+
 test "Format.fromExtension returns .auto for unknown extension (GAP: silent .toml default)" {
     // Unknown extensions must not silently default to .toml
     try std.testing.expectEqual(Format.auto, Format.fromExtension("config.cfg"));

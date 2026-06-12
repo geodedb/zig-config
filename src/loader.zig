@@ -245,7 +245,8 @@ pub fn Loader(comptime T: type) type {
         /// Check if a key has been explicitly set (not just default)
         /// Returns true if the key was set from any source other than default.
         pub fn isSet(self: *const Self, key: []const u8) bool {
-            const norm_key = self.normalizeKey(key);
+            var nbuf: [256]u8 = undefined;
+            const norm_key = self.normalizeKeyTransient(key, &nbuf);
             const resolved_key = self.resolveAlias(norm_key);
 
             if (self.tracker.get(resolved_key)) |tracked| {
@@ -256,14 +257,16 @@ pub fn Loader(comptime T: type) type {
 
         /// Check if a key exists (including defaults)
         pub fn has(self: *const Self, key: []const u8) bool {
-            const norm_key = self.normalizeKey(key);
+            var nbuf: [256]u8 = undefined;
+            const norm_key = self.normalizeKeyTransient(key, &nbuf);
             const resolved_key = self.resolveAlias(norm_key);
             return self.tracker.get(resolved_key) != null;
         }
 
         /// Get a string value by key
         pub fn get(self: *const Self, key: []const u8) ?[]const u8 {
-            const norm_key = self.normalizeKey(key);
+            var nbuf: [256]u8 = undefined;
+            const norm_key = self.normalizeKeyTransient(key, &nbuf);
             const resolved_key = self.resolveAlias(norm_key);
 
             if (self.tracker.get(resolved_key)) |tracked| {
@@ -556,10 +559,15 @@ pub fn Loader(comptime T: type) type {
         // Key Normalization and Alias Resolution
         // =====================================================================
 
-        /// Normalize a key based on case sensitivity setting.
+        /// Normalize a key based on case sensitivity setting (WRITE paths).
         /// When case_insensitive is true, converts the key to lowercase
         /// using the arena allocator so the normalized key outlives the call.
         /// Returns the original key unchanged when case_insensitive is false.
+        ///
+        /// Use this only on paths that STORE the normalized key (set,
+        /// setDefault, registerAlias, bindEnv, automaticEnv). Read-only paths
+        /// must use `normalizeKeyTransient` to avoid leaking arena memory on
+        /// every lookup (P-NEW-01 / PERF-20).
         pub fn normalizeKey(self: *const Self, key: []const u8) []const u8 {
             if (!self.case_insensitive) {
                 return key;
@@ -587,6 +595,50 @@ pub fn Loader(comptime T: type) type {
                 lower[i] = std.ascii.toLower(c);
             }
             return lower;
+        }
+
+        /// Normalize a key for READ-only lookups without arena allocation.
+        ///
+        /// The normalized key produced here is purely TRANSIENT: it is used for
+        /// an alias + tracker lookup and then discarded, so it must not outlive
+        /// the call. To avoid the unbounded arena growth that an arena copy
+        /// would cause on a load-once/read-many workload (P-NEW-01, the
+        /// regression of PERF-20), this lowercases into the caller-provided
+        /// stack buffer instead.
+        ///
+        /// Fast paths (no allocation, no copy): case-sensitive mode, or a key
+        /// that is already lowercase, returns `key` unchanged. When a mixed-case
+        /// key fits in `buf` it is lowercased there. Only oversized keys
+        /// (`key.len > buf.len`, rare) fall back to the arena-allocating
+        /// `normalizeKey`. This mirrors the stack-buffer-with-fallback idiom
+        /// used by `buildPrefixWithDot` and `tryAccessPath`.
+        fn normalizeKeyTransient(self: *const Self, key: []const u8, buf: []u8) []const u8 {
+            if (!self.case_insensitive) {
+                return key;
+            }
+
+            // Check if the key is already lowercase to avoid unnecessary work.
+            var needs_lower = false;
+            for (key) |c| {
+                if (c >= 'A' and c <= 'Z') {
+                    needs_lower = true;
+                    break;
+                }
+            }
+            if (!needs_lower) {
+                return key;
+            }
+
+            // Oversized keys fall back to the arena variant (rare).
+            if (key.len > buf.len) {
+                return self.normalizeKey(key);
+            }
+
+            // Lowercase into the caller-provided stack buffer (zero allocation).
+            for (key, 0..) |c, i| {
+                buf[i] = std.ascii.toLower(c);
+            }
+            return buf[0..key.len];
         }
 
         /// Resolve an alias to its canonical key
