@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-06-12
+
+Security, correctness, and migration-completeness release closing a full appsec +
+codebase audit (Wave 15). The 0.15→0.16 migration was completed across cold
+public-API paths that had never been compile-checked, and a `refAllInRepo` compile
+guard plus `zig build check` coverage of examples and the benchmark were added so
+the issue cannot recur. Test count grew from 415 to 1036.
+
+### Security
+
+- Fail-closed SSRF host validation for non-literal hostnames under
+  `block_private_ips`, with a new `SecurityOptions.allowed_hosts` allowlist (AS-01).
+- Fixed a use-after-free in the async/parallel loaders by transferring arena
+  ownership to the caller via the new `OwnedConfig(T)` (`loadParallel` now returns
+  `OwnedConfig(T)`) (S-NEW-01).
+- Added a mutex to `Watcher` to remove a data race on the watch list (S-NEW-02).
+- Subprocess secret providers: drain stderr concurrently and use a
+  futex-wakeable watchdog with process-group SIGKILL; close child descriptors only
+  after reader threads are joined (AS-04 / Q-NEW-04 / F-01).
+- Symlink guard on the config backup path (AS-02); empty-argv panic fix (AS-03);
+  thread-safe allocator for parallel workers (S-NEW-03).
+- Opt-in, backward-compatible controls: `ExpandOptions.allowed_vars` /
+  `denied_vars` / `deny_secret_looking` for environment expansion (S-NEW-04), and
+  redaction for diff/provenance output via `formatDiffWithOptions` /
+  `printJsonRedacted` (S-NEW-05).
+
+### Fixed
+
+- Completed Zig 0.16 migration of cold paths (serialization, `parseArgs`, XDG path
+  helpers, diff formatting, parallel ops, secret stdin, benchmark, examples).
+- Implemented real parallel file load/serialize (were stubs returning null).
+- Memory/secret-hygiene fixes: temp-path leaks on error, `Consul.get` /
+  `mergeMaps` leaks, `secureZero` before free on OOM paths.
+- Error-handling: propagate real `parseFile`/`dotenv.load` errors instead of
+  masking; format large floats without dropping fields.
+- Performance: transient stack-buffer key normalization on read paths (no per-read
+  arena growth), INI section-pointer caching, hoisted properties scratch buffers.
+
+### Changed
+
+- `minimum_zig_version` is now `0.16.0`. **Breaking:** `FlagParser.parseArgs` now
+  takes the process args slice (Zig 0.16 no longer exposes argv globally), and
+  `loadParallel` returns `OwnedConfig(T)` (call `.deinit()`).
+
+### Documentation
+
+- Corrected version references (0.15.2 → 0.16.0), the `config.validate` alias, and
+  drifted API/example snippets in README, API.md, and VIPER_COMPARISON.md.
+
 ## [0.1.0] - 2026-01-24
 
 Initial open source release under Apache-2.0 license. This release consolidates all previous development work.

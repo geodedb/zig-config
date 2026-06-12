@@ -3,7 +3,7 @@
 This document outlines the development roadmap for zigconfig, a configuration
 library for Zig 0.16.0.
 
-## Current Status (v0.1.4)
+## Current Status (v0.1.5)
 
 The library has moved well beyond its initial foundation. Core functionality,
 enhanced loading, advanced features, and security hardening are all in place.

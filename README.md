@@ -363,7 +363,7 @@ open zig-out/docs/index.html
 
 ## Project Status
 
-### Current Version: v0.1.4
+### Current Version: v0.1.5
 
 Full feature parity with Viper plus additional features. See the [Roadmap](docs/ROADMAP.md) for planned enhancements.
 
