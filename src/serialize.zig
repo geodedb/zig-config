@@ -95,17 +95,17 @@ pub fn serialize(comptime T: type, value: T, allocator: Allocator, options: Seri
 
 /// Serialize to JSON format
 fn serializeJson(comptime T: type, value: T, allocator: Allocator, pretty: bool) ![]u8 {
-    var list = std.ArrayList(u8).init(allocator);
-    errdefer list.deinit();
+    var aw = std.Io.Writer.Allocating.init(allocator);
+    errdefer aw.deinit();
 
-    const writer = list.writer();
+    const writer = &aw.writer;
     try writeJsonValue(T, value, writer, 0, pretty);
 
     if (pretty) {
         try writer.writeByte('\n');
     }
 
-    return list.toOwnedSlice();
+    return try aw.toOwnedSlice();
 }
 
 /// Write a JSON value
@@ -159,12 +159,12 @@ fn writeJsonValue(comptime T: type, value: T, writer: anytype, depth: usize, pre
             try writer.print("{d}", .{value});
         },
         .pointer => |ptr| {
-            if (ptr.size == .Slice and ptr.child == u8) {
+            if (ptr.size == .slice and ptr.child == u8) {
                 // MED-2: Use shared escape helper (JSON mode, RFC 8259)
                 try writer.writeByte('"');
                 try writeEscapedString(writer, value, .json);
                 try writer.writeByte('"');
-            } else if (ptr.size == .Slice) {
+            } else if (ptr.size == .slice) {
                 // Array
                 try writer.writeByte('[');
                 if (pretty) try writer.writeByte('\n');
@@ -201,13 +201,13 @@ fn writeIndent(writer: anytype, depth: usize) !void {
 
 /// Serialize to YAML format
 fn serializeYaml(comptime T: type, value: T, allocator: Allocator, options: SerializeOptions) ![]u8 {
-    var list = std.ArrayList(u8).init(allocator);
-    errdefer list.deinit();
+    var aw = std.Io.Writer.Allocating.init(allocator);
+    errdefer aw.deinit();
 
-    const writer = list.writer();
+    const writer = &aw.writer;
     try writeYamlValue(T, value, writer, 0, options);
 
-    return list.toOwnedSlice();
+    return try aw.toOwnedSlice();
 }
 
 /// Write a YAML value
@@ -265,7 +265,7 @@ fn writeYamlScalar(comptime T: type, value: T, writer: anytype) !void {
             try writer.print("{d}", .{value});
         },
         .pointer => |ptr| {
-            if (ptr.size == .Slice and ptr.child == u8) {
+            if (ptr.size == .slice and ptr.child == u8) {
                 // Check if we need quotes
                 const needs_quotes = value.len == 0 or
                     mem.indexOf(u8, value, ":") != null or
@@ -295,13 +295,13 @@ fn writeYamlScalar(comptime T: type, value: T, writer: anytype) !void {
 
 /// Serialize to TOML format
 fn serializeToml(comptime T: type, value: T, allocator: Allocator, _: SerializeOptions) ![]u8 {
-    var list = std.ArrayList(u8).init(allocator);
-    errdefer list.deinit();
+    var aw = std.Io.Writer.Allocating.init(allocator);
+    errdefer aw.deinit();
 
-    const writer = list.writer();
+    const writer = &aw.writer;
     try writeTomlValue(T, value, writer, "");
 
-    return list.toOwnedSlice();
+    return try aw.toOwnedSlice();
 }
 
 /// Write a TOML value
@@ -362,7 +362,7 @@ fn writeTomlScalar(comptime T: type, value: T, writer: anytype) !void {
             try writer.print("{d}", .{value});
         },
         .pointer => |ptr| {
-            if (ptr.size == .Slice and ptr.child == u8) {
+            if (ptr.size == .slice and ptr.child == u8) {
                 // MED-2: Use shared escape helper (TOML mode)
                 try writer.writeByte('"');
                 try writeEscapedString(writer, value, .toml);
@@ -380,13 +380,13 @@ fn writeTomlScalar(comptime T: type, value: T, writer: anytype) !void {
 
 /// Serialize to environment variable format
 fn serializeEnv(comptime T: type, value: T, allocator: Allocator, options: SerializeOptions) ![]u8 {
-    var list = std.ArrayList(u8).init(allocator);
-    errdefer list.deinit();
+    var aw = std.Io.Writer.Allocating.init(allocator);
+    errdefer aw.deinit();
 
-    const writer = list.writer();
+    const writer = &aw.writer;
     try writeEnvValue(T, value, writer, options.env_prefix);
 
-    return list.toOwnedSlice();
+    return try aw.toOwnedSlice();
 }
 
 /// Write environment variables
@@ -417,13 +417,14 @@ fn writeEnvValue(comptime T: type, value: T, writer: anytype, prefix: []const u8
 
 /// Convert to uppercase
 fn toUpperCase(comptime s: []const u8) []const u8 {
-    comptime {
+    return comptime blk: {
         var result: [s.len]u8 = undefined;
         for (s, 0..) |c, i| {
             result[i] = std.ascii.toUpper(c);
         }
-        return &result;
-    }
+        const frozen = result;
+        break :blk &frozen;
+    };
 }
 
 /// Write an env scalar value
@@ -447,7 +448,7 @@ fn writeEnvScalar(comptime T: type, value: T, writer: anytype) !void {
             try writer.print("{d}", .{value});
         },
         .pointer => |ptr| {
-            if (ptr.size == .Slice and ptr.child == u8) {
+            if (ptr.size == .slice and ptr.child == u8) {
                 // Quote if contains spaces or special chars
                 const needs_quotes = mem.indexOf(u8, value, " ") != null or
                     mem.indexOf(u8, value, "\"") != null or

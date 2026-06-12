@@ -77,7 +77,7 @@ const BenchResult = struct {
 };
 
 fn runBench(comptime name: []const u8, iterations: u32, comptime benchFn: fn (std.mem.Allocator) anyerror!void) !BenchResult {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -91,10 +91,14 @@ fn runBench(comptime name: []const u8, iterations: u32, comptime benchFn: fn (st
     var max_ns: u64 = 0;
     var total_ns: u64 = 0;
 
+    // Zig 0.16 removed `std.time.Timer`; use the monotonic (`.awake`) clock on
+    // the static single-threaded Io, matching the thread_pool peer convention.
+    const bench_io = std.Io.Threaded.global_single_threaded.io();
     for (0..iterations) |_| {
-        var timer = try std.time.Timer.start();
+        const start_ns = std.Io.Clock.Timestamp.now(bench_io, .awake).raw.nanoseconds;
         try benchFn(allocator);
-        const elapsed = timer.read();
+        const end_ns = std.Io.Clock.Timestamp.now(bench_io, .awake).raw.nanoseconds;
+        const elapsed: u64 = @intCast(end_ns - start_ns);
 
         if (elapsed < min_ns) min_ns = elapsed;
         if (elapsed > max_ns) max_ns = elapsed;

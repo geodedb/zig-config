@@ -45,15 +45,7 @@ pub const Change = struct {
     old_value: ?[]const u8,
     new_value: ?[]const u8,
 
-    pub fn format(
-        self: Change,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        _ = fmt;
-        _ = options;
-
+    pub fn format(self: Change, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self.change_type) {
             .added => try writer.print("+ {s}: {s}", .{ self.key, self.new_value orelse "(null)" }),
             .removed => try writer.print("- {s}: {s}", .{ self.key, self.old_value orelse "(null)" }),

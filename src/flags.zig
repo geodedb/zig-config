@@ -147,12 +147,24 @@ pub const FlagParser = struct {
         }
     }
 
-    /// Parse from std.process.args()
-    pub fn parseArgs(self: *Self) !void {
-        var args = try std.process.argsAlloc(self.allocator);
-        defer std.process.argsFree(self.allocator, args);
-
-        // Skip the program name
+    /// Parse process command-line arguments, skipping the program name
+    /// (`args[0]`).
+    ///
+    /// In Zig 0.16 the process argv is delivered to `main` and is no longer
+    /// reachable from a global (`std.os.argv` was removed). Callers pass the
+    /// arguments they received in `main`, e.g.:
+    /// ```zig
+    /// pub fn main() !void {
+    ///     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    ///     defer arena.deinit();
+    ///     const args = try std.process.Args.toSlice(.{ .vector = ... }, arena.allocator());
+    ///     try parser.parseArgs(args);
+    /// }
+    /// ```
+    /// The stored positional args reference the caller's `args`, so `args`
+    /// must outlive reads of `positionalArgs()`. To decouple lifetimes, use
+    /// `parse` after duping, or keep `args` alive for the parser's lifetime.
+    pub fn parseArgs(self: *Self, args: []const []const u8) !void {
         if (args.len > 0) {
             try self.parse(args[1..]);
         }

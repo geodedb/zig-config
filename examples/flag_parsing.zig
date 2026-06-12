@@ -14,7 +14,7 @@ const AppConfig = struct {
 };
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -28,8 +28,10 @@ pub fn main() !void {
     try parser.boolean("debug", 'd', "Enable debug mode");
     try parser.bind("config", "config_file", 'c', "Config file path");
 
-    // Parse command-line arguments
-    // In a real app: try parser.parseArgs();
+    // Parse command-line arguments.
+    // In a real app, pass the args your `main` received:
+    //   const args = try std.process.Args.toSlice(.{ .vector = ... }, arena);
+    //   try parser.parseArgs(args);
     // For demo, parse hardcoded args:
     try parser.parse(&.{
         "--host",          "0.0.0.0",
@@ -43,7 +45,7 @@ pub fn main() !void {
     defer loader.deinit();
 
     // Apply parsed flags (flag source has high precedence)
-    loader.applyFlags(&parser);
+    try loader.applyFlags(&parser);
 
     // Load from all sources
     const cfg = try loader.load(.{
@@ -73,7 +75,7 @@ pub fn main() !void {
     // auto_parser now has --host, --port, --debug, --config_file flags
     try auto_parser.parse(&.{ "--port", "3000" });
 
-    loader2.applyFlags(&auto_parser);
+    try loader2.applyFlags(&auto_parser);
     const cfg2 = try loader2.load(.{ .app_name = "myapp" });
 
     std.debug.print("\nAuto-generated parser result:\n", .{});

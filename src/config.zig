@@ -968,8 +968,9 @@ pub fn registerFormat(allocator: Allocator, extension: []const u8, decoder: Form
 /// Reset the global registry (mainly for testing)
 /// Thread-safe: Uses mutex
 pub fn resetGlobalRegistry() void {
-    global_registry_mutex.lock();
-    defer global_registry_mutex.unlock();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    global_registry_mutex.lockUncancelable(io);
+    defer global_registry_mutex.unlock(io);
 
     if (global_registry) |*reg| {
         reg.deinit();
@@ -1233,4 +1234,40 @@ test "parallel re-export is reachable" {
     // entry points are exposed and `deinitPool()` is safely callable.
     _ = @TypeOf(parallel.getPool);
     parallel.deinitPool();
+}
+
+// External dependency namespaces re-exported from this module. They are
+// skipped by the recursive reference guard below because their own cold
+// public-API paths are the upstream projects' responsibility to migrate, and
+// `config`'s actual usage of them is already covered by the rest of the suite.
+const refall_skip_namespaces = [_][]const u8{ "yaml", "toml", "json" };
+
+/// Recursively reference every in-repo public declaration so the compiler is
+/// forced to semantically analyze it. Without this, uncalled `pub fn`s are
+/// never compile-checked (Zig only analyzes reached code), which previously
+/// hid an incomplete Zig 0.15->0.16 migration in cold public-API paths. Keep
+/// this guard green: a new compile error here means a public symbol regressed.
+fn refAllInRepo(comptime T: type) void {
+    inline for (comptime std.meta.declarations(T)) |decl| {
+        comptime var skip = false;
+        inline for (refall_skip_namespaces) |name| {
+            if (comptime std.mem.eql(u8, name, decl.name)) skip = true;
+        }
+        if (!skip) {
+            const field = @field(T, decl.name);
+            if (@TypeOf(field) == type) {
+                switch (@typeInfo(field)) {
+                    .@"struct", .@"enum", .@"union", .@"opaque" => refAllInRepo(field),
+                    else => {},
+                }
+            } else {
+                _ = &@field(T, decl.name);
+            }
+        }
+    }
+}
+
+test "all in-repo public declarations compile (latent-compile-error guard)" {
+    @setEvalBranchQuota(200000);
+    refAllInRepo(@This());
 }

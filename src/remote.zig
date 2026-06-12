@@ -1485,7 +1485,7 @@ pub const Consul = struct {
         // T-03: parseFromSliceLeaky already allocated strings into the arena,
         // so no redundant dupe needed. Just copy the slice pointers into a
         // caller-owned array.
-        var keys: std.ArrayListUnmanaged([]const u8) = .{};
+        var keys: std.ArrayListUnmanaged([]const u8) = .empty;
         errdefer keys.deinit(self.allocator);
         // INFO-5: Pre-allocate capacity since parsed key count is known
         keys.ensureTotalCapacity(self.allocator, @intCast(keys_parsed.len)) catch return RemoteError.OutOfMemory;

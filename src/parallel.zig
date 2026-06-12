@@ -86,11 +86,21 @@ var pool_allocator: std.mem.Allocator = std.heap.page_allocator;
 /// Guards pool init/deinit against concurrent access.
 var pool_mutex: std.Io.Mutex = .init;
 
-/// One-shot initializer.
-var pool_once = std.once(doInitPool);
+/// Tracks whether the pool has been initialized. Guarded by `pool_mutex`.
+var pool_initialized: bool = false;
 
-fn doInitPool() void {
-    global_pool = tp.ThreadPool.init(pool_allocator, .{}) catch @panic("thread pool init failed");
+/// One-shot, lazily-initializing pool setup. Zig 0.16 removed `std.once`, so
+/// we guard a plain bool with the same mutex used by `deinitPool`, which
+/// provides the acquire/release synchronization for the `pool_allocator` and
+/// `global_pool` writes (PERF-41/PERF-52).
+fn ensurePoolInit() void {
+    const pio = std.Io.Threaded.global_single_threaded.io();
+    pool_mutex.lockUncancelable(pio);
+    defer pool_mutex.unlock(pio);
+    if (!pool_initialized) {
+        global_pool = tp.ThreadPool.init(pool_allocator, .{}) catch @panic("thread pool init failed");
+        pool_initialized = true;
+    }
 }
 
 /// Pre-configure the thread pool allocator before first use.
@@ -108,17 +118,17 @@ fn doInitPool() void {
 pub fn initPool(allocator: std.mem.Allocator) void {
     pool_allocator = allocator;
     // PERF-52: Synchronization of the allocator write is provided by
-    // `std.once` (which performs its own acquire/release synchronization
-    // around `doInitPool`). Zig 0.16.0 removed the `@fence` builtin,
-    // so we rely on `pool_once.call()` to establish happens-before.
+    // `ensurePoolInit` (which acquires `pool_mutex` before reading
+    // `pool_allocator`). Zig 0.16.0 removed the `@fence` builtin and
+    // `std.once`, so the mutex establishes the happens-before edge.
 }
 
 /// Return a pointer to the lazily-initialized global thread pool.
 ///
-/// Uses `std.once` so the initialization mutex is only held on the first
-/// call; all subsequent calls are a single atomic load (PERF-41).
+/// `ensurePoolInit` initializes the pool on first call under `pool_mutex`;
+/// subsequent calls re-check the `pool_initialized` flag under the lock.
 pub fn getPool() *tp.ThreadPool {
-    pool_once.call();
+    ensurePoolInit();
     return &global_pool.?;
 }
 
@@ -134,6 +144,7 @@ pub fn deinitPool() void {
         pool.deinit();
         global_pool = null;
     }
+    pool_initialized = false;
 }
 
 // ============================================================================
@@ -215,7 +226,7 @@ pub fn parallelFileLoad(
     }
 
     var wg = getPool().waitGroup();
-    getPool().submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+    _ = getPool().submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
         // Sequential fallback on error
         for (inputs, 0..) |input, i| {
             results[i] = loadFile(allocator, input);
@@ -320,7 +331,7 @@ pub fn parallelValidate(
     }
 
     var wg = getPool().waitGroup();
-    getPool().submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+    _ = getPool().submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
         // Sequential fallback on error
         for (rules, 0..) |rule, i| {
             results[i] = validateField(rule, values[i]);
@@ -442,7 +453,7 @@ pub fn parallelSerialize(
     }
 
     var wg = getPool().waitGroup();
-    getPool().submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
+    _ = getPool().submitBatch(batch[0..n], .{ .wait_group = &wg }) catch {
         // Sequential fallback on error
         for (inputs, 0..) |input, i| {
             results[i] = serializeData(allocator, input);

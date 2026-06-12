@@ -237,17 +237,18 @@ pub fn readFromStdin(allocator: Allocator) SecretError![]const u8 {
     const stdin = std.Io.File.stdin();
 
     // Check if stdin is a pipe or has data
-    if (stdin.isTty()) {
+    if (stdin.isTty(io) catch false) {
         // Interactive mode - prompt for input
         const stderr_file = std.Io.File.stderr();
         var stderr_buf: [256]u8 = undefined;
         var stderr_writer = stderr_file.writer(io, &stderr_buf);
-        stderr_writer.print("Enter secret: ", .{}) catch {};
+        stderr_writer.interface.print("Enter secret: ", .{}) catch {};
+        stderr_writer.interface.flush() catch {};
 
-        // Read a single line from stdin
+        // Read input from stdin (until EOF, bounded to 64 KiB).
         var read_buf: [4096]u8 = undefined;
         var reader = stdin.readerStreaming(io, &read_buf);
-        const content = reader.readAlloc(allocator, 64 * 1024) catch {
+        const content = reader.interface.allocRemaining(allocator, std.Io.Limit.limited(64 * 1024)) catch {
             return SecretError.StdinNotAvailable;
         };
 

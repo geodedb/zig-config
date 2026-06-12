@@ -57,8 +57,8 @@ fn expandRecursive(input: []const u8, allocator: Allocator, options: ExpandOptio
         return ExpandError.RecursionLimitExceeded;
     }
 
-    var result = std.ArrayList(u8).init(allocator);
-    errdefer result.deinit();
+    var result: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer result.deinit(allocator);
 
     var i: usize = 0;
     // PERF-51: Track start of literal runs so we can flush with a single
@@ -68,7 +68,7 @@ fn expandRecursive(input: []const u8, allocator: Allocator, options: ExpandOptio
         if (input[i] == '$') {
             // Flush any accumulated literal characters
             if (i > literal_start) {
-                try result.appendSlice(input[literal_start..i]);
+                try result.appendSlice(allocator, input[literal_start..i]);
             }
 
             if (i + 1 < input.len and input[i + 1] == '{') {
@@ -86,9 +86,9 @@ fn expandRecursive(input: []const u8, allocator: Allocator, options: ExpandOptio
                 if (options.recursive and mem.indexOf(u8, expanded_value, "$") != null) {
                     const recursed = try expandRecursive(expanded_value, allocator, options, depth + 1);
                     defer allocator.free(recursed);
-                    try result.appendSlice(recursed);
+                    try result.appendSlice(allocator, recursed);
                 } else {
-                    try result.appendSlice(expanded_value);
+                    try result.appendSlice(allocator, expanded_value);
                 }
 
                 i = end + 1;
@@ -103,17 +103,17 @@ fn expandRecursive(input: []const u8, allocator: Allocator, options: ExpandOptio
 
                 const var_name = input[start..end];
                 const value = getEnvValue(var_name, options);
-                try result.appendSlice(value);
+                try result.appendSlice(allocator, value);
                 i = end;
                 literal_start = i;
             } else if (i + 1 < input.len and input[i + 1] == '$') {
                 // $$ escape sequence - literal $
-                try result.append('$');
+                try result.append(allocator, '$');
                 i += 2;
                 literal_start = i;
             } else {
                 // Just a $ character
-                try result.append('$');
+                try result.append(allocator, '$');
                 i += 1;
                 literal_start = i;
             }
@@ -124,10 +124,10 @@ fn expandRecursive(input: []const u8, allocator: Allocator, options: ExpandOptio
 
     // Flush remaining literal characters
     if (i > literal_start) {
-        try result.appendSlice(input[literal_start..i]);
+        try result.appendSlice(allocator, input[literal_start..i]);
     }
 
-    return result.toOwnedSlice();
+    return result.toOwnedSlice(allocator);
 }
 
 /// Find the closing brace for a variable expression

@@ -376,11 +376,11 @@ pub fn getConfigFilePaths(
     app_name: []const u8,
     filename: []const u8,
 ) ![]const []const u8 {
-    var paths = std.ArrayList([]const u8).init(allocator);
+    var paths: std.ArrayListUnmanaged([]const u8) = .empty;
 
     // Project-level (current directory)
     const cwd_config = try std.fmt.allocPrint(allocator, "./{s}", .{filename});
-    try paths.append(cwd_config);
+    try paths.append(allocator, cwd_config);
 
     // User-level
     if (comptime builtin.os.tag == .windows) {
@@ -392,21 +392,21 @@ pub fn getConfigFilePaths(
             app_name,
             filename,
         });
-        try paths.append(user_config);
+        try paths.append(allocator, user_config);
     } else {
         const user_config = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{
             environ.getenv("XDG_CONFIG_HOME") orelse "~/.config",
             app_name,
             filename,
         });
-        try paths.append(user_config);
+        try paths.append(allocator, user_config);
     }
 
     // System-level
     const system_config = try std.fmt.allocPrint(allocator, "/etc/{s}/{s}", .{ app_name, filename });
-    try paths.append(system_config);
+    try paths.append(allocator, system_config);
 
-    return paths.toOwnedSlice();
+    return paths.toOwnedSlice(allocator);
 }
 
 // ============================================================================

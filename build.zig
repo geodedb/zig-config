@@ -184,6 +184,11 @@ pub fn build(b: *std.Build) void {
     const bench_step = b.step("bench", "Run benchmarks");
     bench_step.dependOn(&b.addRunArtifact(bench_exe).step);
 
+    // The `check` step must also compile the benchmark so that latent Zig
+    // version-migration errors in cold code cannot hide here (they previously
+    // did: bench/examples were never part of `zig build`/`zig build test`).
+    check_step.dependOn(&bench_exe.step);
+
     // Examples
     const examples = .{
         .{ "basic_parsing", "Basic configuration parsing example" },
@@ -217,5 +222,8 @@ pub fn build(b: *std.Build) void {
         run_step.dependOn(&run_exe.step);
 
         examples_step.dependOn(&install_exe.step);
+
+        // Compile every example as part of `check` so they cannot rot.
+        check_step.dependOn(&exe.step);
     }
 }
