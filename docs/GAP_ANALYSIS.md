@@ -1,8 +1,30 @@
 # GAP Analysis
 
-Last updated: 2026-03-25 (Wave 14 closure -- 12 audit findings closed)
-Review commit: 8d6b87c (HEAD of main) + working tree
-Reviewed by: Gap Detection Agent (Phase 3, adversarial); Wave 12 closures applied (Batches 1-7); Wave 13 (SEC-02); Wave 14 (12 audit findings)
+Last updated: 2026-06-12 (Wave 15 closure -- appsec + full audit, 34 findings closed)
+Review commit: branch `audit-closure-2026-06-12` (12 commits) over HEAD of main
+Reviewed by: appsec-reviewer + codepros audit (gap/quality/perf/security domains); Wave 15 closures applied. Earlier: Gap Detection Agent (Wave 12); Wave 13 (SEC-02); Wave 14 (12 audit findings)
+
+## Wave 15 (2026-06-12): appsec + full codebase audit closure
+
+Root cause discovered: an **incomplete Zig 0.15->0.16 migration** hidden by partial
+test rooting (tests rooted only `config.zig` + `integration_test.zig`; no
+`refAllDecls` guard), so a large set of cold public-API functions never
+compile-checked and silently used removed 0.15 APIs. Added a recursive
+`refAllInRepo` guard in `config.zig` and wired examples + bench into `zig build
+check` so this class cannot recur. Test count grew 415 -> 1034 as formerly-cold
+code became analyzable and exercised.
+
+Findings closed (34): appsec AS-01 (High SSRF no-op, fail-closed hostnames),
+AS-02 (backup symlink guard), AS-03 (empty-argv panic), AS-04 (subprocess stderr
+deadlock); security S-NEW-01 (async use-after-free), S-NEW-02 (watcher data race),
+S-NEW-03 (non-threadsafe parallel alloc), S-NEW-04 (expansion allow/deny-list),
+S-NEW-05 (diff/provenance redaction); quality Q-NEW-01..20 (0.16 migration, watcher
+overflow, watchdog stall, leaks, error masking, parallel stubs, dead code, dedup,
+docs); perf P-NEW-01..03 (read-path key normalization, INI section cache, properties
+buffers); gap GAP-NEW-01..04 (validate alias, Zig version, API.md/VIPER drift).
+All fixes landed with TDD (failing test first) and the full suite stays green
+(`zig build` / `check` / `test` / `fmt` all exit 0). See branch commits and
+`docs/APPSEC_REVIEW_2026-06-12.md`.
 
 ## Summary
 
@@ -34,6 +56,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 ## Gaps
 
 ### GAP-0062: Array indexing and bracket normalization code not on main branch -- **CLOSED**
+
 - **Issue:** [#167](https://gitlab.com/devnw/zig/config/-/issues/167)
 - **Category:** Bug
 - **Severity:** High
@@ -46,6 +69,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Acceptance criteria:** Met -- all three criteria satisfied.
 
 ### GAP-0063: parseSimpleYaml does not handle nested YAML structures -- **WON'T DO**
+
 - **Issue:** [#168](https://gitlab.com/devnw/zig/config/-/issues/168)
 - **Category:** Feature
 - **Severity:** Medium
@@ -54,6 +78,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Alternative controls:** ROADMAP.md now correctly states "YAML parsing for flat key:value structures; nested YAML parsing planned (#4)". Users needing nested structures can use JSON or TOML formats which are fully supported.
 
 ### GAP-0064: ROADMAP.md shows closed issues as unchecked/planned -- **CLOSED**
+
 - **Issue:** [#169](https://gitlab.com/devnw/zig/config/-/issues/169)
 - **Category:** Docs
 - **Severity:** Medium
@@ -63,6 +88,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Acceptance criteria:** Met -- all closed GitLab issues show `[x]` in ROADMAP.md; open issues (#4) shown as `[ ]`.
 
 ### GAP-0065: VIPER_COMPARISON.md shows implemented features as No/Planned -- **CLOSED**
+
 - **Issue:** [#171](https://gitlab.com/devnw/zig/config/-/issues/171)
 - **Category:** Docs
 - **Severity:** Medium
@@ -72,6 +98,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Acceptance criteria:** Met -- all four features show "Yes/Complete" in the feature matrix.
 
 ### GAP-0066: Open issues #4, #6, #27, #35 marked complete in ROADMAP -- **CLOSED**
+
 - **Issue:** [#173](https://gitlab.com/devnw/zig/config/-/issues/173)
 - **Category:** Docs
 - **Severity:** High
@@ -85,6 +112,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Acceptance criteria:** Met -- open/incomplete items shown as `[ ]`; partially-complete items have clarifying notes.
 
 ### GAP-0067: setFieldFromEnvKey unconditionally lowercases keys -- **CLOSED**
+
 - **Issue:** [#174](https://gitlab.com/devnw/zig/config/-/issues/174)
 - **Category:** Bug
 - **Severity:** Medium
@@ -96,6 +124,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Acceptance criteria:** Met -- both criteria satisfied.
 
 ### GAP-0068: Zig version inconsistency across docs (0.15.1 vs 0.15.2) -- **CLOSED**
+
 - **Issue:** [#176](https://gitlab.com/devnw/zig/config/-/issues/176)
 - **Category:** Docs
 - **Severity:** Low
@@ -105,6 +134,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Acceptance criteria:** Met -- all documentation files reference Zig 0.15.2 consistently.
 
 ### GAP-0069: README says v0.2.0 but ROADMAP says v0.3.x -- **CLOSED**
+
 - **Issue:** [#178](https://gitlab.com/devnw/zig/config/-/issues/178)
 - **Category:** Docs
 - **Severity:** Low
@@ -114,6 +144,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Acceptance criteria:** Met -- README.md and ROADMAP.md both show v0.3.x.
 
 ### GAP-0070: ROADMAP falsely claims nested YAML parsing via applyJsonValue -- **CLOSED**
+
 - **Issue:** [#181](https://gitlab.com/devnw/zig/config/-/issues/181)
 - **Category:** Docs
 - **Severity:** Medium
@@ -129,6 +160,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 12 findings from full codebase audit, all closed.
 
 ### CRIT-1: Bounded HTTP response body allocation (CWE-770) -- **CLOSED**
+
 - **Issue:** [#206](https://gitlab.com/devnw/zig/config/-/issues/206)
 - **Category:** Security
 - **Severity:** Critical
@@ -138,6 +170,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Also closes:** P3-R1/PERF-46 (bounded response writer) -- subsumed by this implementation.
 
 ### HIGH-1: 64-byte transfer buffer upgraded to 8192 bytes -- **CLOSED**
+
 - **Issue:** [#207](https://gitlab.com/devnw/zig/config/-/issues/207)
 - **Category:** Performance
 - **Severity:** High
@@ -146,6 +179,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Evidence:** `src/remote.zig` -- `TRANSFER_BUFFER_SIZE = 8192`
 
 ### MED-1: Extract Consul buildConsulPath helper -- **CLOSED**
+
 - **Issue:** [#208](https://gitlab.com/devnw/zig/config/-/issues/208)
 - **Category:** Quality
 - **Severity:** Medium
@@ -154,6 +188,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Evidence:** `src/remote.zig` -- `buildConsulPath()` helper function
 
 ### MED-2: Extract writeEscapedString helper -- **CLOSED**
+
 - **Issue:** [#209](https://gitlab.com/devnw/zig/config/-/issues/209)
 - **Category:** Quality
 - **Severity:** Medium
@@ -162,6 +197,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Evidence:** `src/serialize.zig` -- `writeEscapedString()` helper function
 
 ### LOW-1: Windows setsockopt return value checking (CWE-252) -- **CLOSED**
+
 - **Issue:** [#210](https://gitlab.com/devnw/zig/config/-/issues/210)
 - **Category:** Security
 - **Severity:** Low
@@ -170,6 +206,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Evidence:** `src/remote.zig` -- Windows `setsockopt` error checking in `setSocketTimeout()`
 
 ### INFO-1: Differentiate receiveHead error types -- **CLOSED**
+
 - **Issue:** [#211](https://gitlab.com/devnw/zig/config/-/issues/211)
 - **Category:** Security
 - **Severity:** Info
@@ -178,6 +215,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Evidence:** `src/remote.zig` -- error switch in `fetchWithTimeout` after `receiveHead`
 
 ### INFO-2: Update PERF-29 for GAP-0062 array handling -- **CLOSED**
+
 - **Issue:** [#212](https://gitlab.com/devnw/zig/config/-/issues/212)
 - **Category:** Docs
 - **Severity:** Info
@@ -186,6 +224,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Evidence:** `docs/PERF_GAP_ANALYSIS.md` -- PERF-29 entry updated
 
 ### INFO-3: Audit secureZero callsites -- **CLOSED**
+
 - **Issue:** [#213](https://gitlab.com/devnw/zig/config/-/issues/213)
 - **Category:** Security
 - **Severity:** Info
@@ -194,6 +233,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Evidence:** `src/remote.zig` -- `secureZero` verified at all credential/response `defer` sites
 
 ### INFO-4: Remove redundant isSymlink check -- **CLOSED**
+
 - **Issue:** [#214](https://gitlab.com/devnw/zig/config/-/issues/214)
 - **Category:** Quality
 - **Severity:** Info
@@ -202,6 +242,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Evidence:** `src/config.zig` -- redundant symlink check removed
 
 ### INFO-5: Add ensureTotalCapacity to 12+ sites -- **CLOSED**
+
 - **Issue:** [#215](https://gitlab.com/devnw/zig/config/-/issues/215)
 - **Category:** Performance
 - **Severity:** Info
@@ -215,6 +256,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
   - `src/dotenv.zig` -- capacity hints on dotenv parsing
 
 ### INFO-6: Replace open+stat with fstatat in watcher -- **CLOSED**
+
 - **Issue:** [#216](https://gitlab.com/devnw/zig/config/-/issues/216)
 - **Category:** Performance
 - **Severity:** Info
@@ -223,6 +265,7 @@ Wave 14 closed 12 audit findings from full codebase audit: CRIT-1, HIGH-1, MED-1
 - **Evidence:** `src/watch.zig` -- `fstatat` replaces `open`+`fstat`+`close`
 
 ### INFO-7: Single-pass isValidKVKey validator -- **CLOSED**
+
 - **Issue:** [#217](https://gitlab.com/devnw/zig/config/-/issues/217)
 - **Category:** Performance
 - **Severity:** Info
