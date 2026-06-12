@@ -179,6 +179,8 @@ pub const AsyncState = async_load.AsyncState;
 pub const AsyncError = async_load.AsyncError;
 pub const loadAsync = async_load.loadAsync;
 pub const loadParallel = async_load.loadParallel;
+/// Owned result of `loadParallel`; caller must call `.deinit()` (S-NEW-01).
+pub const OwnedConfig = async_load.OwnedConfig;
 
 // Re-export diff types (#20)
 pub const Change = diff.Change;
