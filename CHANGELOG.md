@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.5] - 2026-06-12
+## [0.1.6] - 2026-06-12
 
 Security, correctness, and migration-completeness release closing a full appsec +
 codebase audit (Wave 15). The 0.15→0.16 migration was completed across cold
