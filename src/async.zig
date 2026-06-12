@@ -58,7 +58,6 @@ const secret = @import("secret.zig");
 const limits = @import("limits.zig");
 
 // Security: Import helpers for symlink and path traversal protection (CWE-59, CWE-22, #72, #74)
-const isSymlink = secret.isSymlink;
 const isPathSafe = secret.isPathSafe;
 const openFileReadNoFollow = secret.openFileReadNoFollow;
 

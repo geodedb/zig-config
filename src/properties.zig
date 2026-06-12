@@ -107,6 +107,14 @@ pub fn parse(allocator: Allocator, content: []const u8) PropertiesError!Properti
     var pending_value: std.ArrayListUnmanaged(u8) = .empty;
     defer pending_value.deinit(allocator);
 
+    // P-NEW-03: Hoist the per-line scratch buffers out of the loop and reuse
+    // their capacity (`clearRetainingCapacity`) instead of allocating and
+    // freeing a fresh ArrayList for every key/value on every line.
+    var key_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer key_buf.deinit(allocator);
+    var value_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer value_buf.deinit(allocator);
+
     while (lines.next()) |raw_line| {
         var line = mem.trimEnd(u8, raw_line, "\r");
 
@@ -169,8 +177,7 @@ pub fn parse(allocator: Allocator, content: []const u8) PropertiesError!Properti
                 "";
 
             // Unescape key
-            var key_buf: std.ArrayListUnmanaged(u8) = .empty;
-            defer key_buf.deinit(allocator);
+            key_buf.clearRetainingCapacity();
             try appendUnescaped(allocator, &key_buf, raw_key);
             const owned_key = props.arena.allocator().dupe(u8, key_buf.items) catch return PropertiesError.OutOfMemory;
 
@@ -182,8 +189,7 @@ pub fn parse(allocator: Allocator, content: []const u8) PropertiesError!Properti
                 pending_key = owned_key;
                 try appendUnescaped(allocator, &pending_value, value_content);
             } else {
-                var value_buf: std.ArrayListUnmanaged(u8) = .empty;
-                defer value_buf.deinit(allocator);
+                value_buf.clearRetainingCapacity();
                 try appendUnescaped(allocator, &value_buf, value_content);
                 const owned_value = props.arena.allocator().dupe(u8, value_buf.items) catch return PropertiesError.OutOfMemory;
                 props.values.put(owned_key, owned_value) catch return PropertiesError.OutOfMemory;

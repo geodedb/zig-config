@@ -759,21 +759,6 @@ pub fn isBool(value: []const u8) bool {
 // Simple Error-Returning Validators (merged from validate.zig, #110)
 // ============================================================================
 
-/// Simple validation result (from validate.zig).
-/// For field-level validation results, use ValidationResult instead.
-pub const SimpleValidationResult = struct {
-    valid: bool,
-    errors: []const []const u8,
-
-    pub fn ok() SimpleValidationResult {
-        return .{ .valid = true, .errors = &.{} };
-    }
-
-    pub fn fail(errors: []const []const u8) SimpleValidationResult {
-        return .{ .valid = false, .errors = errors };
-    }
-};
-
 /// Validate that a string is not empty
 pub fn required(value: ?[]const u8) ValidationError!void {
     if (value == null or value.?.len == 0) {

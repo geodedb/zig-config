@@ -176,6 +176,9 @@ pub const isUrl = validation.isUrl;
 pub const isIPv4 = validation.isIPv4;
 pub const isPort = validation.isPort;
 pub const isHostname = validation.isHostname;
+pub const isAlphanumeric = validation.isAlphanumeric;
+pub const notEmpty = validation.notEmpty;
+pub const isBool = validation.isBool;
 
 // Re-export async loading types (#16)
 pub const AsyncLoader = async_load.AsyncLoader;
@@ -1317,6 +1320,21 @@ test "ADV-01: parseContent with .auto format detects YAML correctly" {
     var config = try parseContent(std.testing.allocator, yaml_content, .auto);
     defer config.deinit();
     try std.testing.expectEqualStrings("value", config.getString("key").?);
+}
+
+test "Q-NEW-16: validator re-exports (isAlphanumeric/notEmpty/isBool) are reachable" {
+    // Exercise the public validator re-exports so they are covered like their
+    // sibling validators (isEmail/isUrl/isPort/isHostname).
+    try std.testing.expect(isAlphanumeric("abc123"));
+    try std.testing.expect(!isAlphanumeric("abc-123"));
+    try std.testing.expect(!isAlphanumeric(""));
+
+    try std.testing.expect(notEmpty("x"));
+    try std.testing.expect(!notEmpty(""));
+
+    try std.testing.expect(isBool("true"));
+    try std.testing.expect(isBool("0"));
+    try std.testing.expect(!isBool("maybe"));
 }
 
 test "parallel re-export is reachable" {

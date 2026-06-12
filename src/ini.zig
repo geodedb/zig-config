@@ -35,10 +35,7 @@ const openFileReadNoFollow = secret.openFileReadNoFollow;
 
 /// INI parsing errors
 pub const IniError = error{
-    InvalidSyntax,
     UnclosedSection,
-    UnclosedQuote,
-    DuplicateKey,
     OutOfMemory,
 };
 
@@ -135,7 +132,11 @@ pub fn parse(allocator: Allocator, content: []const u8) IniError!IniDocument {
     var doc = IniDocument.init(allocator);
     errdefer doc.deinit();
 
-    var current_section: ?[]const u8 = null;
+    // P-NEW-02: Cache the current section's `*Section` so per-key lines don't
+    // re-hash + re-probe the sections map. SAFETY: a `sections.put` can move
+    // entries, so the pointer is always re-fetched right after the put on a
+    // `[section]` line; it is never used across a put.
+    var current_section: ?*Section = null;
     var line_iter = mem.splitScalar(u8, content, '\n');
 
     while (line_iter.next()) |line| {
@@ -149,11 +150,20 @@ pub fn parse(allocator: Allocator, content: []const u8) IniError!IniDocument {
         if (trimmed[0] == '[') {
             if (mem.indexOfScalar(u8, trimmed, ']')) |end| {
                 const section_name = mem.trim(u8, trimmed[1..end], " \t");
-                const owned_name = doc.arena.allocator().dupe(u8, section_name) catch return IniError.OutOfMemory;
 
-                const section = Section.init(allocator, owned_name);
-                doc.sections.put(owned_name, section) catch return IniError.OutOfMemory;
-                current_section = owned_name;
+                // Reuse an existing section so duplicate `[section]` headers
+                // merge their keys instead of overwriting (and leaking) the
+                // previous Section.values map.
+                if (doc.sections.getPtr(section_name)) |existing| {
+                    current_section = existing;
+                } else {
+                    const owned_name = doc.arena.allocator().dupe(u8, section_name) catch return IniError.OutOfMemory;
+                    const section = Section.init(allocator, owned_name);
+                    doc.sections.put(owned_name, section) catch return IniError.OutOfMemory;
+                    // Re-fetch: the put above may have invalidated any prior
+                    // pointers into the sections map.
+                    current_section = doc.sections.getPtr(owned_name).?;
+                }
             } else {
                 return IniError.UnclosedSection;
             }
@@ -177,10 +187,8 @@ pub fn parse(allocator: Allocator, content: []const u8) IniError!IniDocument {
             const owned_key = doc.arena.allocator().dupe(u8, key) catch return IniError.OutOfMemory;
             const owned_value = doc.arena.allocator().dupe(u8, value) catch return IniError.OutOfMemory;
 
-            if (current_section) |section_name| {
-                if (doc.sections.getPtr(section_name)) |section| {
-                    section.values.put(owned_key, owned_value) catch return IniError.OutOfMemory;
-                }
+            if (current_section) |section| {
+                section.values.put(owned_key, owned_value) catch return IniError.OutOfMemory;
             } else {
                 doc.global.put(owned_key, owned_value) catch return IniError.OutOfMemory;
             }
@@ -351,4 +359,34 @@ test "unclosed section error" {
     const content = "[unclosed";
     const result = parse(std.testing.allocator, content);
     try std.testing.expectError(IniError.UnclosedSection, result);
+}
+
+test "duplicate section merges keys without leaking" {
+    // Two `[same]` headers must merge into one section. The testing allocator
+    // fails the test if the first section's `values` map were overwritten and
+    // leaked instead of reused.
+    const content =
+        \\[same]
+        \\a = 1
+        \\b = 2
+        \\
+        \\[same]
+        \\b = 22
+        \\c = 3
+    ;
+
+    var doc = try parse(std.testing.allocator, content);
+    defer doc.deinit();
+
+    // Keys from both headers are present in the single merged section.
+    try std.testing.expectEqualStrings("1", doc.get("same.a").?);
+    try std.testing.expectEqualStrings("3", doc.get("same.c").?);
+    // A repeated key takes the later value.
+    try std.testing.expectEqualStrings("22", doc.get("same.b").?);
+
+    // Exactly one `[same]` section exists after the merge.
+    const names = try doc.getSectionNames();
+    defer std.testing.allocator.free(names);
+    try std.testing.expectEqual(@as(usize, 1), names.len);
+    try std.testing.expectEqualStrings("same", names[0]);
 }

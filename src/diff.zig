@@ -18,11 +18,15 @@
 //!
 //! // ... populate configs ...
 //!
-//! const changes = try diff.compare(allocator, old_config, new_config);
-//! defer allocator.free(changes);
+//! var result = try diff.compare(allocator, old_config, new_config);
+//! defer allocator.free(result.changes);
 //!
-//! for (changes) |change| {
-//!     std.debug.print("{s}: {s} -> {s}\n", .{change.key, change.old_value, change.new_value});
+//! for (result.changes) |c| {
+//!     std.debug.print("{s}: {s} -> {s}\n", .{
+//!         c.key,
+//!         c.old_value orelse "(null)",
+//!         c.new_value orelse "(null)",
+//!     });
 //! }
 //! ```
 
@@ -438,12 +442,6 @@ pub fn formatDiffWithOptions(allocator: Allocator, result: DiffResult, options: 
     }
 
     return output.toOwnedSlice(allocator);
-}
-
-/// Free a DiffResult
-pub fn freeDiffResult(allocator: Allocator, result: *DiffResult) void {
-    allocator.free(result.changes);
-    result.changes = &.{};
 }
 
 /// Check if two configs are equivalent
