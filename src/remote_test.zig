@@ -449,11 +449,16 @@ test "validateUrl rejects HTTP by default" {
 }
 
 test "validateUrl allows HTTP when explicitly enabled" {
-    try validateUrl("http://example.com:2379", .{ .allow_insecure_http = true });
+    // AS-01: allowlist the host so the test exercises scheme handling, not SSRF.
+    try validateUrl("http://example.com:2379", .{
+        .allow_insecure_http = true,
+        .allowed_hosts = &.{"example.com"},
+    });
 }
 
 test "validateUrl allows HTTPS" {
-    try validateUrl("https://example.com:2379", .{});
+    // AS-01: allowlist the host so the test exercises scheme handling, not SSRF.
+    try validateUrl("https://example.com:2379", .{ .allowed_hosts = &.{"example.com"} });
 }
 
 test "validateUrl blocks private IPs by default" {
@@ -763,8 +768,89 @@ test "validateUrl allows single-encoded host (SEC-18 no false positive)" {
 }
 
 test "validateUrl allows normal public URLs (SEC-18 no false positive)" {
-    // Normal public URL should pass without SuspiciousUrl error
-    try validateUrl("https://example.com:2379", .{});
+    // Normal public URL should pass without SuspiciousUrl error.
+    // AS-01: hostnames whose IP cannot be statically validated are now
+    // fail-closed when block_private_ips is true, so allowlist this host.
+    try validateUrl("https://example.com:2379", .{ .allowed_hosts = &.{"example.com"} });
+}
+
+// ============================================================================
+// AS-01 (CWE-918): Fail-closed SSRF protection for unresolvable hostnames.
+//
+// validateResolvedAddresses was a no-op for hostnames (IpAddress.parse always
+// fails on a non-literal host, silently returning success). The DNS-rebinding
+// mitigation was therefore ineffective. The fix refuses to connect to any
+// hostname whose IP cannot be statically proven non-private, unless the
+// operator explicitly allowlists it via SecurityOptions.allowed_hosts.
+// ============================================================================
+
+test "validateUrl blocks non-allowlisted hostname when block_private_ips=true (AS-01)" {
+    // A hostname could resolve to a private/internal IP (DNS rebinding). With
+    // block_private_ips=true and no allowlist entry, it must be rejected.
+    const result = validateUrl("https://internal.example.com:2379", .{});
+    try std.testing.expectError(RemoteError.PrivateAddressBlocked, result);
+}
+
+test "validateUrl allows allowlisted hostname when block_private_ips=true (AS-01)" {
+    // The operator explicitly trusts this host, so it must pass.
+    try validateUrl("https://internal.example.com:2379", .{
+        .allowed_hosts = &.{"internal.example.com"},
+    });
+}
+
+test "validateUrl allowlist match is case-insensitive (AS-01)" {
+    try validateUrl("https://Internal.Example.COM:2379", .{
+        .allowed_hosts = &.{"internal.example.com"},
+    });
+}
+
+test "validateUrl allowlist requires exact host match (AS-01)" {
+    // A different subdomain must NOT be covered by an allowlist entry.
+    const result = validateUrl("https://evil.example.com:2379", .{
+        .allowed_hosts = &.{"internal.example.com"},
+    });
+    try std.testing.expectError(RemoteError.PrivateAddressBlocked, result);
+}
+
+test "validateUrl still blocks IP-literal private addresses (AS-01 preserves existing)" {
+    try std.testing.expectError(
+        RemoteError.PrivateAddressBlocked,
+        validateUrl("https://127.0.0.1:2379", .{}),
+    );
+    try std.testing.expectError(
+        RemoteError.PrivateAddressBlocked,
+        validateUrl("https://10.0.0.1:2379", .{}),
+    );
+    try std.testing.expectError(
+        RemoteError.PrivateAddressBlocked,
+        validateUrl("https://169.254.169.254:2379", .{}),
+    );
+}
+
+test "validateUrl still allows public IP literals (AS-01 preserves existing)" {
+    // A public IP literal can be statically proven non-private, so it passes
+    // without needing an allowlist entry.
+    try validateUrl("https://93.184.216.34:2379", .{});
+}
+
+test "validateUrl static heuristic still blocks localhost and metadata host (AS-01)" {
+    // These remain caught by the isPrivateAddress string heuristic, even though
+    // they are non-literal hosts, and are blocked regardless of allowlist.
+    try std.testing.expectError(
+        RemoteError.PrivateAddressBlocked,
+        validateUrl("https://localhost:2379", .{ .allowed_hosts = &.{"localhost"} }),
+    );
+    try std.testing.expectError(
+        RemoteError.PrivateAddressBlocked,
+        validateUrl("https://metadata.google.internal:2379", .{
+            .allowed_hosts = &.{"metadata.google.internal"},
+        }),
+    );
+}
+
+test "validateUrl permits hostnames when block_private_ips=false (AS-01)" {
+    // Permissive mode is preserved: no allowlist entry required.
+    try validateUrl("https://internal.example.com:2379", .{ .block_private_ips = false });
 }
 
 // ============================================================================

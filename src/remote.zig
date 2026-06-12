@@ -106,6 +106,19 @@ pub const SecurityOptions = struct {
     allow_insecure_http: bool = false,
     /// Block connections to private/internal IP addresses (SSRF protection)
     block_private_ips: bool = true,
+    /// Operator allowlist of exact hostnames permitted even though their
+    /// resolved IP cannot be statically proven non-private (CWE-918, AS-01).
+    ///
+    /// When `block_private_ips` is true, a non-IP-literal host (a DNS name)
+    /// is fail-closed: it is rejected with `PrivateAddressBlocked` unless it
+    /// is either caught as private by the static `isPrivateAddress` heuristic
+    /// (always blocked) OR listed here (case-insensitive exact match). This
+    /// refuses to connect to hostnames whose resolved IP cannot be validated,
+    /// closing the DNS-rebinding gap (#68) without performing async DNS.
+    ///
+    /// Entries are matched case-insensitively against the URL host. IP-literal
+    /// hosts are validated per-address and never consult this list.
+    allowed_hosts: []const []const u8 = &.{},
     /// User-Agent header value
     user_agent: []const u8 = "zigconfig/1.0",
     /// Skip TLS certificate verification. Default false for security.
@@ -167,14 +180,26 @@ fn base64EncodeStackOrHeap(allocator: Allocator, input: []const u8, stack_buf: [
 /// Validate a URL for security (SSRF protection)
 /// Returns error if URL is invalid or points to a private address
 ///
-/// SECURITY NOTE (DNS Rebinding - #68):
-/// This validation performs a best-effort DNS resolution and blocks any
-/// hostname that resolves to private/internal IPs. This narrows the window
-/// for rebinding but cannot fully prevent it without pinning the resolved IP.
-/// For high-security deployments, consider:
+/// SECURITY NOTE (fail-closed hostnames, DNS Rebinding - #68, AS-01):
+/// This module does NOT perform DNS resolution (async resolution via the
+/// Io interface is out of scope). To prevent SSRF and DNS rebinding to
+/// private/internal IPs, hostname handling is fail-closed when
+/// `block_private_ips` is true:
+/// - IP-literal hosts are validated per-address; private literals are blocked.
+/// - Non-literal hosts (DNS names) caught by the static `isPrivateAddress`
+///   heuristic (localhost, *.internal, metadata.google.internal, ...) are
+///   always blocked.
+/// - Any other non-literal host is REJECTED with `PrivateAddressBlocked`
+///   unless the operator explicitly allowlists it via
+///   `SecurityOptions.allowed_hosts` (case-insensitive exact match), because
+///   its resolved IP cannot be statically proven non-private.
+/// When `block_private_ips` is false, hostnames are permitted (permissive
+/// mode for local development/testing).
+///
+/// For high-security deployments, prefer:
 /// - Using IP addresses instead of hostnames in configuration
 /// - Deploying a local DNS resolver with rebinding protection
-/// - Using allowlists of known-good hostnames
+/// - Maintaining a tight `allowed_hosts` allowlist
 pub fn validateUrl(url: []const u8, options: SecurityOptions) RemoteError!void {
     const uri = Uri.parse(url) catch return RemoteError.InvalidUrl;
 
@@ -217,12 +242,35 @@ pub fn validateUrl(url: []const u8, options: SecurityOptions) RemoteError!void {
             return RemoteError.PrivateAddressBlocked;
         }
 
-        // DNS rebinding mitigation: resolve hostnames and validate IPs (#68)
-        if (!isIpLiteral(decoded_host)) {
+        if (isIpLiteral(decoded_host)) {
+            // IP literal: validate the parsed address directly (CWE-918, #68).
+            // The static isPrivateAddress check above already covers most
+            // literals, but this also blocks alternative/edge representations
+            // that resolve to private space.
             const port = uri.port orelse if (is_https) @as(u16, 443) else @as(u16, 80);
-            try validateResolvedAddresses(decoded_host, port);
+            const addr = std.Io.net.IpAddress.parse(decoded_host, port) catch return RemoteError.InvalidUrl;
+            if (isPrivateAddressForAddr(addr)) {
+                return RemoteError.PrivateAddressBlocked;
+            }
+        } else {
+            // Fail-closed (AS-01, DNS rebinding #68): a non-literal host's
+            // resolved IP cannot be statically proven non-private and this
+            // module does not perform DNS resolution. Refuse to connect unless
+            // the operator explicitly allowlisted this exact host.
+            if (!isAllowedHost(decoded_host, options.allowed_hosts)) {
+                return RemoteError.PrivateAddressBlocked;
+            }
         }
     }
+}
+
+/// Case-insensitive exact-match lookup of `host` in the operator allowlist.
+/// Security: Gates fail-closed hostname acceptance (CWE-918, AS-01).
+fn isAllowedHost(host: []const u8, allowed_hosts: []const []const u8) bool {
+    for (allowed_hosts) |allowed| {
+        if (std.ascii.eqlIgnoreCase(host, allowed)) return true;
+    }
+    return false;
 }
 
 /// Decode percent-encoded string into buffer
@@ -275,18 +323,6 @@ fn normalizeHost(host: []const u8) []const u8 {
 fn isIpLiteral(host: []const u8) bool {
     _ = std.Io.net.IpAddress.parse(host, 0) catch return false;
     return true;
-}
-
-fn validateResolvedAddresses(host: []const u8, port: u16) RemoteError!void {
-    // Zig 0.16.0: net.getAddressList was removed; use IpAddress.parse for
-    // literal addresses. DNS resolution would require io-based resolve which
-    // is more complex; for SSRF protection, validating the literal is sufficient.
-    // If the host is not an IP literal (e.g. a hostname), skip the check —
-    // the isPrivateAddress hostname heuristic already covers known-internal names.
-    const addr = std.Io.net.IpAddress.parse(host, port) catch return;
-    if (isPrivateAddressForAddr(addr)) {
-        return RemoteError.PrivateAddressBlocked;
-    }
 }
 
 /// Check if a hostname/IP is a private or internal address
@@ -1249,14 +1285,16 @@ pub const Consul = struct {
             if (err == error.NotFound) return null;
             return RemoteError.RequestFailed;
         };
+        // ADV-03/Q-NEW-12: Zero and free the heap response on every exit path,
+        // including the arena-dupe OOM path below (previously leaked). Mirrors
+        // the getPrefix pattern. CWE-226 (sensitive data in reused memory).
+        defer {
+            secret.secureZero(response);
+            self.allocator.free(response);
+        }
 
         // Copy to arena for persistent storage
-        const result = self.arena.allocator().dupe(u8, response) catch return RemoteError.OutOfMemory;
-        // ADV-03: Zero response before freeing -- may contain secrets (CWE-226)
-        secret.secureZero(response);
-        self.allocator.free(response);
-
-        return result;
+        return self.arena.allocator().dupe(u8, response) catch return RemoteError.OutOfMemory;
     }
 
     /// Put a value by key to Consul KV store
