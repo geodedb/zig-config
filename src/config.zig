@@ -67,6 +67,9 @@ pub const properties = @import("properties.zig");
 pub const watch = @import("watch.zig");
 pub const remote = @import("remote.zig");
 pub const validation = @import("validation.zig");
+// GAP-NEW-01: Non-breaking alias so the documented `config.validate.*` API
+// (README.md, docs/API.md) compiles. `validation` remains the canonical name.
+pub const validate = validation;
 pub const async_load = @import("async.zig");
 pub const diff = @import("diff.zig");
 
@@ -365,10 +368,14 @@ pub fn parseFile(allocator: Allocator, path: []const u8) !Value {
     // uses O_NOFOLLOW which atomically rejects symlinks at the kernel level,
     // eliminating the TOCTOU window from the prior stat+open sequence.
     const pf_io = std.Io.Threaded.global_single_threaded.io();
+    // Q-NEW-07: Propagate the real open error instead of collapsing every
+    // failure into FileNotFound. The previous catch-all masked AccessDenied,
+    // IsDir, SystemResources, NameTooLong, etc. as FileNotFound, hiding the
+    // true cause from callers.
     const file = secret.openFileReadNoFollow(path) catch |err| switch (err) {
         error.SymlinkNotAllowed => return error.SymlinkNotAllowed,
         error.FileNotFound => return error.FileNotFound,
-        else => return error.FileNotFound,
+        else => |e| return e,
     };
     defer file.close(pf_io);
 
@@ -676,6 +683,10 @@ pub const SafeWriteError = error{
     OutOfMemory,
     /// Security: Path contains traversal sequences (CWE-22, #62)
     PathTraversalDetected,
+    /// Security: Source or backup target is a symlink (CWE-59, CWE-200, AS-02).
+    /// Backing up a symlinked path would follow the link and leak the link
+    /// target's contents into the `.bak` file (or overwrite an arbitrary file).
+    SymlinkNotAllowed,
 };
 
 /// Options for safe write operations
@@ -687,6 +698,78 @@ pub const SafeWriteOptions = struct {
     /// Use atomic write (write to temp file, then rename)
     atomic: bool = true,
 };
+
+/// Q-NEW-18: Shared write step for `safeWriteConfig` and
+/// `safeWriteConfigWithBackup`. Each public function keeps only its distinct
+/// pre-step (existence check vs. backup copy); this helper performs the
+/// content write identically for both.
+///
+/// When `atomic` is true the content is written to a randomized, exclusive
+/// temp file, synced to disk, then renamed over `path` (atomic temp+rename).
+/// Otherwise it is written directly with restrictive (0o600) permissions.
+///
+/// Safety: closes the temp fd and deletes the temp file on any write/sync/
+/// rename failure (errdefer), and frees `temp_path` on every exit path —
+/// including the non-EEXIST create error (Q-NEW-05).
+fn writeAtomic(
+    allocator: Allocator,
+    path: []const u8,
+    content: []const u8,
+    atomic: bool,
+) SafeWriteError!void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+
+    if (atomic) {
+        // Write to temp file first (randomized, exclusive)
+        var temp_path: []u8 = &.{};
+        var temp_file: std.Io.File = undefined;
+        var attempt: u8 = 0;
+        while (attempt < 5) : (attempt += 1) {
+            var random_bytes: [8]u8 = undefined;
+            io.randomSecure(&random_bytes) catch return SafeWriteError.IoError;
+            const random_suffix = std.fmt.bytesToHex(random_bytes, .lower);
+            temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, &random_suffix }) catch return SafeWriteError.OutOfMemory;
+            temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
+                error.PathAlreadyExists => {
+                    allocator.free(temp_path);
+                    continue;
+                },
+                // Q-NEW-05: Free temp_path before returning. This error path is
+                // reached before the post-loop `defer allocator.free(temp_path)`
+                // is registered, so any non-EEXIST create error would otherwise
+                // leak the allocation.
+                else => {
+                    allocator.free(temp_path);
+                    return SafeWriteError.IoError;
+                },
+            };
+            break;
+        }
+        if (attempt == 5) return SafeWriteError.IoError;
+        defer allocator.free(temp_path);
+        errdefer cwd.deleteFile(io, temp_path) catch {};
+        // R-01/T-01: Ensure temp file handle is closed on write/sync failure
+        // so the fd is not leaked before errdefer cleanup deletes the file.
+        errdefer temp_file.close(io);
+
+        temp_file.writeStreamingAll(io, content) catch return SafeWriteError.IoError;
+        // R-01/T-01: Flush data to disk before rename to guarantee durability
+        temp_file.sync(io) catch return SafeWriteError.IoError;
+        temp_file.close(io);
+
+        // Rename temp to target
+        cwd.rename(temp_path, cwd, path, io) catch {
+            cwd.deleteFile(io, temp_path) catch {};
+            return SafeWriteError.IoError;
+        };
+    } else {
+        // Security: Use restrictive file permissions (CWE-732, #75)
+        const file = createFileNoFollow(path, 0o600, false) catch return SafeWriteError.IoError;
+        defer file.close(io);
+        file.writeStreamingAll(io, content) catch return SafeWriteError.IoError;
+    }
+}
 
 /// Safely write configuration to a file without overwriting existing files.
 /// Use this to prevent accidental data loss. Returns `FileExists` if the
@@ -717,48 +800,8 @@ pub fn safeWriteConfig(
         return SafeWriteError.FileExists;
     } else |_| {}
 
-    if (options.atomic) {
-        // Write to temp file first (randomized, exclusive)
-        var temp_path: []u8 = &.{};
-        var temp_file: std.Io.File = undefined;
-        var attempt: u8 = 0;
-        while (attempt < 5) : (attempt += 1) {
-            var random_bytes: [8]u8 = undefined;
-            io.randomSecure(&random_bytes) catch return SafeWriteError.IoError;
-            const random_suffix = std.fmt.bytesToHex(random_bytes, .lower);
-            temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, &random_suffix }) catch return SafeWriteError.OutOfMemory;
-            temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
-                error.PathAlreadyExists => {
-                    allocator.free(temp_path);
-                    continue;
-                },
-                else => return SafeWriteError.IoError,
-            };
-            break;
-        }
-        if (attempt == 5) return SafeWriteError.IoError;
-        defer allocator.free(temp_path);
-        errdefer cwd.deleteFile(io, temp_path) catch {};
-        // R-01/T-01: Ensure temp file handle is closed on write/sync failure
-        // so the fd is not leaked before errdefer cleanup deletes the file.
-        errdefer temp_file.close(io);
-
-        temp_file.writeStreamingAll(io, content) catch return SafeWriteError.IoError;
-        // R-01/T-01: Flush data to disk before rename to guarantee durability
-        temp_file.sync(io) catch return SafeWriteError.IoError;
-        temp_file.close(io);
-
-        // Rename temp to target
-        cwd.rename(temp_path, cwd, path, io) catch {
-            cwd.deleteFile(io, temp_path) catch {};
-            return SafeWriteError.IoError;
-        };
-    } else {
-        // Security: Use restrictive file permissions (CWE-732, #75)
-        const file = createFileNoFollow(path, 0o600, false) catch return SafeWriteError.IoError;
-        defer file.close(io);
-        file.writeStreamingAll(io, content) catch return SafeWriteError.IoError;
-    }
+    // Q-NEW-18: Shared atomic/direct write step.
+    try writeAtomic(allocator, path, content, options.atomic);
 }
 
 /// Write config, creating a backup of any existing file first.
@@ -788,49 +831,25 @@ pub fn safeWriteConfigWithBackup(
             const backup_path = std.fmt.allocPrint(allocator, "{s}{s}", .{ path, options.backup_suffix }) catch return SafeWriteError.OutOfMemory;
             defer allocator.free(backup_path);
 
+            // AS-02: Refuse to back up a symlinked source. `Dir.copyFile` opens
+            // the source following symlinks, so a symlinked `path` would leak
+            // the link target's contents into the `.bak` (CWE-59, CWE-200).
+            // This mirrors serialize.zig:writeToFileWithBackup (ADV-05).
+            if (secret.isSymlink(path)) {
+                return SafeWriteError.SymlinkNotAllowed;
+            }
+            // AS-02: Also refuse if the backup target is itself a symlink, to
+            // avoid overwriting an arbitrary file through the link.
+            if (secret.isSymlink(backup_path)) {
+                return SafeWriteError.SymlinkNotAllowed;
+            }
+
             cwd.copyFile(path, cwd, backup_path, io, .{}) catch return SafeWriteError.IoError;
         }
     } else |_| {}
 
-    if (options.atomic) {
-        var temp_path: []u8 = &.{};
-        var temp_file: std.Io.File = undefined;
-        var attempt: u8 = 0;
-        while (attempt < 5) : (attempt += 1) {
-            var random_bytes: [8]u8 = undefined;
-            io.randomSecure(&random_bytes) catch return SafeWriteError.IoError;
-            const random_suffix = std.fmt.bytesToHex(random_bytes, .lower);
-            temp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{s}", .{ path, &random_suffix }) catch return SafeWriteError.OutOfMemory;
-            temp_file = createFileNoFollow(temp_path, 0o600, true) catch |err| switch (err) {
-                error.PathAlreadyExists => {
-                    allocator.free(temp_path);
-                    continue;
-                },
-                else => return SafeWriteError.IoError,
-            };
-            break;
-        }
-        if (attempt == 5) return SafeWriteError.IoError;
-        defer allocator.free(temp_path);
-        errdefer cwd.deleteFile(io, temp_path) catch {};
-        // R-01/T-01: Ensure temp file handle is closed on write/sync failure
-        errdefer temp_file.close(io);
-
-        temp_file.writeStreamingAll(io, content) catch return SafeWriteError.IoError;
-        // R-01/T-01: Flush data to disk before rename to guarantee durability
-        temp_file.sync(io) catch return SafeWriteError.IoError;
-        temp_file.close(io);
-
-        cwd.rename(temp_path, cwd, path, io) catch {
-            cwd.deleteFile(io, temp_path) catch {};
-            return SafeWriteError.IoError;
-        };
-    } else {
-        // Security: Use restrictive file permissions (CWE-732, #75)
-        const file = createFileNoFollow(path, 0o600, false) catch return SafeWriteError.IoError;
-        defer file.close(io);
-        file.writeStreamingAll(io, content) catch return SafeWriteError.IoError;
-    }
+    // Q-NEW-18: Shared atomic/direct write step.
+    try writeAtomic(allocator, path, content, options.atomic);
 }
 
 // ============================================================================
@@ -1206,6 +1225,71 @@ test "R-01/T-01: safeWriteConfigWithBackup rejects path traversal" {
     );
 }
 
+test "AS-02: safeWriteConfigWithBackup rejects symlinked source" {
+    const builtin = @import("builtin");
+    // Symlink detection (isSymlink) is POSIX-specific in this test setup.
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const tst_io = std.Io.Threaded.global_single_threaded.io();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const dir_path = tmp_dir.dir.realPathFileAlloc(tst_io, ".", std.testing.allocator) catch return;
+    defer std.testing.allocator.free(dir_path);
+
+    const real_path = std.fmt.allocPrint(std.testing.allocator, "{s}/as02_real.json", .{dir_path}) catch return;
+    defer std.testing.allocator.free(real_path);
+    const link_path = std.fmt.allocPrint(std.testing.allocator, "{s}/as02_link.json", .{dir_path}) catch return;
+    defer std.testing.allocator.free(link_path);
+
+    // Create a real file with sensitive content that must not leak into a .bak.
+    {
+        const f = std.Io.Dir.cwd().createFile(tst_io, real_path, .{}) catch return;
+        f.writeStreamingAll(tst_io, "{\"secret\":\"do-not-leak\"}") catch {};
+        f.close(tst_io);
+    }
+
+    // Point a symlink at the real file; skip if symlinks are unsupported.
+    std.Io.Dir.cwd().symLink(tst_io, real_path, link_path, .{}) catch return;
+
+    // Backing up the symlinked source must be rejected, not followed.
+    const result = safeWriteConfigWithBackup(
+        std.testing.allocator,
+        link_path,
+        "{\"new\":\"value\"}",
+        .{ .create_backup = true, .atomic = true },
+    );
+    try std.testing.expectError(SafeWriteError.SymlinkNotAllowed, result);
+
+    // No backup file should have been created from the symlinked source.
+    const backup_path = std.fmt.allocPrint(std.testing.allocator, "{s}.bak", .{link_path}) catch return;
+    defer std.testing.allocator.free(backup_path);
+    std.Io.Dir.cwd().access(tst_io, backup_path, .{}) catch {
+        return; // expected: backup absent
+    };
+    return error.TestUnexpectedResult; // backup was created -> symlink was followed
+}
+
+test "Q-NEW-05: safeWriteConfig does not leak temp_path on create error" {
+    // A path whose parent directory does not exist makes the temp-file create
+    // fail with FileNotFound (a non-EEXIST error), exercising the `else` arm of
+    // the create switch. Before the fix, temp_path leaked there; the testing
+    // allocator fails the test on any leak.
+    const bad_path = "no_such_dir_qnew05/config.json";
+    try std.testing.expectError(
+        SafeWriteError.IoError,
+        safeWriteConfig(std.testing.allocator, bad_path, "{\"k\":1}", .{ .atomic = true }),
+    );
+}
+
+test "Q-NEW-05: safeWriteConfigWithBackup does not leak temp_path on create error" {
+    const bad_path = "no_such_dir_qnew05b/config.json";
+    try std.testing.expectError(
+        SafeWriteError.IoError,
+        safeWriteConfigWithBackup(std.testing.allocator, bad_path, "{\"k\":1}", .{ .atomic = true }),
+    );
+}
+
 // ============================================================================
 // ADV-01: .auto format returns error instead of unreachable
 // ============================================================================
@@ -1236,6 +1320,51 @@ test "parallel re-export is reachable" {
     // entry points are exposed and `deinitPool()` is safely callable.
     _ = @TypeOf(parallel.getPool);
     parallel.deinitPool();
+}
+
+test "Q-NEW-07: parseFile propagates real open error instead of FileNotFound" {
+    const builtin = @import("builtin");
+    // O_NOFOLLOW / fchmod semantics are POSIX-specific.
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+    // A chmod 0o000 file is still readable as root, so the AccessDenied path
+    // would not trigger. Skip rather than assert the wrong error.
+    if (std.os.linux.geteuid() == 0) return error.SkipZigTest;
+
+    const tst_io = std.Io.Threaded.global_single_threaded.io();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const dir_path = tmp_dir.dir.realPathFileAlloc(tst_io, ".", std.testing.allocator) catch return;
+    defer std.testing.allocator.free(dir_path);
+
+    const file_path = std.fmt.allocPrint(std.testing.allocator, "{s}/noperm.json", .{dir_path}) catch return;
+    defer std.testing.allocator.free(file_path);
+
+    // Create a file with no permissions so opening it fails with AccessDenied.
+    {
+        const f = std.Io.Dir.cwd().createFile(tst_io, file_path, .{}) catch return;
+        f.setPermissions(tst_io, std.Io.File.Permissions.fromMode(0o000)) catch {
+            f.close(tst_io);
+            return; // Filesystem does not honor permissions; skip.
+        };
+        f.close(tst_io);
+    }
+
+    // The real open error (AccessDenied) must be propagated, not masked as
+    // FileNotFound. A FileNotFound here would be the regression.
+    const result = parseFile(std.testing.allocator, file_path);
+    try std.testing.expectError(error.AccessDenied, result);
+}
+
+test "GAP-NEW-01: config.validate alias matches documented API" {
+    // README.md / docs/API.md document `config.validate.*`. Prove the alias
+    // resolves to the same validation functions.
+    try std.testing.expect(validate == validation);
+
+    // Exercise a documented entry point through the alias.
+    try validate.required("non-empty");
+    try std.testing.expectError(ValidationError.Required, validate.required(null));
+    try std.testing.expectError(ValidationError.Required, validate.required(""));
 }
 
 // External dependency namespaces re-exported from this module. They are

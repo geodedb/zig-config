@@ -541,7 +541,14 @@ pub fn safeWriteToFile(comptime T: type, value: T, path: []const u8, allocator: 
                 allocator.free(temp_path);
                 continue;
             },
-            else => return err,
+            // Q-NEW-05: Free temp_path before returning. This error path is
+            // reached before the post-loop `defer allocator.free(temp_path)`
+            // is registered, so any non-EEXIST create error would otherwise
+            // leak the allocation.
+            else => {
+                allocator.free(temp_path);
+                return err;
+            },
         };
         break;
     }
@@ -742,6 +749,17 @@ test "safeWriteToFile atomic write" {
 
     // Clean up
     std.Io.Dir.cwd().deleteFile(tst_io, test_path) catch {};
+}
+
+test "Q-NEW-05: safeWriteToFile does not leak temp_path on create error" {
+    const Config = struct { value: []const u8 = "x" };
+    // Parent directory does not exist -> temp-file create fails with
+    // FileNotFound (non-EEXIST), exercising the `else` arm of the create
+    // switch. Before the fix, temp_path leaked there; the testing allocator
+    // fails the test on any leak.
+    const bad_path = "no_such_dir_qnew05s/config.json";
+    const result = safeWriteToFile(Config, .{}, bad_path, std.testing.allocator, .{ .format = .json });
+    try std.testing.expectError(error.FileNotFound, result);
 }
 
 test "writeToFileIfNotExists" {

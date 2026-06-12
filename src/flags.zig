@@ -131,13 +131,18 @@ pub const FlagParser = struct {
         while (i < args.len) : (i += 1) {
             const arg = args[i];
 
-            if (mem.startsWith(u8, arg, "--")) {
+            if (arg.len == 0) {
+                // AS-03/Q-NEW-06: An empty argv element must be treated as a
+                // positional argument. Guard length before indexing arg[0] so a
+                // zero-length slice never triggers an out-of-bounds access.
+                try self.positional.append(self.allocator, arg);
+            } else if (mem.startsWith(u8, arg, "--")) {
                 // Long flag
                 try self.parseLongFlag(arg[2..], args, &i);
             } else if (arg.len == 2 and arg[0] == '-' and arg[1] != '-') {
                 // Short flag
                 try self.parseShortFlag(arg[1], args, &i);
-            } else if (arg[0] == '-' and arg.len > 2) {
+            } else if (arg.len > 2 and arg[0] == '-') {
                 // Combined short flags or short with value
                 try self.parseShortFlags(arg[1..], args, &i);
             } else {
@@ -436,4 +441,34 @@ test "FlagParser: missing value returns error" {
 
     const result = parser.parse(&.{"--config"});
     try std.testing.expectError(FlagError.MissingValue, result);
+}
+
+test "AS-03/Q-NEW-06: empty argv element does not panic and is positional" {
+    // Regression: arg[0] was indexed before the length guard, so a zero-length
+    // argv element indexed a zero-length slice -> panic (Debug/ReleaseSafe) or
+    // OOB (ReleaseFast). The empty string must be treated as a positional arg.
+    var parser = FlagParser.init(std.testing.allocator);
+    defer parser.deinit();
+
+    try parser.boolean("flag", 'f', "Flag");
+
+    // A single empty-string argv element must not panic.
+    try parser.parse(&.{""});
+    {
+        const positional = parser.getPositional();
+        try std.testing.expectEqual(@as(usize, 1), positional.len);
+        try std.testing.expectEqualStrings("", positional[0]);
+    }
+
+    // An empty string mixed with a positional and a flag must not panic, and
+    // the empty string must be captured as a positional.
+    var parser2 = FlagParser.init(std.testing.allocator);
+    defer parser2.deinit();
+    try parser2.boolean("flag", 'f', "Flag");
+
+    try parser2.parse(&.{ "a", "", "--flag" });
+    const positional2 = parser2.getPositional();
+    try std.testing.expectEqual(@as(usize, 2), positional2.len);
+    try std.testing.expectEqualStrings("a", positional2[0]);
+    try std.testing.expectEqualStrings("", positional2[1]);
 }
