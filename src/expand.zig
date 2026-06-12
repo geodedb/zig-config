@@ -22,6 +22,27 @@ const Allocator = mem.Allocator;
 const environ = @import("environ.zig");
 
 /// Expansion options
+///
+/// ## Security (S-NEW-04, CWE-200/CWE-610)
+///
+/// By default, expansion resolves **any** referenced name straight from the
+/// process environment. **NEVER apply expansion to untrusted input** (committed
+/// config, remote KV values, tenant-supplied fields): an attacker can embed
+/// `${AWS_SECRET_ACCESS_KEY}`, `${VAULT_TOKEN}`, etc. to exfiltrate process-env
+/// secrets into the resulting value.
+///
+/// For lower-trust input, restrict which names may expand:
+/// - `allowed_vars` (allowlist): when non-null, ONLY these names expand; all
+///   other references resolve to `undefined_value`.
+/// - `denied_vars` (denylist): listed names never expand.
+/// - `deny_secret_looking`: convenience denylist that also blocks names that
+///   look like secrets (containing `TOKEN`/`SECRET`/`KEY`/`PASSWORD`/
+///   `CREDENTIAL`, case-insensitive).
+///
+/// **Precedence: deny overrides allow.** A name blocked by `denied_vars` or by
+/// `deny_secret_looking` never expands, even if it also appears in
+/// `allowed_vars`. A blocked name is treated exactly as an undefined variable
+/// (yields `undefined_value`, or errors under `strict`).
 pub const ExpandOptions = struct {
     /// Whether to fail on undefined variables
     strict: bool = false,
@@ -31,6 +52,17 @@ pub const ExpandOptions = struct {
     recursive: bool = true,
     /// Maximum recursion depth (to prevent infinite loops)
     max_depth: u8 = 10,
+    /// Allowlist of environment variable names that may be expanded.
+    /// When non-null, ONLY names in this list expand; every other reference
+    /// resolves to `undefined_value`. `null` (default) means "no allowlist".
+    allowed_vars: ?[]const []const u8 = null,
+    /// Denylist of environment variable names that must never expand.
+    /// Takes precedence over `allowed_vars`. Default: empty (nothing denied).
+    denied_vars: []const []const u8 = &.{},
+    /// When true, also deny any name that looks like a secret (case-insensitive
+    /// substring `TOKEN`/`SECRET`/`KEY`/`PASSWORD`/`CREDENTIAL`). Opt-in; off by
+    /// default to preserve existing behavior. Takes precedence over allow.
+    deny_secret_looking: bool = false,
 };
 
 /// Error types for expansion
@@ -41,12 +73,23 @@ pub const ExpandError = error{
     OutOfMemory,
 };
 
-/// Expand environment variables in a string
+/// Expand environment variables in a string.
+///
+/// **Security (S-NEW-04):** resolves any referenced name from the process
+/// environment with no restriction. Do NOT call this on untrusted input -- use
+/// `expandWithOptions` with `allowed_vars`/`denied_vars` instead. See
+/// `ExpandOptions` and `docs/SECURITY.md`.
 pub fn expand(input: []const u8, allocator: Allocator) ExpandError![]u8 {
     return expandWithOptions(input, allocator, .{});
 }
 
-/// Expand environment variables with custom options
+/// Expand environment variables with custom options.
+///
+/// **Security (S-NEW-04):** when expanding lower-trust input, set
+/// `options.allowed_vars` (allowlist) and/or `options.denied_vars` (denylist,
+/// which overrides allow) to prevent exfiltration of process-env secrets via
+/// crafted `${VAR}`/`$VAR` references. See `ExpandOptions` and
+/// `docs/SECURITY.md`.
 pub fn expandWithOptions(input: []const u8, allocator: Allocator, options: ExpandOptions) ExpandError![]u8 {
     return expandRecursive(input, allocator, options, 0);
 }
@@ -168,7 +211,7 @@ fn expandVariable(expr: []const u8, allocator: Allocator, options: ExpandOptions
         const var_name = expr[0..idx];
         const default_value = expr[idx + 2 ..];
 
-        if (environ.getenv(var_name)) |value| {
+        if (lookupEnv(var_name, options)) |value| {
             if (value.len > 0) {
                 return allocator.dupe(u8, value) catch return ExpandError.OutOfMemory;
             }
@@ -179,7 +222,7 @@ fn expandVariable(expr: []const u8, allocator: Allocator, options: ExpandOptions
         const var_name = expr[0..idx];
         const alternate_value = expr[idx + 2 ..];
 
-        if (environ.getenv(var_name)) |value| {
+        if (lookupEnv(var_name, options)) |value| {
             if (value.len > 0) {
                 return allocator.dupe(u8, alternate_value) catch return ExpandError.OutOfMemory;
             }
@@ -190,7 +233,7 @@ fn expandVariable(expr: []const u8, allocator: Allocator, options: ExpandOptions
         const var_name = expr[0..idx];
         const default_value = expr[idx + 1 ..];
 
-        if (environ.getenv(var_name)) |value| {
+        if (lookupEnv(var_name, options)) |value| {
             return allocator.dupe(u8, value) catch return ExpandError.OutOfMemory;
         }
         return allocator.dupe(u8, default_value) catch return ExpandError.OutOfMemory;
@@ -199,23 +242,86 @@ fn expandVariable(expr: []const u8, allocator: Allocator, options: ExpandOptions
         const var_name = expr[0..idx];
         const alternate_value = expr[idx + 1 ..];
 
-        if (environ.getenv(var_name)) |_| {
+        if (lookupEnv(var_name, options)) |_| {
             return allocator.dupe(u8, alternate_value) catch return ExpandError.OutOfMemory;
         }
         return allocator.dupe(u8, "") catch return ExpandError.OutOfMemory;
     } else {
         // Simple ${VAR}
         const value = getEnvValue(expr, options);
-        if (options.strict and environ.getenv(expr) == null) {
+        // S-NEW-04: a blocked var is treated as undefined under strict mode.
+        if (options.strict and lookupEnv(expr, options) == null) {
             return ExpandError.UndefinedVariable;
         }
         return allocator.dupe(u8, value) catch return ExpandError.OutOfMemory;
     }
 }
 
-/// Get environment variable value with fallback
+/// S-NEW-04: gated environment lookup. Returns `null` (treated as "unset")
+/// when the name is blocked by the allow/deny policy; otherwise returns the
+/// process-environment value. Routing every env read through this function
+/// ensures `${VAR}`, `$VAR`, modifier branches, and recursive expansion all
+/// honor the same policy.
+fn lookupEnv(name: []const u8, options: ExpandOptions) ?[]const u8 {
+    if (isVarBlocked(name, options)) return null;
+    return environ.getenv(name);
+}
+
+/// S-NEW-04: decide whether a variable name is blocked from expansion.
+/// Precedence: deny overrides allow.
+///   1. If denied (explicit denylist or secret-looking heuristic) -> blocked.
+///   2. Else if an allowlist is set and the name is absent -> blocked.
+///   3. Else -> allowed.
+fn isVarBlocked(name: []const u8, options: ExpandOptions) bool {
+    // Deny first (highest precedence).
+    for (options.denied_vars) |denied| {
+        if (mem.eql(u8, name, denied)) return true;
+    }
+    if (options.deny_secret_looking and isSecretLooking(name)) return true;
+
+    // Then enforce the allowlist, if present.
+    if (options.allowed_vars) |allowed| {
+        for (allowed) |a| {
+            if (mem.eql(u8, name, a)) return false;
+        }
+        return true; // allowlist set but name not present -> blocked
+    }
+    return false;
+}
+
+/// S-NEW-04: case-insensitive heuristic for secret-looking names. Matches any
+/// name containing `TOKEN`, `SECRET`, `KEY`, `PASSWORD`, or `CREDENTIAL`.
+fn isSecretLooking(name: []const u8) bool {
+    const needles = [_][]const u8{ "TOKEN", "SECRET", "KEY", "PASSWORD", "CREDENTIAL" };
+    for (needles) |needle| {
+        if (containsIgnoreCase(name, needle)) return true;
+    }
+    return false;
+}
+
+/// Case-insensitive substring search (ASCII).
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0) return true;
+    if (needle.len > haystack.len) return false;
+    var i: usize = 0;
+    const last = haystack.len - needle.len;
+    while (i <= last) : (i += 1) {
+        var match = true;
+        for (needle, 0..) |nc, j| {
+            if (std.ascii.toLower(haystack[i + j]) != std.ascii.toLower(nc)) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
+    return false;
+}
+
+/// Get environment variable value with fallback. Honors the S-NEW-04
+/// allow/deny policy via `lookupEnv`.
 fn getEnvValue(name: []const u8, options: ExpandOptions) []const u8 {
-    return environ.getenv(name) orelse options.undefined_value;
+    return lookupEnv(name, options) orelse options.undefined_value;
 }
 
 /// Expand environment variables in all string fields of a struct
@@ -354,4 +460,168 @@ test "expand alternate value if set" {
     const result2 = try expand("${UNDEFINED_12345:+alternate}", std.testing.allocator);
     defer std.testing.allocator.free(result2);
     try std.testing.expectEqualStrings("", result2);
+}
+
+// ---------------------------------------------------------------------------
+// S-NEW-04: opt-in allow/deny list for environment expansion (CWE-200/CWE-610)
+// ---------------------------------------------------------------------------
+
+test "S-NEW-04: denied_vars blocks ${VAR} expansion" {
+    if (comptime environ.is_windows) return error.SkipZigTest;
+    // PATH is guaranteed set on POSIX; deny it explicitly. The denied var
+    // must NOT substitute the env value; it falls back to undefined_value.
+    if (environ.getenv("PATH") == null) return error.SkipZigTest;
+
+    const result = try expandWithOptions(
+        "[${PATH}]",
+        std.testing.allocator,
+        .{ .denied_vars = &.{"PATH"} },
+    );
+    defer std.testing.allocator.free(result);
+    // Denied -> undefined_value (empty by default), so the real PATH is absent.
+    try std.testing.expectEqualStrings("[]", result);
+    try std.testing.expect(mem.indexOf(u8, result, "/") == null);
+}
+
+test "S-NEW-04: denied_vars blocks $VAR (unbraced) expansion" {
+    if (comptime environ.is_windows) return error.SkipZigTest;
+    if (environ.getenv("PATH") == null) return error.SkipZigTest;
+
+    const result = try expandWithOptions(
+        "x=$PATH;",
+        std.testing.allocator,
+        .{ .denied_vars = &.{"PATH"} },
+    );
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("x=;", result);
+}
+
+test "S-NEW-04: non-denied var still expands while another is denied" {
+    if (comptime environ.is_windows) return error.SkipZigTest;
+    const home = environ.getenv("HOME") orelse return error.SkipZigTest;
+    if (environ.getenv("PATH") == null) return error.SkipZigTest;
+
+    // Deny PATH but HOME is not denied, so HOME still expands.
+    const result = try expandWithOptions(
+        "${PATH}${HOME}",
+        std.testing.allocator,
+        .{ .denied_vars = &.{"PATH"} },
+    );
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(home, result);
+}
+
+test "S-NEW-04: allowed_vars allowlist only expands listed names" {
+    if (comptime environ.is_windows) return error.SkipZigTest;
+    const home = environ.getenv("HOME") orelse return error.SkipZigTest;
+    if (environ.getenv("PATH") == null) return error.SkipZigTest;
+
+    // Only HOME is allowed; PATH (not listed) must not expand.
+    const result = try expandWithOptions(
+        "${PATH}${HOME}",
+        std.testing.allocator,
+        .{ .allowed_vars = &.{"HOME"} },
+    );
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(home, result);
+}
+
+test "S-NEW-04: deny overrides allow (precedence)" {
+    if (comptime environ.is_windows) return error.SkipZigTest;
+    if (environ.getenv("PATH") == null) return error.SkipZigTest;
+
+    // PATH is both allowed and denied -> deny wins.
+    const result = try expandWithOptions(
+        "[${PATH}]",
+        std.testing.allocator,
+        .{ .allowed_vars = &.{"PATH"}, .denied_vars = &.{"PATH"} },
+    );
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("[]", result);
+}
+
+test "S-NEW-04: blocked var honors undefined_value" {
+    if (comptime environ.is_windows) return error.SkipZigTest;
+    if (environ.getenv("PATH") == null) return error.SkipZigTest;
+
+    const result = try expandWithOptions(
+        "${PATH}",
+        std.testing.allocator,
+        .{ .denied_vars = &.{"PATH"}, .undefined_value = "BLOCKED" },
+    );
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("BLOCKED", result);
+}
+
+test "S-NEW-04: blocked var with modifier uses default branch" {
+    if (comptime environ.is_windows) return error.SkipZigTest;
+    if (environ.getenv("PATH") == null) return error.SkipZigTest;
+
+    // PATH is set but denied, so ${PATH:-fallback} must yield the default,
+    // never the real PATH value.
+    const result = try expandWithOptions(
+        "${PATH:-fallback}",
+        std.testing.allocator,
+        .{ .denied_vars = &.{"PATH"} },
+    );
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("fallback", result);
+}
+
+test "S-NEW-04: strict mode treats denied var as undefined" {
+    if (comptime environ.is_windows) return error.SkipZigTest;
+    if (environ.getenv("PATH") == null) return error.SkipZigTest;
+
+    const result = expandWithOptions(
+        "${PATH}",
+        std.testing.allocator,
+        .{ .denied_vars = &.{"PATH"}, .strict = true },
+    );
+    try std.testing.expectError(ExpandError.UndefinedVariable, result);
+}
+
+test "S-NEW-04: default (no allow/deny) expansion unchanged" {
+    if (comptime environ.is_windows) return error.SkipZigTest;
+    if (environ.getenv("PATH")) |path| {
+        const result = try expand("${PATH}", std.testing.allocator);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(path, result);
+    }
+}
+
+test "S-NEW-04: secret-name heuristic blocks token/secret/key/password" {
+    // The convenience heuristic is opt-in via deny_secret_looking; it must
+    // block secret-looking names even when otherwise allowed.
+    try std.testing.expect(isSecretLooking("AWS_SECRET_ACCESS_KEY"));
+    try std.testing.expect(isSecretLooking("VAULT_TOKEN"));
+    try std.testing.expect(isSecretLooking("DB_PASSWORD"));
+    try std.testing.expect(isSecretLooking("api_key"));
+    try std.testing.expect(isSecretLooking("MY_CREDENTIAL"));
+    try std.testing.expect(!isSecretLooking("PATH"));
+    try std.testing.expect(!isSecretLooking("HOME"));
+}
+
+test "S-NEW-04: deny_secret_looking blocks secret-named env vars" {
+    if (comptime environ.is_windows) return error.SkipZigTest;
+    if (environ.getenv("PATH") == null) return error.SkipZigTest;
+
+    // PATH does not look secret, so it expands; a secret-looking ref does not.
+    const result = try expandWithOptions(
+        "${PATH}|${MY_SECRET_TOKEN}",
+        std.testing.allocator,
+        .{ .deny_secret_looking = true },
+    );
+    defer std.testing.allocator.free(result);
+    try std.testing.expect(mem.endsWith(u8, result, "|"));
+}
+
+test "S-NEW-04: expandStruct honors denied_vars" {
+    if (comptime environ.is_windows) return error.SkipZigTest;
+    if (environ.getenv("PATH") == null) return error.SkipZigTest;
+
+    const S = struct { value: []const u8 };
+    var s = S{ .value = "p=${PATH}" };
+    try expandStruct(S, &s, std.testing.allocator, .{ .denied_vars = &.{"PATH"} });
+    defer std.testing.allocator.free(s.value);
+    try std.testing.expectEqualStrings("p=", s.value);
 }

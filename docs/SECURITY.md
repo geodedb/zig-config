@@ -77,6 +77,7 @@ const db_password = try secret.readFromFile("/run/secrets/db_password", allocato
 See: [#18 - Add encrypted secrets support](https://gitlab.com/devnw/zig/config/-/issues/18)
 
 Planned features:
+
 - SOPS integration
 - age/GPG encrypted files
 - Cloud KMS integration
@@ -99,6 +100,7 @@ try validate.pathExists(config_path);
 ### Injection Prevention
 
 Validate values that will be used in:
+
 - Database queries (SQL injection)
 - Shell commands (command injection)
 - URL construction (URL injection)
@@ -110,6 +112,84 @@ try validate.url(api_endpoint);
 // Validate hostname
 try validate.hostname(server_host);
 ```
+
+## Environment Variable Expansion (S-NEW-04)
+
+The `expand` module (`expandEnv` / `expandEnvWithOptions` / `expandStruct`)
+resolves `${VAR}` and `$VAR` references straight from the **process
+environment**, recursively by default.
+
+> **Warning (CWE-200 / CWE-610): never expand untrusted input.**
+> If you run expansion over a value that an attacker can influence -- a
+> committed config file, a remote key/value value, a tenant-supplied field --
+> they can embed references like `${AWS_SECRET_ACCESS_KEY}`, `${VAULT_TOKEN}`,
+> or `${DB_PASSWORD}` and exfiltrate process-environment secrets into the
+> resulting config value.
+
+The default behavior is unchanged (expansion works with no restriction), but
+`ExpandOptions` provides **opt-in** allow/deny controls. **Precedence: deny
+overrides allow.** A blocked name is treated as undefined (yields
+`undefined_value`, or errors under `strict`), and the policy applies uniformly
+to `${VAR}`, `$VAR`, modifier forms (`${VAR:-default}` etc.), and recursive
+expansion.
+
+```zig
+const config = @import("config");
+
+// Allowlist: ONLY these names may expand; everything else resolves empty.
+const safe = try config.expandEnvWithOptions(untrusted, allocator, .{
+    .allowed_vars = &.{ "PUBLIC_BASE_URL", "REGION" },
+});
+defer allocator.free(safe);
+
+// Denylist: these names never expand (overrides any allowlist).
+const filtered = try config.expandEnvWithOptions(untrusted, allocator, .{
+    .denied_vars = &.{ "VAULT_TOKEN", "AWS_SECRET_ACCESS_KEY" },
+});
+defer allocator.free(filtered);
+
+// Convenience heuristic: block secret-looking names
+// (contains TOKEN/SECRET/KEY/PASSWORD/CREDENTIAL, case-insensitive).
+const hardened = try config.expandEnvWithOptions(untrusted, allocator, .{
+    .deny_secret_looking = true,
+});
+defer allocator.free(hardened);
+```
+
+Recommendation: for any lower-trust input, prefer an explicit `allowed_vars`
+allowlist of exactly the names you intend to support. Use `denied_vars` and/or
+`deny_secret_looking` as defense in depth.
+
+## Redacting Diff and Provenance Output (S-NEW-05)
+
+The `diff` and `provenance` modules emit config **values verbatim** by default.
+If a config snapshot or provenance report contains resolved secrets, dumping it
+writes plaintext secrets into logs/CI output (CWE-532 / CWE-200).
+
+Redaction is **opt-in** and backward compatible -- `formatDiff` and
+`printJson` are unchanged. Use the redaction-aware variants when output may
+contain secrets:
+
+```zig
+// Diff: mask sensitive keys' old/new values.
+const report = try config.formatDiffWithOptions(allocator, result, .{
+    .redact = true,
+    // Optional explicit list; omit to use the default heuristic.
+    // .sensitive_keys = &.{ "db_password", "api_token" },
+});
+defer allocator.free(report);
+
+// Provenance: mask sensitive values while keeping valid JSON.
+try tracker.printJsonRedacted(&writer, .{
+    .redact = true,
+    // .sensitive_keys = &.{ "db_password" },
+});
+```
+
+When `redact` is enabled and no explicit `sensitive_keys` list is supplied, the
+default heuristic masks any key containing (case-insensitive) `password`,
+`secret`, `token`, `key`, or `credential`. Masked values are replaced with
+`***REDACTED***`.
 
 ## Configuration Precedence Security
 
@@ -146,6 +226,7 @@ chmod 600 /run/secrets/*
 **Do not open public issues for security vulnerabilities.**
 
 Instead:
+
 1. Email security concerns to the maintainers
 2. Include detailed description and reproduction steps
 3. Allow reasonable time for fixes before disclosure
@@ -155,6 +236,7 @@ Instead:
 Security fixes are prioritized with `priority::critical` label.
 
 Monitor:
+
 - GitLab releases
 - CHANGELOG.md security sections
 - Dependency updates
@@ -162,6 +244,7 @@ Monitor:
 ## Dependencies
 
 External dependencies:
+
 - `yaml` - YAML parsing library
 - `toml` - TOML parsing library
 - `json` - JSON utilities

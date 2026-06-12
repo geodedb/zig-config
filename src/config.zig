@@ -95,6 +95,8 @@ pub const load = loader.load;
 pub const Source = provenance.Source;
 pub const TrackedValue = provenance.TrackedValue;
 pub const ProvenanceTracker = provenance.ProvenanceTracker;
+/// S-NEW-05: redaction options for `ProvenanceTracker.printJsonRedacted`.
+pub const ProvenanceFormatOptions = provenance.ProvenanceFormatOptions;
 
 // Re-export XDG types
 pub const XdgPaths = xdg.XdgPaths;
@@ -193,6 +195,9 @@ pub const CompareOptions = diff.CompareOptions;
 pub const compareConfigs = diff.compare;
 pub const compareConfigsWithOptions = diff.compareWithOptions;
 pub const formatDiff = diff.formatDiff;
+/// S-NEW-05: redaction-aware diff formatter and its options.
+pub const DiffFormatOptions = diff.DiffFormatOptions;
+pub const formatDiffWithOptions = diff.formatDiffWithOptions;
 pub const isEquivalent = diff.isEquivalent;
 pub const configIntersection = diff.intersection;
 pub const configDifference = diff.difference;

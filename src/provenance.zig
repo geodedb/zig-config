@@ -128,8 +128,27 @@ pub const ProvenanceTracker = struct {
         return try list.toOwnedSlice(self.allocator);
     }
 
-    /// Print JSON provenance report
+    /// Print JSON provenance report.
+    ///
+    /// **Security (S-NEW-05):** this emits config values verbatim. If the
+    /// report may contain resolved secrets, use `printJsonRedacted` to mask
+    /// sensitive values before writing to logs/CI output.
     pub fn printJson(self: *const Self, writer: anytype) !void {
+        // Backward compatible: never redact via the legacy entry point.
+        return self.printJsonImpl(writer, .{ .redact = false });
+    }
+
+    /// Print JSON provenance report with sensitive values masked.
+    ///
+    /// **Security (S-NEW-05):** masks the value of any key judged sensitive
+    /// (default heuristic, or an explicit `options.sensitive_keys` list) with
+    /// `redaction_mask`, while keeping the output valid JSON. Non-sensitive
+    /// keys are emitted verbatim.
+    pub fn printJsonRedacted(self: *const Self, writer: anytype, options: ProvenanceFormatOptions) !void {
+        return self.printJsonImpl(writer, options);
+    }
+
+    fn printJsonImpl(self: *const Self, writer: anytype, options: ProvenanceFormatOptions) !void {
         try writer.writeAll("[");
         var first = true;
         var iter = self.values.valueIterator();
@@ -139,7 +158,11 @@ pub const ProvenanceTracker = struct {
             try writer.writeAll("{\"key\":");
             try writeJsonString(writer, val.key);
             try writer.writeAll(",\"value\":");
-            try writeJsonString(writer, val.value);
+            if (options.redact and isSensitiveKey(val.key, options.sensitive_keys)) {
+                try writeJsonString(writer, redaction_mask);
+            } else {
+                try writeJsonString(writer, val.value);
+            }
             try writer.writeAll(",\"source\":");
             try writeJsonString(writer, val.source.format());
             try writer.writeAll("}");
@@ -147,6 +170,58 @@ pub const ProvenanceTracker = struct {
         try writer.writeAll("]\n");
     }
 };
+
+/// S-NEW-05: redaction mask written in place of a sensitive value.
+pub const redaction_mask = "***REDACTED***";
+
+/// S-NEW-05: options controlling how the provenance JSON is rendered,
+/// including opt-in value redaction (CWE-532/CWE-200).
+pub const ProvenanceFormatOptions = struct {
+    /// When true, mask the value of keys judged sensitive. Default false
+    /// preserves the historical verbatim behavior of `printJson`.
+    redact: bool = true,
+    /// Explicit list of sensitive key names (case-insensitive exact match).
+    /// When null, the built-in heuristic is used: keys containing
+    /// `password`/`secret`/`token`/`key`/`credential` (case-insensitive).
+    sensitive_keys: ?[]const []const u8 = null,
+};
+
+/// S-NEW-05: decide whether a key's value should be redacted. When
+/// `sensitive_keys` is provided, only keys in that list (case-insensitive
+/// exact match) are sensitive; otherwise the default substring heuristic
+/// applies.
+pub fn isSensitiveKey(key: []const u8, sensitive_keys: ?[]const []const u8) bool {
+    if (sensitive_keys) |list| {
+        for (list) |k| {
+            if (std.ascii.eqlIgnoreCase(key, k)) return true;
+        }
+        return false;
+    }
+    const needles = [_][]const u8{ "password", "secret", "token", "key", "credential" };
+    for (needles) |needle| {
+        if (containsIgnoreCase(key, needle)) return true;
+    }
+    return false;
+}
+
+/// Case-insensitive substring search (ASCII).
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0) return true;
+    if (needle.len > haystack.len) return false;
+    var i: usize = 0;
+    const last = haystack.len - needle.len;
+    while (i <= last) : (i += 1) {
+        var match = true;
+        for (needle, 0..) |nc, j| {
+            if (std.ascii.toLower(haystack[i + j]) != std.ascii.toLower(nc)) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
+    return false;
+}
 
 /// Write a JSON-escaped string (with surrounding quotes) to the writer.
 /// Escapes `"`, `\`, and control characters (U+0000 through U+001F)
@@ -448,6 +523,75 @@ test "provenance: printJson escapes control characters (GAP-0024)" {
 
     const obj = arr.items[0].object;
     try std.testing.expectEqualStrings(ctrl_value, obj.get("value").?.string);
+}
+
+// ---------------------------------------------------------------------------
+// S-NEW-05: opt-in value redaction for provenance reports (CWE-532/CWE-200)
+// ---------------------------------------------------------------------------
+
+test "S-NEW-05: printJson (default) emits values verbatim" {
+    var tracker = ProvenanceTracker.init(std.testing.allocator);
+    defer tracker.deinit();
+
+    try tracker.set("db_password", "hunter2", .env, null);
+
+    var buffer: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try tracker.printJson(&writer);
+    const output = writer.buffered();
+
+    // Default unchanged: secret present.
+    try std.testing.expect(std.mem.indexOf(u8, output, "hunter2") != null);
+}
+
+test "S-NEW-05: printJsonRedacted masks sensitive values" {
+    var tracker = ProvenanceTracker.init(std.testing.allocator);
+    defer tracker.deinit();
+
+    try tracker.set("db_password", "hunter2", .env, null);
+    try tracker.set("host", "localhost", .project, null);
+
+    var buffer: [2048]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try tracker.printJsonRedacted(&writer, .{});
+    const output = writer.buffered();
+
+    // Secret masked, non-sensitive preserved.
+    try std.testing.expect(std.mem.indexOf(u8, output, "hunter2") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "***REDACTED***") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "localhost") != null);
+
+    // Output must remain valid JSON.
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, output, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 2), parsed.value.array.items.len);
+}
+
+test "S-NEW-05: printJsonRedacted explicit sensitive_keys" {
+    var tracker = ProvenanceTracker.init(std.testing.allocator);
+    defer tracker.deinit();
+
+    // "custom" is not caught by the heuristic; explicit list masks it.
+    try tracker.set("custom", "topsecret", .env, null);
+    try tracker.set("password", "should_stay", .env, null);
+
+    var buffer: [2048]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try tracker.printJsonRedacted(&writer, .{ .sensitive_keys = &.{"custom"} });
+    const output = writer.buffered();
+
+    try std.testing.expect(std.mem.indexOf(u8, output, "topsecret") == null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "***REDACTED***") != null);
+    // password not in explicit list -> visible
+    try std.testing.expect(std.mem.indexOf(u8, output, "should_stay") != null);
+}
+
+test "S-NEW-05: provenance isSensitiveKey heuristic" {
+    try std.testing.expect(isSensitiveKey("api_token", null));
+    try std.testing.expect(isSensitiveKey("DB_SECRET", null));
+    try std.testing.expect(isSensitiveKey("private_key", null));
+    try std.testing.expect(isSensitiveKey("user_credential", null));
+    try std.testing.expect(!isSensitiveKey("host", null));
 }
 
 test "provenance: writeJsonString escapes correctly" {

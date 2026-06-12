@@ -284,8 +284,84 @@ fn trimmedEqual(a: []const u8, b: []const u8) bool {
     return mem.eql(u8, trimmed_a, trimmed_b);
 }
 
-/// Generate a human-readable diff report
+/// S-NEW-05: redaction mask written in place of a sensitive value.
+pub const redaction_mask = "***REDACTED***";
+
+/// S-NEW-05: options controlling how a diff is rendered, including opt-in
+/// value redaction (CWE-532/CWE-200).
+pub const DiffFormatOptions = struct {
+    /// When true, mask the old/new values of keys judged sensitive. Default
+    /// false preserves the historical verbatim behavior of `formatDiff`.
+    redact: bool = false,
+    /// Explicit list of sensitive key names (case-insensitive exact match).
+    /// When null and `redact` is true, the built-in heuristic is used: keys
+    /// containing `password`/`secret`/`token`/`key`/`credential`
+    /// (case-insensitive) are masked.
+    sensitive_keys: ?[]const []const u8 = null,
+};
+
+/// S-NEW-05: decide whether a key's value should be redacted. When
+/// `sensitive_keys` is provided, only keys in that list (case-insensitive
+/// exact match) are sensitive; otherwise the default substring heuristic
+/// applies.
+pub fn isSensitiveKey(key: []const u8, sensitive_keys: ?[]const []const u8) bool {
+    if (sensitive_keys) |list| {
+        for (list) |k| {
+            if (std.ascii.eqlIgnoreCase(key, k)) return true;
+        }
+        return false;
+    }
+    const needles = [_][]const u8{ "password", "secret", "token", "key", "credential" };
+    for (needles) |needle| {
+        if (containsIgnoreCase(key, needle)) return true;
+    }
+    return false;
+}
+
+/// Case-insensitive substring search (ASCII).
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0) return true;
+    if (needle.len > haystack.len) return false;
+    var i: usize = 0;
+    const last = haystack.len - needle.len;
+    while (i <= last) : (i += 1) {
+        var match = true;
+        for (needle, 0..) |nc, j| {
+            if (std.ascii.toLower(haystack[i + j]) != std.ascii.toLower(nc)) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
+    return false;
+}
+
+/// Render a value for the diff report, masking it when redaction is enabled
+/// and the key is sensitive.
+fn renderValue(value: []const u8, key: []const u8, options: DiffFormatOptions) []const u8 {
+    if (options.redact and isSensitiveKey(key, options.sensitive_keys)) {
+        return redaction_mask;
+    }
+    return value;
+}
+
+/// Generate a human-readable diff report.
+///
+/// **Security (S-NEW-05):** this prints config values verbatim. If a diff may
+/// contain resolved secrets, use `formatDiffWithOptions` with `redact = true`
+/// to mask sensitive values before writing to logs/CI output.
 pub fn formatDiff(allocator: Allocator, result: DiffResult) ![]u8 {
+    return formatDiffWithOptions(allocator, result, .{});
+}
+
+/// Generate a human-readable diff report with formatting options.
+///
+/// **Security (S-NEW-05):** set `options.redact = true` to mask the values of
+/// sensitive keys (default heuristic, or an explicit `options.sensitive_keys`
+/// list) so plaintext secrets are not written to logs/CI output. With the
+/// default `redact = false`, output is identical to `formatDiff`.
+pub fn formatDiffWithOptions(allocator: Allocator, result: DiffResult, options: DiffFormatOptions) ![]u8 {
     var output: std.ArrayListUnmanaged(u8) = .empty;
     errdefer output.deinit(allocator);
 
@@ -314,20 +390,26 @@ pub fn formatDiff(allocator: Allocator, result: DiffResult) ![]u8 {
         for (result.changes) |change| {
             switch (change.change_type) {
                 .added => {
-                    const line = try std.fmt.allocPrint(allocator, "  + {s} = {s}\n", .{ change.key, change.new_value orelse "" });
+                    const line = try std.fmt.allocPrint(allocator, "  + {s} = {s}\n", .{
+                        change.key,
+                        renderValue(change.new_value orelse "", change.key, options),
+                    });
                     defer allocator.free(line);
                     try added_buf.appendSlice(allocator, line);
                 },
                 .removed => {
-                    const line = try std.fmt.allocPrint(allocator, "  - {s} = {s}\n", .{ change.key, change.old_value orelse "" });
+                    const line = try std.fmt.allocPrint(allocator, "  - {s} = {s}\n", .{
+                        change.key,
+                        renderValue(change.old_value orelse "", change.key, options),
+                    });
                     defer allocator.free(line);
                     try removed_buf.appendSlice(allocator, line);
                 },
                 .modified => {
                     const line = try std.fmt.allocPrint(allocator, "  ~ {s}: {s} -> {s}\n", .{
                         change.key,
-                        change.old_value orelse "",
-                        change.new_value orelse "",
+                        renderValue(change.old_value orelse "", change.key, options),
+                        renderValue(change.new_value orelse "", change.key, options),
                     });
                     defer allocator.free(line);
                     try modified_buf.appendSlice(allocator, line);
@@ -765,6 +847,138 @@ test "case-insensitive compare detects removals correctly" {
     try std.testing.expectEqual(@as(usize, 1), result.removed_count);
     try std.testing.expectEqual(@as(usize, 0), result.modified_count);
     try std.testing.expectEqual(@as(usize, 1), result.unchanged_count);
+}
+
+// ---------------------------------------------------------------------------
+// S-NEW-05: opt-in value redaction for diff reports (CWE-532/CWE-200)
+// ---------------------------------------------------------------------------
+
+test "S-NEW-05: formatDiff (default) still prints values verbatim" {
+    var old = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer old.deinit();
+    var new = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer new.deinit();
+
+    try old.put("db_password", "hunter2");
+    try new.put("db_password", "swordfish");
+
+    const result = try compare(std.testing.allocator, old, new);
+    defer std.testing.allocator.free(result.changes);
+
+    const report = try formatDiff(std.testing.allocator, result);
+    defer std.testing.allocator.free(report);
+
+    // Default behavior unchanged: secret values present in output.
+    try std.testing.expect(mem.indexOf(u8, report, "hunter2") != null);
+    try std.testing.expect(mem.indexOf(u8, report, "swordfish") != null);
+}
+
+test "S-NEW-05: formatDiffWithOptions redacts sensitive keys by heuristic" {
+    var old = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer old.deinit();
+    var new = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer new.deinit();
+
+    try old.put("db_password", "hunter2");
+    try new.put("db_password", "swordfish");
+    try old.put("host", "localhost");
+    try new.put("host", "example.com");
+
+    const result = try compare(std.testing.allocator, old, new);
+    defer std.testing.allocator.free(result.changes);
+
+    const report = try formatDiffWithOptions(std.testing.allocator, result, .{ .redact = true });
+    defer std.testing.allocator.free(report);
+
+    // Secret values masked.
+    try std.testing.expect(mem.indexOf(u8, report, "hunter2") == null);
+    try std.testing.expect(mem.indexOf(u8, report, "swordfish") == null);
+    try std.testing.expect(mem.indexOf(u8, report, "***REDACTED***") != null);
+    // Non-sensitive values preserved.
+    try std.testing.expect(mem.indexOf(u8, report, "localhost") != null);
+    try std.testing.expect(mem.indexOf(u8, report, "example.com") != null);
+}
+
+test "S-NEW-05: formatDiffWithOptions redacts added and removed entries" {
+    var old = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer old.deinit();
+    var new = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer new.deinit();
+
+    try old.put("api_token", "removed_secret");
+    try new.put("vault_secret", "added_secret");
+
+    const result = try compare(std.testing.allocator, old, new);
+    defer std.testing.allocator.free(result.changes);
+
+    const report = try formatDiffWithOptions(std.testing.allocator, result, .{ .redact = true });
+    defer std.testing.allocator.free(report);
+
+    try std.testing.expect(mem.indexOf(u8, report, "removed_secret") == null);
+    try std.testing.expect(mem.indexOf(u8, report, "added_secret") == null);
+    try std.testing.expect(mem.indexOf(u8, report, "***REDACTED***") != null);
+}
+
+test "S-NEW-05: formatDiffWithOptions explicit sensitive_keys list" {
+    var old = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer old.deinit();
+    var new = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer new.deinit();
+
+    // "custom_field" does NOT match the default heuristic; only the explicit
+    // list should mask it. "host" stays visible.
+    try old.put("custom_field", "topsecret");
+    try new.put("custom_field", "changed");
+    try old.put("host", "localhost");
+    try new.put("host", "example.com");
+
+    const result = try compare(std.testing.allocator, old, new);
+    defer std.testing.allocator.free(result.changes);
+
+    const report = try formatDiffWithOptions(
+        std.testing.allocator,
+        result,
+        .{ .redact = true, .sensitive_keys = &.{"custom_field"} },
+    );
+    defer std.testing.allocator.free(report);
+
+    try std.testing.expect(mem.indexOf(u8, report, "topsecret") == null);
+    try std.testing.expect(mem.indexOf(u8, report, "changed") == null);
+    try std.testing.expect(mem.indexOf(u8, report, "***REDACTED***") != null);
+    try std.testing.expect(mem.indexOf(u8, report, "localhost") != null);
+}
+
+test "S-NEW-05: formatDiffWithOptions redact=false matches formatDiff" {
+    var old = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer old.deinit();
+    var new = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer new.deinit();
+
+    try old.put("db_password", "hunter2");
+    try new.put("db_password", "swordfish");
+
+    const result = try compare(std.testing.allocator, old, new);
+    defer std.testing.allocator.free(result.changes);
+
+    const a = try formatDiff(std.testing.allocator, result);
+    defer std.testing.allocator.free(a);
+    const b = try formatDiffWithOptions(std.testing.allocator, result, .{ .redact = false });
+    defer std.testing.allocator.free(b);
+
+    try std.testing.expectEqualStrings(a, b);
+}
+
+test "S-NEW-05: isSensitiveKey heuristic" {
+    try std.testing.expect(isSensitiveKey("db_password", null));
+    try std.testing.expect(isSensitiveKey("API_SECRET", null));
+    try std.testing.expect(isSensitiveKey("auth_token", null));
+    try std.testing.expect(isSensitiveKey("private_key", null));
+    try std.testing.expect(isSensitiveKey("aws_credential", null));
+    try std.testing.expect(!isSensitiveKey("host", null));
+    try std.testing.expect(!isSensitiveKey("port", null));
+    // Explicit list overrides heuristic membership.
+    try std.testing.expect(isSensitiveKey("custom", &.{"custom"}));
+    try std.testing.expect(!isSensitiveKey("password", &.{"custom"}));
 }
 
 test "case-insensitive compare with mixed adds, removes, and modifications" {
