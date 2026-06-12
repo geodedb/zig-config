@@ -283,7 +283,9 @@ viper.BindPFlags(pflag.CommandLine)
 ```zig
 var parser = flags.FlagParser.init(allocator);
 try parser.addFlag(.{ .name = "port", .short = 'p', .description = "server port" });
-const values = try parser.parse(args);
+try parser.parse(args); // parse returns void
+const values = parser.getValues(); // []const FlagValue
+
 ```
 
 ### Remote Configuration

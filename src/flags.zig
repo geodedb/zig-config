@@ -167,7 +167,7 @@ pub const FlagParser = struct {
     /// }
     /// ```
     /// The stored positional args reference the caller's `args`, so `args`
-    /// must outlive reads of `positionalArgs()`. To decouple lifetimes, use
+    /// must outlive reads of `getPositional()`. To decouple lifetimes, use
     /// `parse` after duping, or keep `args` alive for the parser's lifetime.
     pub fn parseArgs(self: *Self, args: []const []const u8) !void {
         if (args.len > 0) {

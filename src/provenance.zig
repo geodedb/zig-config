@@ -177,8 +177,12 @@ pub const redaction_mask = "***REDACTED***";
 /// S-NEW-05: options controlling how the provenance JSON is rendered,
 /// including opt-in value redaction (CWE-532/CWE-200).
 pub const ProvenanceFormatOptions = struct {
-    /// When true, mask the value of keys judged sensitive. Default false
-    /// preserves the historical verbatim behavior of `printJson`.
+    /// When true, mask the value of keys judged sensitive. Defaults to true,
+    /// since the entry point `printJsonRedacted` is redaction-by-name. The
+    /// legacy `printJson` explicitly passes `.redact = false` to preserve its
+    /// historical verbatim behavior. (Note: this differs from
+    /// `diff.DiffFormatOptions.redact`, which defaults to false because its
+    /// entry point `formatDiff` is the verbatim one.)
     redact: bool = true,
     /// Explicit list of sensitive key names (case-insensitive exact match).
     /// When null, the built-in heuristic is used: keys containing

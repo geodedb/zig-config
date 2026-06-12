@@ -197,9 +197,10 @@ fn ensurePoolInit() void {
 ///
 /// **Thread-safety contract (PERF-52):** This function must be called
 /// before any parallel operation triggers `getPool()`.  If `initPool`
-/// and `getPool` are called from different threads, the sequential
-/// fence below ensures the allocator write is visible to the thread
-/// that executes `doInitPool` inside `pool_once.call()`.
+/// and `getPool` are called from different threads, `ensurePoolInit`
+/// (invoked by `getPool`) acquires `pool_mutex` before reading
+/// `pool_allocator`, so the allocator write is visible to the thread
+/// that performs the one-shot pool initialization.
 ///
 /// Calling after the pool is already initialized has no effect.
 pub fn initPool(allocator: std.mem.Allocator) void {
