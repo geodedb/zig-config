@@ -864,26 +864,31 @@ pub const SecretManager = struct {
         }
         // Drained stderr is owned by the ctx; secureZero + free on every exit
         // path. Safe to read/free only after the drainer thread is joined
-        // (handled by `cleanup` below before any use of `stderr_ctx.data`).
+        // (handled by `quiesceReaders` below before any use of
+        // `stderr_ctx.data` and before this defer can run).
         defer {
             if (stderr_ctx) |*sctx| sctx.deinit();
         }
 
         var done = std.atomic.Value(DoneFlag).init(.running);
         var timed_out = std.atomic.Value(bool).init(false);
-        // Reaper guard: `child.kill` and `child.wait` both reap the child and
-        // null out `child.id`; calling either twice panics. This CAS ensures
-        // exactly one party (the main thread on normal/error exit, or the
-        // watchdog on timeout) reaps the child.
-        var reaped = std.atomic.Value(bool).init(false);
         var watchdog: ?std.Thread = null;
 
+        // F-01 teardown invariant (CWE-362 race / CWE-416-adjacent fd reuse):
+        // the child's stdout/stderr descriptors are closed by exactly ONE
+        // operation -- the main thread's single `child.wait` (which reaps and,
+        // via stdlib `childCleanupPosix`, closes+nulls the pipes) -- and that
+        // close happens ONLY AFTER both reader threads have been joined. The
+        // main thread reads stdout, then joins the stderr drainer and the
+        // watchdog (`quiesceReaders` below), and ONLY THEN reaps. No other
+        // thread ever closes these fds. Reads are unblocked by EOF (the child
+        // exiting closes the pipe write-ends; on timeout, SIGKILL forces it),
+        // never by closing the fd out from under an active reader. Because the
+        // main thread is the sole reaper, no reaper CAS is needed.
         const TimeoutCtx = struct {
-            child: *process.Child,
             child_pgid: ?std.posix.pid_t,
             done: *std.atomic.Value(DoneFlag),
             timed_out: *std.atomic.Value(bool),
-            reaped: *std.atomic.Value(bool),
             timeout_ms: u32,
             io: std.Io,
 
@@ -912,18 +917,18 @@ pub const SecretManager = struct {
                     const now = std.Io.Clock.Timestamp.now(ctx.io, .awake);
                     if (now.raw.nanoseconds >= deadline.raw.nanoseconds) {
                         ctx.timed_out.store(true, .release);
-                        // POSIX: SIGKILL the whole process group so grandchildren
-                        // holding the stdout/stderr pipes also die, promptly
-                        // unblocking the parent's reads (Q-NEW-04). Best-effort.
+                        // POSIX: SIGKILL the whole process group so the child
+                        // AND any grandchildren holding the stdout/stderr pipes
+                        // die. That closes the pipe write-ends, forcing EOF on
+                        // both reader threads so they return on their own --
+                        // WITHOUT this thread touching the descriptors (F-01).
+                        // The main thread remains the sole reaper/closer once
+                        // its read returns and the drainer is joined. SIGKILL is
+                        // best-effort; the child is still reaped by the main
+                        // thread's `child.wait`, which never blocks because the
+                        // process is already dead.
                         if (ctx.child_pgid) |pgid| {
                             std.posix.kill(-pgid, .KILL) catch {};
-                        }
-                        // Reap only if the main thread has not already claimed
-                        // it. `kill` blocks until the child terminates, reaps
-                        // it, and closes its pipes (which unblocks the main
-                        // thread's stdout read and the stderr drainer).
-                        if (ctx.reaped.cmpxchgStrong(false, true, .acq_rel, .monotonic) == null) {
-                            ctx.child.kill(ctx.io);
                         }
                         return;
                     }
@@ -934,11 +939,9 @@ pub const SecretManager = struct {
         var timeout_ctx: TimeoutCtx = undefined;
         if (timeout_ms > 0) {
             timeout_ctx = .{
-                .child = &child,
                 .child_pgid = child_pgid,
                 .done = &done,
                 .timed_out = &timed_out,
-                .reaped = &reaped,
                 .timeout_ms = timeout_ms,
                 .io = eio,
             };
@@ -949,11 +952,15 @@ pub const SecretManager = struct {
             watchdog = std.Thread.spawn(.{}, TimeoutCtx.run, .{&timeout_ctx}) catch null;
         }
 
-        // Join the stderr drainer and the watchdog, signaling completion so the
-        // watchdog wakes immediately. Centralized so every early-return path
-        // tears the helper threads down deterministically (no leaked threads,
-        // no full-timeout stall).
-        const cleanup = struct {
+        // Quiesce the reader/watchdog threads: signal completion (so the
+        // watchdog wakes immediately instead of sleeping out the timeout --
+        // Q-NEW-04) and JOIN both threads. This MUST run before any path closes
+        // the child's descriptors (i.e. before `child.wait`/the reap), so that
+        // no thread is mid-`read()` on an fd that another thread closes (F-01).
+        // Both reader threads always reach EOF first: the child exiting closes
+        // the pipe write-ends on success/normal exit, and the watchdog's
+        // SIGKILL closes them on timeout -- so this join never deadlocks.
+        const quiesceReaders = struct {
             fn run(io: std.Io, d: *std.atomic.Value(DoneFlag), wd: ?std.Thread, st: ?std.Thread) void {
                 signalDone(io, d);
                 if (st) |t| t.join();
@@ -961,34 +968,41 @@ pub const SecretManager = struct {
             }
         }.run;
 
-        // Read stdout pipe (stderr is being drained concurrently). If the
-        // watchdog fires it closes stdout, so this read returns rather than
-        // blocking forever.
+        // Read stdout pipe (stderr is being drained concurrently). The read
+        // returns on EOF: the child's exit closes the pipe write-end on the
+        // normal path, and the watchdog's SIGKILL closes it on the timeout
+        // path. Nothing closes this fd under the active read (F-01).
         if (child.stdout) |stdout_file| {
             var read_buf: [4096]u8 = undefined;
             var reader = stdout_file.readerStreaming(eio, &read_buf);
             stdout_data = reader.interface.allocRemaining(self.allocator, std.Io.Limit.limited(1024 * 1024)) catch {
-                cleanup(eio, &done, watchdog, stderr_thread);
+                // Join readers BEFORE reaping so the reap's fd close cannot race
+                // an active read. The drainer has EOF'd (child exit / SIGKILL).
+                quiesceReaders(eio, &done, watchdog, stderr_thread);
+                // Reap (closes the pipes) so we don't leak the child; the term
+                // is irrelevant on this read-failure path.
+                if (child.wait(eio)) |_| {} else |_| {}
                 if (timed_out.load(.acquire)) return SecretError.Timeout;
                 return SecretError.IoError;
             };
         }
 
-        // Reap the child unless the watchdog already claimed it (timeout). When
-        // the watchdog wins the CAS, skip wait() entirely to avoid a double-reap
-        // panic; the timeout is surfaced below.
-        var term: process.Child.Term = .{ .unknown = 0 };
-        const we_reap = reaped.cmpxchgStrong(false, true, .acq_rel, .monotonic) == null;
-        if (we_reap) {
-            term = child.wait(eio) catch {
-                cleanup(eio, &done, watchdog, stderr_thread);
-                if (timed_out.load(.acquire)) return SecretError.Timeout;
-                return SecretError.CommandFailed;
-            };
-        }
-        cleanup(eio, &done, watchdog, stderr_thread);
+        // Reader threads are now joined; the descriptors have NOT yet been
+        // closed (only `child.wait` below closes them). This ordering is the
+        // F-01 fix: close-after-join, single reaper, no fd touched under a
+        // reader.
+        quiesceReaders(eio, &done, watchdog, stderr_thread);
 
-        if (timed_out.load(.acquire) or !we_reap) {
+        // Single reaper (main thread): `child.wait` reaps the child and closes
+        // its stdout/stderr pipes. Safe now that both readers are joined. On
+        // the timeout path the child was already SIGKILL'd, so this returns
+        // immediately.
+        const term = child.wait(eio) catch {
+            if (timed_out.load(.acquire)) return SecretError.Timeout;
+            return SecretError.CommandFailed;
+        };
+
+        if (timed_out.load(.acquire)) {
             return SecretError.Timeout;
         }
 

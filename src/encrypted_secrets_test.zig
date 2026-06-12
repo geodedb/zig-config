@@ -700,3 +700,76 @@ test "execCommand: non-zero exit surfaces CommandFailed (AS-04 diagnostics)" {
     const result = manager.execCommandTestHook(&argv, 30_000);
     try std.testing.expectError(SecretError.CommandFailed, result);
 }
+
+/// Background fd churn: repeatedly open() and close() a temp file to recycle fd
+/// numbers in the host process while `execCommand` is running. If a reader
+/// thread is racing a close() on a child pipe fd, the recycled fd number can be
+/// handed to one of these opens, turning the race into an observable corruption
+/// (the racing read targets the wrong descriptor). Used by the stress test to
+/// widen the window for F-01.
+const FdChurnCtx = struct {
+    stop: *std.atomic.Value(bool),
+
+    fn run(ctx: *@This()) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        while (!ctx.stop.load(.acquire)) {
+            // Open /dev/null many times then close, to churn fd numbers.
+            var files: [16]?std.Io.File = .{null} ** 16;
+            for (&files) |*slot| {
+                slot.* = std.Io.Dir.cwd().openFile(io, "/dev/null", .{}) catch null;
+            }
+            for (&files) |*slot| {
+                if (slot.*) |f| f.close(io);
+                slot.* = null;
+            }
+        }
+    }
+};
+
+test "execCommand: stress close/read interleaving stays correct (F-01, CWE-362)" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    var manager = SecretManager.init(std.testing.allocator);
+
+    // Regression guard for F-01: teardown must quiesce the stderr drainer and
+    // the watchdog BEFORE any path closes the child's stdout/stderr fds. If a
+    // reader thread is mid-read() when another thread closes the fd, the read
+    // sees a spurious EBADF (mapped to IoError/CommandFailed) -- a secret load
+    // that should succeed fails -- or, with fd reuse, reads an unrelated
+    // descriptor. This child emits a fixed stdout payload and a large stderr
+    // volume (past the ~64 KB pipe buffer) so every iteration exercises the
+    // concurrent stdout-read / stderr-drain / reap / close interleaving.
+    //
+    // A background thread churns open()/close() of temp files to recycle fd
+    // numbers, so a racing read on a closed-then-reopened fd would corrupt the
+    // returned payload. We assert the stdout payload is byte-exact on every
+    // iteration and that no spurious error is returned.
+    const script =
+        \\head -c 131072 /dev/zero | tr '\0' 'E' 1>&2
+        \\printf '%s' stress-ok-payload
+    ;
+    const argv = [_][]const u8{ "/bin/sh", "-c", script };
+
+    var stop = std.atomic.Value(bool).init(false);
+    var churn_ctx: FdChurnCtx = .{ .stop = &stop };
+    const churn = std.Thread.spawn(.{}, FdChurnCtx.run, .{&churn_ctx}) catch null;
+    defer if (churn) |t| {
+        stop.store(true, .release);
+        t.join();
+    };
+
+    // 200 iterations: enough to reliably hit the close/read window without
+    // making the suite slow (each exec is a sub-millisecond shell).
+    var i: usize = 0;
+    while (i < 200) : (i += 1) {
+        const out = manager.execCommandTestHook(&argv, 30_000) catch |err| {
+            std.debug.print("iteration {d} returned unexpected error: {s}\n", .{ i, @errorName(err) });
+            return err;
+        };
+        defer manager.freeSecret(out);
+        std.testing.expectEqualStrings("stress-ok-payload", out) catch |err| {
+            std.debug.print("iteration {d} returned wrong payload (len={d})\n", .{ i, out.len });
+            return err;
+        };
+    }
+}
