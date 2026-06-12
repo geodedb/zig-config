@@ -26,6 +26,28 @@ All fixes landed with TDD (failing test first) and the full suite stays green
 (`zig build` / `check` / `test` / `fmt` all exit 0). See branch commits and
 `docs/APPSEC_REVIEW_2026-06-12.md`.
 
+**Re-audit loop (convergence).** After the initial closures the reviews were
+re-run. Iteration 2 surfaced one Medium regression introduced by the AS-04 fix
+(F-01: `execCommand` closed the child stdout/stderr fds concurrently with in-flight
+reads -- CWE-362 / fd-reuse) plus Low doc/comment nits (Q2-01 provenance redact
+default comment, Q2-02 parallel `std.once` stale comment, Gap-2-01/02/03 VIPER /
+ROADMAP / flags doc drift). All were fixed -- F-01 via a close-after-join teardown
+(join both reader threads before the single `child.wait` reaps/closes; watchdog only
+SIGKILLs the process group; reaper CAS removed). Iteration 3 re-ran the appsec review
+and all four audit domains (gap/quality/perf/security): **all returned zero new
+actionable findings** -- the loop converged. Test count: 1036.
+
+**Known pre-existing, out-of-scope (NOT regressions, NOT new findings):**
+
+1. `zig build -Dthread_pool=false` fails to compile -- `config.zig` imports the
+   `parallel` module unconditionally while `build.zig` only wires it when
+   thread_pool is enabled. Present on `main` (dbf3cea); the default
+   `thread_pool=true` build is unaffected. A proper fix needs conditional module
+   compilation (a build-options flag); deferred.
+2. A few stale `loader.zig:NNN` line-number citations in `VIPER_COMPARISON.md` and
+   `ROADMAP.md` (the symbols exist and are correctly described; only the line
+   numbers drifted). Present on `main`; line numbers in prose drift inherently.
+
 ## Summary
 
 ### Severity Breakdown
