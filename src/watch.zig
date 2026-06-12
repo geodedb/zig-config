@@ -67,6 +67,34 @@ fn nanosleep(nanoseconds: u64) void {
     }
 }
 
+/// Zig 0.16.0 compat: std.Thread.Mutex was removed; wrap std.Io.Mutex
+/// with uncancelable lock so callers keep the zero-arg lock()/unlock() API.
+const Mutex = struct {
+    inner: std.Io.Mutex = .init,
+
+    fn io() std.Io {
+        return std.Io.Threaded.global_single_threaded.io();
+    }
+
+    pub fn lock(self: *Mutex) void {
+        self.inner.lockUncancelable(io());
+    }
+
+    pub fn unlock(self: *Mutex) void {
+        self.inner.unlock(io());
+    }
+};
+
+/// Convert a poll interval in milliseconds to nanoseconds.
+///
+/// `poll_interval_ms` is a `u32`; `std.time.ns_per_ms` is 1_000_000, so the
+/// product overflows a `u32` for any interval >= 4295 ms. Widen to `u64`
+/// before multiplying so large intervals neither panic (Debug/ReleaseSafe)
+/// nor silently wrap into a busy-loop (ReleaseFast).
+fn pollIntervalNs(poll_interval_ms: u32) u64 {
+    return @as(u64, poll_interval_ms) * std.time.ns_per_ms;
+}
+
 /// Watch errors
 pub const WatchError = error{
     FileNotFound,
@@ -108,10 +136,29 @@ const WatchedFile = struct {
 };
 
 /// File watcher with hot-reload support
+///
+/// ## Concurrency contract (CWE-362)
+///
+/// The background poll thread and the public API mutate the same `watches`
+/// list, so all access is serialized by `watches_mutex`. As a consequence:
+///
+/// - `ChangeCallback` invocations are performed **while `watches_mutex` is
+///   held**. Callbacks for a given `Watcher` are therefore never invoked
+///   concurrently with each other.
+/// - A callback MUST NOT call back into the same `Watcher`'s `addPath`,
+///   `addPathWithData`, `removePath`, `checkNow`, or `watchCount` — the mutex
+///   is non-reentrant and doing so would deadlock.
+/// - `start`, `stop`, and `deinit` do not hold `watches_mutex` while
+///   joining the poll thread, so they cannot deadlock against an in-flight
+///   `checkForChanges` (the loop releases the lock before re-checking the
+///   `running` flag and sleeping).
 pub const Watcher = struct {
     allocator: Allocator,
     options: WatchOptions,
     watches: std.ArrayListUnmanaged(WatchedFile),
+    /// Guards all reads/writes of `watches` (and the per-element fields that
+    /// `checkForChanges` mutates) against the background poll thread.
+    watches_mutex: Mutex,
     running: std.atomic.Value(bool),
     thread: ?Thread,
     /// Arena for path storage
@@ -122,6 +169,7 @@ pub const Watcher = struct {
             .allocator = allocator,
             .options = options,
             .watches = .empty,
+            .watches_mutex = .{},
             .running = std.atomic.Value(bool).init(false),
             .thread = null,
             .arena = std.heap.ArenaAllocator.init(allocator),
@@ -141,26 +189,42 @@ pub const Watcher = struct {
 
     /// Add a file to watch with user data
     pub fn addPathWithData(self: *Watcher, path: []const u8, callback: ChangeCallback, user_data: ?*anyopaque) !void {
+        // Hold the lock across the capacity check + append so the poll thread
+        // cannot reallocate/iterate `watches` concurrently (CWE-362).
+        self.watches_mutex.lock();
+
         if (self.watches.items.len >= self.options.max_watches) {
+            self.watches_mutex.unlock();
             return WatchError.TooManyWatches;
         }
 
-        const owned_path = try self.arena.allocator().dupe(u8, path);
+        const owned_path = self.arena.allocator().dupe(u8, path) catch |err| {
+            self.watches_mutex.unlock();
+            return err;
+        };
 
         // Get initial file state
         const stat = getFileStat(path);
         const exists = stat != null;
 
-        try self.watches.append(self.allocator, .{
+        self.watches.append(self.allocator, .{
             .path = owned_path,
             .callback = callback,
             .user_data = user_data,
             .last_mtime = if (stat) |s| s.mtime else std.Io.Timestamp.zero,
             .last_size = if (stat) |s| s.size else 0,
             .exists = exists,
-        });
+        }) catch |err| {
+            self.watches_mutex.unlock();
+            return err;
+        };
 
-        // Trigger callback on add if requested
+        self.watches_mutex.unlock();
+
+        // Trigger callback on add if requested. Fired after releasing the lock:
+        // the entry is already committed and `owned_path`/`user_data` are
+        // captured locally, so this is race-free and keeps the add path from
+        // holding the lock across arbitrary user code.
         if (self.options.trigger_on_add and exists) {
             callback(owned_path, .modified, user_data);
         }
@@ -168,6 +232,9 @@ pub const Watcher = struct {
 
     /// Remove a watched path
     pub fn removePath(self: *Watcher, path: []const u8) bool {
+        self.watches_mutex.lock();
+        defer self.watches_mutex.unlock();
+
         for (self.watches.items, 0..) |watch, i| {
             if (mem.eql(u8, watch.path, path)) {
                 _ = self.watches.orderedRemove(i);
@@ -207,7 +274,12 @@ pub const Watcher = struct {
     }
 
     /// Get number of watched paths
-    pub fn watchCount(self: *const Watcher) usize {
+    ///
+    /// Takes a mutable receiver because it acquires `watches_mutex` to read the
+    /// length safely while the poll thread may be mutating `watches`.
+    pub fn watchCount(self: *Watcher) usize {
+        self.watches_mutex.lock();
+        defer self.watches_mutex.unlock();
         return self.watches.items.len;
     }
 
@@ -219,11 +291,18 @@ pub const Watcher = struct {
     fn watchLoop(self: *Watcher) void {
         while (self.running.load(.acquire)) {
             self.checkForChanges();
-            nanosleep(self.options.poll_interval_ms * std.time.ns_per_ms);
+            nanosleep(pollIntervalNs(self.options.poll_interval_ms));
         }
     }
 
     fn checkForChanges(self: *Watcher) void {
+        // Hold the lock for the whole iteration so a concurrent append (which
+        // may reallocate the backing array) or orderedRemove cannot invalidate
+        // the slice we are walking (CWE-362). User callbacks therefore run
+        // under the lock; see the `Watcher` concurrency contract.
+        self.watches_mutex.lock();
+        defer self.watches_mutex.unlock();
+
         for (self.watches.items) |*watch| {
             const current_stat = getFileStat(watch.path);
             const currently_exists = current_stat != null;
@@ -414,4 +493,90 @@ test "Watcher stop when not running" {
 test "getFileStat returns null for nonexistent" {
     const stat = getFileStat("/nonexistent/path/to/file");
     try std.testing.expect(stat == null);
+}
+
+test "pollIntervalNs does not overflow for large intervals (Q-NEW-03)" {
+    // Regression: poll_interval_ms is u32; multiplying by ns_per_ms (1_000_000)
+    // in u32 overflows for any interval >= 4295 ms (4295 * 1e6 > u32 max),
+    // which is a checked-overflow panic in Debug/ReleaseSafe and a silent
+    // busy-loop wrap in ReleaseFast. The widened computation must be exact.
+    try std.testing.expectEqual(@as(u64, 10_000_000_000), pollIntervalNs(10_000));
+    try std.testing.expectEqual(@as(u64, 4_295_000_000), pollIntervalNs(4295));
+    // Boundary just under the old overflow point still matches a u64 reference.
+    try std.testing.expectEqual(@as(u64, 4_294_000_000), pollIntervalNs(4294));
+    // Maximum u32 interval must not overflow.
+    try std.testing.expectEqual(
+        @as(u64, std.math.maxInt(u32)) * std.time.ns_per_ms,
+        pollIntervalNs(std.math.maxInt(u32)),
+    );
+}
+
+test "Watcher with large poll interval starts/stops without panic (Q-NEW-03)" {
+    // Constructing and starting a watcher with a large interval must not
+    // trigger an integer-overflow panic in watchLoop's sleep computation.
+    var watcher = Watcher.init(std.testing.allocator, .{ .poll_interval_ms = 10_000 });
+    defer watcher.deinit();
+
+    try watcher.start();
+    // The first checkForChanges happens before the sleep; stop() joins the
+    // thread. If the multiply overflowed, the thread would panic before/at
+    // the sleep and the join would observe a crashed process under the test
+    // runner. Reaching here cleanly is the assertion.
+    watcher.stop();
+    try std.testing.expect(!watcher.isRunning());
+}
+
+test "Watcher concurrent add/remove while running is data-race safe (S-NEW-02/Q-NEW-11)" {
+    // Stress test: the poll thread iterates `self.watches` (doing a statFile
+    // syscall per element, which widens the race window) while the main thread
+    // repeatedly grows the list past its capacity (forcing the backing array to
+    // be reallocated and freed) and shrinks it again. Without the mutex this
+    // reallocation invalidates the slice the poll thread is walking -> the poll
+    // thread dereferences freed memory (use-after-free / OOB). With the mutex
+    // the run completes cleanly, the count returns to baseline, and the testing
+    // allocator reports no leaks on deinit.
+    //
+    // `poll_interval_ms = 0` keeps the poll thread iterating back-to-back with
+    // no sleep, maximizing overlap with the mutating main thread.
+    var watcher = Watcher.init(std.testing.allocator, .{
+        .poll_interval_ms = 0,
+        .max_watches = 100_000,
+    });
+    defer watcher.deinit();
+
+    const noop = struct {
+        fn cb(_: []const u8, _: ChangeEvent, _: ?*anyopaque) void {}
+    }.cb;
+
+    // Seed a non-trivial number of watches so each checkForChanges pass spends
+    // real time iterating (and the array has a real backing allocation to free
+    // when it grows).
+    const seed = 64;
+    var s: usize = 0;
+    while (s < seed) : (s += 1) {
+        try watcher.addPath("/nonexistent/race_seed", noop);
+    }
+
+    try watcher.start();
+
+    var iter: usize = 0;
+    while (iter < 200) : (iter += 1) {
+        // Grow well past current capacity to force repeated realloc+free of the
+        // backing array while the poll thread is mid-iteration.
+        var g: usize = 0;
+        while (g < 256) : (g += 1) {
+            try watcher.addPath("/nonexistent/race_grow", noop);
+        }
+        // Shrink back down via orderedRemove, which shifts elements while the
+        // poll thread may be reading them.
+        while (watcher.watchCount() > seed) {
+            if (!watcher.removePath("/nonexistent/race_grow")) break;
+        }
+        // Interleave a caller-thread check with the background poll thread;
+        // both acquire the mutex.
+        watcher.checkNow();
+    }
+
+    watcher.stop();
+    try std.testing.expectEqual(@as(usize, seed), watcher.watchCount());
 }
