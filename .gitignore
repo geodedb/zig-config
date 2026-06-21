@@ -21,3 +21,4 @@ Thumbs.db
 # Test artifacts
 *.log
 coverage/
+zig-pkg/

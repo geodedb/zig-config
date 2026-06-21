@@ -32,6 +32,8 @@
 fn StringArrayHashMap(comptime V: type) type {
     return std.array_hash_map.ArrayHashMap([]const u8, V, struct {
         pub fn hash(_: @This(), key: []const u8) u32 {
+            // fips-exempt: non-security — string-keyed hashmap context (config keys);
+            // lookup only, not a secret.
             return @truncate(std.hash.Wyhash.hash(0, key));
         }
         pub fn eql(_: @This(), a: []const u8, b: []const u8, _: usize) bool {
@@ -1588,4 +1590,9 @@ fn refAllInRepo(comptime T: type) void {
 test "all in-repo public declarations compile (latent-compile-error guard)" {
     @setEvalBranchQuota(200000);
     refAllInRepo(@This());
+}
+
+test "fips-exempt annotation present on config hashmap Wyhash site" {
+    const src = @embedFile("config.zig");
+    try std.testing.expect(std.mem.indexOf(u8, src, "fips-exempt: non-security — string-keyed hashmap") != null);
 }
