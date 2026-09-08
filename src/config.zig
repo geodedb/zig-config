@@ -461,8 +461,9 @@ fn convertYamlValue(allocator: Allocator, val: yaml.Value) !Value.ValueData {
 
 fn parseJsonContent(allocator: Allocator, content: []const u8) !Value.ValueData {
     // Use std.json for parsing (the external json library is for JSON Schema validation)
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch {
-        return error.ParseError;
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.ParseError,
     };
     defer parsed.deinit();
 
@@ -1107,6 +1108,34 @@ test "unified config: parse JSON content" {
     try std.testing.expectEqualStrings("localhost", config.getString("server.host").?);
     try std.testing.expectEqual(@as(i64, 8080), config.getInt("server.port").?);
     try std.testing.expectEqual(true, config.getBool("debug").?);
+}
+
+fn checkJsonAllocationFailures(allocator: Allocator) !void {
+    const content =
+        \\{"service": {"name": "geode", "limits": {"requests": 17}, "enabled": true}}
+    ;
+
+    var config = try parseContent(allocator, content, .json);
+    defer config.deinit();
+
+    try std.testing.expectEqualStrings("geode", config.getString("service.name").?);
+    try std.testing.expectEqual(@as(i64, 17), config.getInt("service.limits.requests").?);
+    try std.testing.expectEqual(true, config.getBool("service.enabled").?);
+}
+
+test "unified config: JSON preserves every allocation failure" {
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        checkJsonAllocationFailures,
+        .{},
+    );
+}
+
+test "unified config: malformed JSON returns ParseError" {
+    try std.testing.expectError(
+        error.ParseError,
+        parseContent(std.testing.allocator, "{\"service\":", .json),
+    );
 }
 
 test "unified config: parse TOML content" {

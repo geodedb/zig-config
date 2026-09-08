@@ -94,24 +94,28 @@ fn getLinuxPaths(allocator: std.mem.Allocator) !XdgPaths {
         try allocator.dupe(u8, ch)
     else
         try std.fmt.allocPrint(allocator, "{s}/.config", .{home});
+    errdefer allocator.free(config_home);
 
     // Data home
     const data_home = if (environ.getenv("XDG_DATA_HOME")) |dh|
         try allocator.dupe(u8, dh)
     else
         try std.fmt.allocPrint(allocator, "{s}/.local/share", .{home});
+    errdefer allocator.free(data_home);
 
     // Cache home
     const cache_home = if (environ.getenv("XDG_CACHE_HOME")) |ch|
         try allocator.dupe(u8, ch)
     else
         try std.fmt.allocPrint(allocator, "{s}/.cache", .{home});
+    errdefer allocator.free(cache_home);
 
     // State home
     const state_home = if (environ.getenv("XDG_STATE_HOME")) |sh|
         try allocator.dupe(u8, sh)
     else
         try std.fmt.allocPrint(allocator, "{s}/.local/state", .{home});
+    errdefer allocator.free(state_home);
 
     // Runtime dir (may not be set)
     const runtime_dir = environ.getenv("XDG_RUNTIME_DIR");
@@ -139,22 +143,26 @@ fn getMacosPaths(allocator: std.mem.Allocator) !XdgPaths {
         try allocator.dupe(u8, ch)
     else
         try std.fmt.allocPrint(allocator, "{s}/Library/Preferences", .{home});
+    errdefer allocator.free(config_home);
 
     const data_home = if (environ.getenv("XDG_DATA_HOME")) |dh|
         try allocator.dupe(u8, dh)
     else
         try std.fmt.allocPrint(allocator, "{s}/Library/Application Support", .{home});
+    errdefer allocator.free(data_home);
 
     const cache_home = if (environ.getenv("XDG_CACHE_HOME")) |ch|
         try allocator.dupe(u8, ch)
     else
         try std.fmt.allocPrint(allocator, "{s}/Library/Caches", .{home});
+    errdefer allocator.free(cache_home);
 
     // State goes to Application Support on macOS
     const state_home = if (environ.getenv("XDG_STATE_HOME")) |sh|
         try allocator.dupe(u8, sh)
     else
         try std.fmt.allocPrint(allocator, "{s}/Library/Application Support", .{home});
+    errdefer allocator.free(state_home);
 
     const runtime_dir = environ.getenv("XDG_RUNTIME_DIR");
 
@@ -476,4 +484,85 @@ test "XdgPaths deinit frees memory" {
     var paths = try getPathsForPlatform(std.testing.allocator, .linux);
     paths.deinit();
     // If we get here without crash, deinit worked
+}
+
+fn expectSelectedPath(env_key: []const u8, default_suffix: []const u8, actual: []const u8) !void {
+    if (environ.getenv(env_key)) |override| {
+        try std.testing.expectEqualStrings(override, actual);
+        return;
+    }
+
+    const home = environ.getenv("HOME") orelse "/";
+    var expected_buffer: [4096]u8 = undefined;
+    const expected = try std.fmt.bufPrint(&expected_buffer, "{s}/{s}", .{ home, default_suffix });
+    try std.testing.expectEqualStrings(expected, actual);
+}
+
+fn checkPathAllocationFailures(allocator: std.mem.Allocator, platform: Platform) !void {
+    var paths = try getPathsForPlatform(allocator, platform);
+    defer paths.deinit();
+
+    switch (platform) {
+        .linux, .other => {
+            try expectSelectedPath("XDG_CONFIG_HOME", ".config", paths.config_home);
+            try expectSelectedPath("XDG_DATA_HOME", ".local/share", paths.data_home);
+            try expectSelectedPath("XDG_CACHE_HOME", ".cache", paths.cache_home);
+            try expectSelectedPath("XDG_STATE_HOME", ".local/state", paths.state_home);
+            try std.testing.expectEqual(@as(usize, 1), paths.config_dirs.len);
+            try std.testing.expectEqualStrings("/etc/xdg", paths.config_dirs[0]);
+            try std.testing.expectEqual(@as(usize, 2), paths.data_dirs.len);
+            try std.testing.expectEqualStrings("/usr/local/share", paths.data_dirs[0]);
+            try std.testing.expectEqualStrings("/usr/share", paths.data_dirs[1]);
+        },
+        .macos => {
+            try expectSelectedPath("XDG_CONFIG_HOME", "Library/Preferences", paths.config_home);
+            try expectSelectedPath("XDG_DATA_HOME", "Library/Application Support", paths.data_home);
+            try expectSelectedPath("XDG_CACHE_HOME", "Library/Caches", paths.cache_home);
+            try expectSelectedPath("XDG_STATE_HOME", "Library/Application Support", paths.state_home);
+            try std.testing.expectEqual(@as(usize, 1), paths.config_dirs.len);
+            try std.testing.expectEqualStrings("/Library/Preferences", paths.config_dirs[0]);
+            try std.testing.expectEqual(@as(usize, 1), paths.data_dirs.len);
+            try std.testing.expectEqualStrings("/Library/Application Support", paths.data_dirs[0]);
+        },
+        .windows => unreachable,
+    }
+
+    const expected_runtime_dir = environ.getenv("XDG_RUNTIME_DIR");
+    try std.testing.expectEqual(expected_runtime_dir == null, paths.runtime_dir == null);
+    if (expected_runtime_dir) |expected| {
+        try std.testing.expectEqualStrings(expected, paths.runtime_dir.?);
+    }
+}
+
+fn requireNonWindowsPathSimulation() !void {
+    // The platform adapters intentionally redirect to getWindowsPaths on a
+    // Windows host, so these are simulated Linux/macOS checks, not native proof.
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+}
+
+test "getPathsForPlatform Linux handles every allocation failure" {
+    try requireNonWindowsPathSimulation();
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        checkPathAllocationFailures,
+        .{Platform.linux},
+    );
+}
+
+test "getPathsForPlatform other handles every allocation failure" {
+    try requireNonWindowsPathSimulation();
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        checkPathAllocationFailures,
+        .{Platform.other},
+    );
+}
+
+test "getPathsForPlatform macOS handles every allocation failure" {
+    try requireNonWindowsPathSimulation();
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        checkPathAllocationFailures,
+        .{Platform.macos},
+    );
 }
