@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-09-12
+
+### Changed
+
+- Converge json v0.1.15, yaml v0.1.8, toml v0.1.13 sibling pins (GAP-0838 diamond sync); includes the allocation-failure fixes from d6a6399.
+
 ## [0.1.6] - 2026-06-12
 
 Security, correctness, and migration-completeness release closing a full appsec +
