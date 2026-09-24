@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-09-24
+
+### Changed
+
+- Bump json pin to v0.1.17 so downstream consumers (cli -> config -> json) converge with policy on a single json version (SONNY-2608 diamond fix).
+
 ## [0.1.13] - 2026-09-12
 
 ### Changed

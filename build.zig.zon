@@ -1,6 +1,6 @@
 .{
     .name = .config,
-    .version = "0.1.13",
+    .version = "0.1.14",
     .fingerprint = 0xd48a2f7c9aee224e,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
@@ -13,8 +13,8 @@
             .hash = "toml-0.1.13-MHnSh2nABQBO_MuqF34gLMPGHUfWU-JEeVqggTPARKse",
         },
         .json = .{
-            .url = "git+https://gitlab.com/devnw/zig/json.git?ref=v0.1.15#2f75b5d1d42fd179398b0f81491f8e211a888c5e",
-            .hash = "json-0.1.15-tOue4XXRDwDiwJ1Edhk5QstM23dtV_5itFSX1ln2qTrQ",
+            .url = "git+https://gitlab.com/devnw/zig/json.git?ref=v0.1.17#499e5e6d1c94c52d1cfd36157e4f868ca139290e",
+            .hash = "json-0.1.17-tOue4YPeEACXeqXNakHNDtELg7T_6Mt7YrRH1Vh_H8eP",
         },
         .thread_pool = .{
             .url = "git+https://gitlab.com/devnw/zig/thread-pool.git?ref=v0.2.7#54a2ddda1a356c32ba2e4df70691459570fb6339",
