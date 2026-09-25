@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-09-24
+
+### Fixed
+
+- CI: restrict jobs to Linux runners so release pipelines are not picked up by the Hosted Windows runner (SONNY-2608). No library changes from 0.1.14.
+
 ## [0.1.14] - 2026-09-24
 
 ### Changed
