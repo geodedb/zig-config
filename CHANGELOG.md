@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-09-25
+
+### Changed
+
+- Bump json pin to v0.1.18 (`\u` escapes take exactly 4 hex digits) so downstream consumers (cli -> config -> json) converge with policy on a single json version (SONNY-2768).
+
 ## [0.1.15] - 2026-09-24
 
 ### Fixed
