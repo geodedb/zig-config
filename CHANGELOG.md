@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-10-11
+
+### Changed
+
+- yaml v0.1.9, toml v0.1.14, json v0.1.19 and thread-pool v0.2.8 (single thread-pool in the graph).
+- CI: create GitLab Releases with the job token.
+
 ## [0.1.16] - 2026-09-25
 
 ### Changed
