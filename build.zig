@@ -10,6 +10,9 @@ pub fn build(b: *std.Build) void {
     // Thread-pool parallelism option
     const enable_tp = b.option(bool, "thread_pool", "Enable thread-pool-based parallelism") orelse true;
 
+    const config_options = b.addOptions();
+    config_options.addOption(bool, "thread_pool", enable_tp);
+
     // Get thread_pool dependency if enabled
     const tp_mod: ?*std.Build.Module = if (enable_tp) blk: {
         const tp_dep = b.dependency("thread_pool", .{
@@ -67,6 +70,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    config_mod.addOptions("build_options", config_options);
     if (yaml_mod) |m| config_mod.addImport("yaml", m);
     if (toml_mod) |m| config_mod.addImport("toml", m);
     if (json_mod) |m| config_mod.addImport("json", m);
@@ -82,6 +86,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    lib.root_module.addOptions("build_options", config_options);
     if (yaml_mod) |m| lib.root_module.addImport("yaml", m);
     if (toml_mod) |m| lib.root_module.addImport("toml", m);
     if (json_mod) |m| lib.root_module.addImport("json", m);
@@ -94,6 +99,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    unit_tests_mod.addOptions("build_options", config_options);
     if (yaml_mod) |m| unit_tests_mod.addImport("yaml", m);
     if (toml_mod) |m| unit_tests_mod.addImport("toml", m);
     if (json_mod) |m| unit_tests_mod.addImport("json", m);
@@ -110,6 +116,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    integration_tests_mod.addOptions("build_options", config_options);
     if (yaml_mod) |m| integration_tests_mod.addImport("yaml", m);
     if (toml_mod) |m| integration_tests_mod.addImport("toml", m);
     if (json_mod) |m| integration_tests_mod.addImport("json", m);
@@ -137,6 +144,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    check_mod.addOptions("build_options", config_options);
     if (yaml_mod) |m| check_mod.addImport("yaml", m);
     if (toml_mod) |m| check_mod.addImport("toml", m);
     if (json_mod) |m| check_mod.addImport("json", m);
@@ -153,6 +161,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = .Debug,
     });
+    docs_mod.addOptions("build_options", config_options);
     if (yaml_mod) |m| docs_mod.addImport("yaml", m);
     if (toml_mod) |m| docs_mod.addImport("toml", m);
     if (json_mod) |m| docs_mod.addImport("json", m);

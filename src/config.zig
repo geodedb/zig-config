@@ -76,7 +76,7 @@ pub const async_load = @import("async.zig");
 pub const diff = @import("diff.zig");
 
 /// Parallel operations (requires `thread_pool`).
-pub const parallel = @import("parallel");
+pub const parallel = if (@import("build_options").thread_pool) @import("parallel") else struct {};
 
 // File Size Limits - re-exported from limits.zig (CWE-400, #64, #101)
 pub const limits = @import("limits.zig");
@@ -1369,6 +1369,11 @@ test "Q-NEW-16: validator re-exports (isAlphanumeric/notEmpty/isBool) are reacha
 }
 
 test "parallel re-export is reachable" {
+    if (comptime !@import("build_options").thread_pool) {
+        try std.testing.expect(!@hasDecl(parallel, "getPool"));
+        return;
+    }
+
     // Smoke test: verify parallel.zig is reachable through the public
     // config module. Parallel config ops need file IO state that's fiddly
     // to stand up in a unit test, so we just assert the pool lifecycle
@@ -1386,6 +1391,8 @@ test "parallel re-export is reachable" {
 // ---------------------------------------------------------------------------
 
 test "Q-NEW-09: parallel.parallelFileLoad reads real file content (caller frees)" {
+    if (comptime !@import("build_options").thread_pool) return error.SkipZigTest;
+
     const builtin = @import("builtin");
     // The no-follow open path relies on POSIX O_NOFOLLOW semantics.
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
@@ -1421,6 +1428,8 @@ test "Q-NEW-09: parallel.parallelFileLoad reads real file content (caller frees)
 }
 
 test "Q-NEW-09: parallel.parallelFileLoad on missing file reports failure" {
+    if (comptime !@import("build_options").thread_pool) return error.SkipZigTest;
+
     var inputs: [1]parallel.FileLoadInput = .{
         .{ .path = "/nonexistent/definitely/not/here.yaml", .format = .yaml },
     };
@@ -1435,6 +1444,8 @@ test "Q-NEW-09: parallel.parallelFileLoad on missing file reports failure" {
 }
 
 test "Q-NEW-09: parallel.parallelFileLoad on empty path reports failure" {
+    if (comptime !@import("build_options").thread_pool) return error.SkipZigTest;
+
     var inputs: [1]parallel.FileLoadInput = .{
         .{ .path = "", .format = .yaml },
     };
@@ -1449,6 +1460,8 @@ test "Q-NEW-09: parallel.parallelFileLoad on empty path reports failure" {
 }
 
 test "Q-NEW-09: parallel.parallelSerialize produces real owned output" {
+    if (comptime !@import("build_options").thread_pool) return error.SkipZigTest;
+
     var inputs: [4]parallel.SerializeInput = .{
         .{ .format = .json, .data = "hello\"world" },
         .{ .format = .yaml, .data = "a: b" },
@@ -1468,6 +1481,8 @@ test "Q-NEW-09: parallel.parallelSerialize produces real owned output" {
 }
 
 test "Q-NEW-09: parallel.parallelSerialize on empty data reports failure" {
+    if (comptime !@import("build_options").thread_pool) return error.SkipZigTest;
+
     var inputs: [4]parallel.SerializeInput = undefined;
     for (&inputs) |*in| in.* = .{ .format = .json, .data = "" };
     var results: [4]parallel.SerializeResult = undefined;
@@ -1482,6 +1497,8 @@ test "Q-NEW-09: parallel.parallelSerialize on empty data reports failure" {
 }
 
 test "S-NEW-03: parallelSerialize with non-thread-safe arena over many items" {
+    if (comptime !@import("build_options").thread_pool) return error.SkipZigTest;
+
     // Drive a contended, high-item-count parallel run through a NON-thread-safe
     // arena allocator. Before the internal thread-safe wrapper, concurrent
     // alloc/free on the shared arena would race (CWE-362 -> CWE-787). This must
@@ -1508,6 +1525,8 @@ test "S-NEW-03: parallelSerialize with non-thread-safe arena over many items" {
 }
 
 test "S-NEW-03: parallelFileLoad with non-thread-safe arena over many items" {
+    if (comptime !@import("build_options").thread_pool) return error.SkipZigTest;
+
     const builtin = @import("builtin");
     if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
 
