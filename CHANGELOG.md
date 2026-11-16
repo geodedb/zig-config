@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-11-15
+
+### Changed
+
+- yaml v0.1.10 -> v0.1.11, toml v0.1.15 -> v0.1.16, json v0.1.20 -> v0.1.21 and
+  thread-pool v0.2.9 -> v0.2.11, so config and its consumers resolve a single
+  thread-pool (SONNY-6630).
+
 ## [0.1.17] - 2026-10-11
 
 ### Changed
