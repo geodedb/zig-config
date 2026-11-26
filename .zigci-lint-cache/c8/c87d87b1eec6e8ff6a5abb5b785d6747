@@ -1,0 +1,150 @@
+282:70:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+340:84:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+355:78:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+370:94:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+282:64:2:ZL004.no_catch_unreachable:catch unreachable suppresses error handling
+340:78:2:ZL004.no_catch_unreachable:catch unreachable suppresses error handling
+355:72:2:ZL004.no_catch_unreachable:catch unreachable suppresses error handling
+370:88:2:ZL004.no_catch_unreachable:catch unreachable suppresses error handling
+20:7:1:ZL203.const_snakecase:constant 'isValidSecretIdentifier' should use snake_case (or PascalCase for types)
+21:7:1:ZL203.const_snakecase:constant 'isValidOpPath' should use snake_case (or PascalCase for types)
+22:7:1:ZL203.const_snakecase:constant 'isValidVaultPath' should use snake_case (or PascalCase for types)
+23:7:1:ZL203.const_snakecase:constant 'resolveOpPath' should use snake_case (or PascalCase for types)
+24:7:1:ZL203.const_snakecase:constant 'resolveVaultPath' should use snake_case (or PascalCase for types)
+25:7:1:ZL203.const_snakecase:constant 'handleTermination' should use snake_case (or PascalCase for types)
+359:101:2:ZL300.max_line_length:line exceeds 100 characters (104)
+370:101:2:ZL300.max_line_length:line exceeds 100 characters (105)
+417:101:2:ZL300.max_line_length:line exceeds 100 characters (117)
+526:101:2:ZL300.max_line_length:line exceeds 100 characters (110)
+766:101:2:ZL300.max_line_length:line exceeds 100 characters (103)
+719:70:2:ZL303.max_nesting:nesting depth exceeds 4 (5)
+184:58:2:ZL108.sensitive_data_exposure:potential hardcoded secret 'password'; use environment variables or secure storage
+230:58:2:ZL108.sensitive_data_exposure:potential hardcoded secret 'password'; use environment variables or secure storage
+248:58:2:ZL108.sensitive_data_exposure:potential hardcoded secret 'password'; use environment variables or secure storage
+281:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+318:9:1:ZL009.var_should_be_const:variable 'sensitive' is never reassigned; consider using 'const'
+339:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+354:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+369:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+521:9:1:ZL009.var_should_be_const:variable 'count' is never reassigned; consider using 'const'
+549:9:1:ZL009.var_should_be_const:variable 'count' is never reassigned; consider using 'const'
+572:9:1:ZL009.var_should_be_const:variable 'count' is never reassigned; consider using 'const'
+585:9:1:ZL009.var_should_be_const:variable 'env_map' is never reassigned; consider using 'const'
+594:9:1:ZL009.var_should_be_const:variable 'count' is never reassigned; consider using 'const'
+595:9:1:ZL009.var_should_be_const:variable 'it' is never reassigned; consider using 'const'
+717:17:1:ZL009.var_should_be_const:variable 'files' is never reassigned; consider using 'const'
+732:9:1:ZL009.var_should_be_const:variable 'manager' is never reassigned; consider using 'const'
+754:9:1:ZL009.var_should_be_const:variable 'churn_ctx' is never reassigned; consider using 'const'
+763:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+314:44:1:ZL010.magic_number:magic number 5; consider using a named constant
+505:23:1:ZL010.magic_number:magic number 5000; consider using a named constant
+527:44:1:ZL010.magic_number:magic number 7; consider using a named constant
+554:44:1:ZL010.magic_number:magic number 3; consider using a named constant
+578:44:1:ZL010.magic_number:magic number 4; consider using a named constant
+663:41:1:ZL010.magic_number:magic number 5; consider using a named constant
+686:41:1:ZL010.magic_number:magic number 5; consider using a named constant
+764:16:1:ZL010.magic_number:magic number 200; consider using a named constant
+482:53:2:ZL500.os_specific_code:Linux-specific code '/dev/' may cause portability issues; consider adding OS detection guards
+651:26:2:ZL500.os_specific_code:Linux-specific code '/dev/' may cause portability issues; consider adding OS detection guards
+719:57:2:ZL500.os_specific_code:Linux-specific code '/dev/' may cause portability issues; consider adding OS detection guards
+748:26:2:ZL500.os_specific_code:Linux-specific code '/dev/' may cause portability issues; consider adding OS detection guards
+61:41:2:ZL500.os_specific_code:Linux-specific code '/etc/' may cause portability issues; consider adding OS detection guards
+163:56:2:ZL500.os_specific_code:Linux-specific code '/etc/' may cause portability issues; consider adding OS detection guards
+213:44:2:ZL500.os_specific_code:Linux-specific code '/etc/' may cause portability issues; consider adding OS detection guards
+217:60:2:ZL500.os_specific_code:Linux-specific code '/etc/' may cause portability issues; consider adding OS detection guards
+211:43:2:ZL500.os_specific_code:Unix-specific path code '"/bin/' may cause portability issues; consider adding OS detection guards
+477:46:2:ZL500.os_specific_code:Unix-specific path code '"/bin/' may cause portability issues; consider adding OS detection guards
+654:33:2:ZL500.os_specific_code:Unix-specific path code '"/bin/' may cause portability issues; consider adding OS detection guards
+751:33:2:ZL500.os_specific_code:Unix-specific path code '"/bin/' may cause portability issues; consider adding OS detection guards
+193:42:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+194:42:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+216:43:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+220:43:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+221:43:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+437:45:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+440:44:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+458:45:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+459:45:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+486:46:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+210:43:2:ZL500.os_specific_code:Unix-specific path code '"/tmp/' may cause portability issues; consider adding OS detection guards
+227:48:2:ZL500.os_specific_code:Unix-specific path code '"/tmp/' may cause portability issues; consider adding OS detection guards
+430:45:2:ZL500.os_specific_code:Unix-specific path code '"/tmp/' may cause portability issues; consider adding OS detection guards
+448:48:2:ZL500.os_specific_code:Unix-specific path code '"/tmp/' may cause portability issues; consider adding OS detection guards
+476:46:2:ZL500.os_specific_code:Unix-specific path code '"/tmp/' may cause portability issues; consider adding OS detection guards
+200:42:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+201:42:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+217:43:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+222:43:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+465:45:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+466:45:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+480:46:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+481:46:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+485:46:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+489:46:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+490:46:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+491:46:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+195:42:2:ZL500.os_specific_code:Unix-specific path code '"/opt/' may cause portability issues; consider adding OS detection guards
+196:42:2:ZL500.os_specific_code:Unix-specific path code '"/opt/' may cause portability issues; consider adding OS detection guards
+460:45:2:ZL500.os_specific_code:Unix-specific path code '"/opt/' may cause portability issues; consider adding OS detection guards
+461:45:2:ZL500.os_specific_code:Unix-specific path code '"/opt/' may cause portability issues; consider adding OS detection guards
+59:40:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+61:40:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+66:40:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+68:40:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+73:40:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+81:40:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+83:40:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+87:40:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+94:51:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+144:52:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+163:53:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+164:53:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+193:42:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+194:42:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+195:42:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+196:42:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+197:42:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+200:42:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+201:42:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+202:42:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+210:43:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+211:43:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+213:43:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+216:43:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+217:43:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+220:43:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+221:43:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+222:43:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+227:48:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+333:51:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+430:45:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+437:45:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+440:44:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+448:48:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+458:45:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+459:45:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+460:45:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+461:45:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+462:45:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+465:45:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+466:45:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+467:45:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+468:45:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+476:46:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+477:46:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+480:46:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+481:46:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+482:46:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+485:46:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+486:46:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+489:46:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+490:46:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+491:46:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+626:33:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+654:33:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+673:33:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+698:33:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+719:56:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+751:33:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+719:42:1:ZL603.missing_defer_cleanup:resource '.openFile(' may not be properly cleaned up; consider using defer
+766:13:1:ZL604.expensive_operation:'std.debug.print(' in loop may impact performance

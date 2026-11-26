@@ -1,0 +1,151 @@
+634:15:1:ZL203.const_snakecase:constant 'SOL_SOCKET' should use snake_case (or PascalCase for types)
+635:15:1:ZL203.const_snakecase:constant 'SO_RCVTIMEO_WIN' should use snake_case (or PascalCase for types)
+636:15:1:ZL203.const_snakecase:constant 'SO_SNDTIMEO_WIN' should use snake_case (or PascalCase for types)
+168:101:2:ZL300.max_line_length:line exceeds 100 characters (112)
+251:101:2:ZL300.max_line_length:line exceeds 100 characters (108)
+391:101:2:ZL300.max_line_length:line exceeds 100 characters (106)
+641:101:2:ZL300.max_line_length:line exceeds 100 characters (123)
+643:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+645:101:2:ZL300.max_line_length:line exceeds 100 characters (123)
+647:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+697:101:2:ZL300.max_line_length:line exceeds 100 characters (140)
+728:101:2:ZL300.max_line_length:line exceeds 100 characters (119)
+730:101:2:ZL300.max_line_length:line exceeds 100 characters (131)
+758:101:2:ZL300.max_line_length:line exceeds 100 characters (134)
+759:101:2:ZL300.max_line_length:line exceeds 100 characters (104)
+774:101:2:ZL300.max_line_length:line exceeds 100 characters (103)
+822:101:2:ZL300.max_line_length:line exceeds 100 characters (101)
+841:101:2:ZL300.max_line_length:line exceeds 100 characters (113)
+856:101:2:ZL300.max_line_length:line exceeds 100 characters (111)
+906:101:2:ZL300.max_line_length:line exceeds 100 characters (134)
+948:101:2:ZL300.max_line_length:line exceeds 100 characters (135)
+950:101:2:ZL300.max_line_length:line exceeds 100 characters (169)
+985:101:2:ZL300.max_line_length:line exceeds 100 characters (134)
+1023:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+1042:101:2:ZL300.max_line_length:line exceeds 100 characters (137)
+1044:101:2:ZL300.max_line_length:line exceeds 100 characters (171)
+1128:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+1149:101:2:ZL300.max_line_length:line exceeds 100 characters (108)
+1153:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+1164:101:2:ZL300.max_line_length:line exceeds 100 characters (119)
+1168:101:2:ZL300.max_line_length:line exceeds 100 characters (123)
+1218:101:2:ZL300.max_line_length:line exceeds 100 characters (101)
+1231:101:2:ZL300.max_line_length:line exceeds 100 characters (111)
+1262:101:2:ZL300.max_line_length:line exceeds 100 characters (117)
+1485:101:2:ZL300.max_line_length:line exceeds 100 characters (105)
+1489:101:2:ZL300.max_line_length:line exceeds 100 characters (112)
+1497:101:2:ZL300.max_line_length:line exceeds 100 characters (110)
+1501:101:2:ZL300.max_line_length:line exceeds 100 characters (103)
+1507:101:2:ZL300.max_line_length:line exceeds 100 characters (117)
+1519:101:2:ZL300.max_line_length:line exceeds 100 characters (113)
+1529:101:2:ZL300.max_line_length:line exceeds 100 characters (113)
+670:1:2:ZL302.max_params:function has too many parameters (9 > 6)
+697:120:2:ZL303.max_nesting:nesting depth exceeds 4 (5)
+223:13:1:ZL009.var_should_be_const:variable 'host_buf' is never reassigned; consider using 'const'
+237:13:1:ZL009.var_should_be_const:variable 'decoded_host_buf' is never reassigned; consider using 'const'
+287:9:1:ZL009.var_should_be_const:variable 'write_idx' is never reassigned; consider using 'const'
+288:9:1:ZL009.var_should_be_const:variable 'read_idx' is never reassigned; consider using 'const'
+463:9:1:ZL009.var_should_be_const:variable 'octet_count' is never reassigned; consider using 'const'
+574:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+681:9:1:ZL009.var_should_be_const:variable 'req' is never reassigned; consider using 'const'
+726:9:1:ZL009.var_should_be_const:variable 'transfer_buf' is never reassigned; consider using 'const'
+897:13:1:ZL009.var_should_be_const:variable 'b64_stack_buf' is never reassigned; consider using 'const'
+903:13:1:ZL009.var_should_be_const:variable 'body_buf' is never reassigned; consider using 'const'
+936:13:1:ZL009.var_should_be_const:variable 'key_b64_stack' is never reassigned; consider using 'const'
+941:13:1:ZL009.var_should_be_const:variable 'val_b64_stack' is never reassigned; consider using 'const'
+947:13:1:ZL009.var_should_be_const:variable 'body_buf' is never reassigned; consider using 'const'
+976:13:1:ZL009.var_should_be_const:variable 'b64_stack_buf' is never reassigned; consider using 'const'
+982:13:1:ZL009.var_should_be_const:variable 'body_buf' is never reassigned; consider using 'const'
+1011:13:1:ZL009.var_should_be_const:variable 'key_b64_stack' is never reassigned; consider using 'const'
+1035:13:1:ZL009.var_should_be_const:variable 'end_b64_stack' is never reassigned; consider using 'const'
+1041:13:1:ZL009.var_should_be_const:variable 'body_buf' is never reassigned; consider using 'const'
+1064:13:1:ZL009.var_should_be_const:variable 'extra_headers_buf' is never reassigned; consider using 'const'
+1065:13:1:ZL009.var_should_be_const:variable 'extra_headers_len' is never reassigned; consider using 'const'
+1277:13:1:ZL009.var_should_be_const:variable 'path_buf' is never reassigned; consider using 'const'
+1309:13:1:ZL009.var_should_be_const:variable 'path_buf' is never reassigned; consider using 'const'
+1328:13:1:ZL009.var_should_be_const:variable 'path_buf' is never reassigned; consider using 'const'
+1347:13:1:ZL009.var_should_be_const:variable 'path_buf' is never reassigned; consider using 'const'
+1373:13:1:ZL009.var_should_be_const:variable 'path_buf' is never reassigned; consider using 'const'
+1376:13:1:ZL009.var_should_be_const:variable 'uri' is never reassigned; consider using 'const'
+1398:13:1:ZL009.var_should_be_const:variable 'extra_headers_buf' is never reassigned; consider using 'const'
+1399:13:1:ZL009.var_should_be_const:variable 'extra_headers_len' is never reassigned; consider using 'const'
+1486:13:1:ZL009.var_should_be_const:variable 'result_map' is never reassigned; consider using 'const'
+1526:13:1:ZL009.var_should_be_const:variable 'keys' is never reassigned; consider using 'const'
+299:29:1:ZL010.magic_number:magic number 3; consider using a named constant
+385:21:1:ZL010.magic_number:magic number 127; consider using a named constant
+387:21:1:ZL010.magic_number:magic number 10; consider using a named constant
+388:21:1:ZL010.magic_number:magic number 172; consider using a named constant
+388:60:1:ZL010.magic_number:magic number 31; consider using a named constant
+389:21:1:ZL010.magic_number:magic number 192; consider using a named constant
+389:41:1:ZL010.magic_number:magic number 168; consider using a named constant
+390:21:1:ZL010.magic_number:magic number 169; consider using a named constant
+390:41:1:ZL010.magic_number:magic number 254; consider using a named constant
+391:60:1:ZL010.magic_number:magic number 127; consider using a named constant
+417:21:1:ZL010.magic_number:magic number 0xfe; consider using a named constant
+417:30:1:ZL010.magic_number:magic number 0xfc; consider using a named constant
+420:21:1:ZL010.magic_number:magic number 0xfe; consider using a named constant
+420:42:1:ZL010.magic_number:magic number 0xc0; consider using a named constant
+435:22:1:ZL010.magic_number:magic number 0xff; consider using a named constant
+435:43:1:ZL010.magic_number:magic number 0xff; consider using a named constant
+465:26:1:ZL010.magic_number:magic number 4; consider using a named constant
+472:27:1:ZL010.magic_number:magic number 255; consider using a named constant
+480:32:1:ZL010.magic_number:magic number 3; consider using a named constant
+504:49:1:ZL010.magic_number:magic number 10; consider using a named constant
+511:37:1:ZL010.magic_number:magic number 10; consider using a named constant
+520:19:1:ZL010.magic_number:magic number 127; consider using a named constant
+523:19:1:ZL010.magic_number:magic number 10; consider using a named constant
+529:19:1:ZL010.magic_number:magic number 172; consider using a named constant
+529:54:1:ZL010.magic_number:magic number 31; consider using a named constant
+532:19:1:ZL010.magic_number:magic number 192; consider using a named constant
+532:37:1:ZL010.magic_number:magic number 168; consider using a named constant
+535:19:1:ZL010.magic_number:magic number 169; consider using a named constant
+535:37:1:ZL010.magic_number:magic number 254; consider using a named constant
+539:54:1:ZL010.magic_number:magic number 127; consider using a named constant
+790:23:1:ZL010.magic_number:magic number 5000; consider using a named constant
+1022:58:1:ZL010.magic_number:magic number 0xFF; consider using a named constant
+1109:27:1:ZL010.magic_number:magic number 400; consider using a named constant
+1113:31:1:ZL010.magic_number:magic number 401; consider using a named constant
+1113:52:1:ZL010.magic_number:magic number 403; consider using a named constant
+1451:27:1:ZL010.magic_number:magic number 400; consider using a named constant
+1455:31:1:ZL010.magic_number:magic number 401; consider using a named constant
+1455:52:1:ZL010.magic_number:magic number 403; consider using a named constant
+384:1:1:ZL011.missing_doc_comment:public declaration 'isPrivateIPv4Bytes' is missing documentation
+749:1:1:ZL011.missing_doc_comment:public declaration 'buildBasicAuthHeader' is missing documentation
+813:5:1:ZL011.missing_doc_comment:public declaration 'init' is missing documentation
+863:5:1:ZL011.missing_doc_comment:public declaration 'deinit' is missing documentation
+1211:5:1:ZL011.missing_doc_comment:public declaration 'init' is missing documentation
+1237:5:1:ZL011.missing_doc_comment:public declaration 'deinit' is missing documentation
+1548:5:1:ZL011.missing_doc_comment:public declaration 'get' is missing documentation
+1555:5:1:ZL011.missing_doc_comment:public declaration 'put' is missing documentation
+1562:5:1:ZL011.missing_doc_comment:public declaration 'delete' is missing documentation
+904:60:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+906:69:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+948:60:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+948:78:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+950:69:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+950:87:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+983:60:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+985:69:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+1042:60:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+1042:82:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+1044:69:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+1044:91:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+20:32:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+28:31:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+123:30:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+822:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+894:30:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+933:30:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+973:30:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1008:30:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1218:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1164:55:1:ZL602.unnecessary_alloc:allocation inside loop; consider preallocating or using arena allocator
+1023:30:1:ZL602.unnecessary_alloc:allocation inside loop; consider preallocating or using arena allocator
+174:19:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+841:38:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+1141:47:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+1164:55:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+1168:57:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+1501:53:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+1507:57:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+1202:18:1:ZL605.large_struct_copy:struct 'Consul' has 53 fields; consider passing by pointer to avoid copies

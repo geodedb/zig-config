@@ -1,0 +1,73 @@
+307:85:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+1052:79:3:ZL003.no_empty_catch:empty catch block suppresses errors
+307:79:2:ZL004.no_catch_unreachable:catch unreachable suppresses error handling
+15:7:1:ZL203.const_snakecase:constant 'parseBool' should use snake_case (or PascalCase for types)
+16:7:1:ZL203.const_snakecase:constant 'matchFieldName' should use snake_case (or PascalCase for types)
+17:7:1:ZL203.const_snakecase:constant 'buildEnvVarName' should use snake_case (or PascalCase for types)
+18:7:1:ZL203.const_snakecase:constant 'buildEnvVarNameAlloc' should use snake_case (or PascalCase for types)
+19:7:1:ZL203.const_snakecase:constant 'getBaseName' should use snake_case (or PascalCase for types)
+20:7:1:ZL203.const_snakecase:constant 'detectFormatFromContent' should use snake_case (or PascalCase for types)
+506:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+536:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+537:101:2:ZL300.max_line_length:line exceeds 100 characters (105)
+538:101:2:ZL300.max_line_length:line exceeds 100 characters (113)
+888:101:2:ZL300.max_line_length:line exceeds 100 characters (126)
+890:101:2:ZL300.max_line_length:line exceeds 100 characters (140)
+923:101:2:ZL300.max_line_length:line exceeds 100 characters (126)
+925:101:2:ZL300.max_line_length:line exceeds 100 characters (140)
+951:101:2:ZL300.max_line_length:line exceeds 100 characters (126)
+953:101:2:ZL300.max_line_length:line exceeds 100 characters (140)
+1080:101:2:ZL300.max_line_length:line exceeds 100 characters (103)
+1104:101:2:ZL300.max_line_length:line exceeds 100 characters (151)
+1105:101:2:ZL300.max_line_length:line exceeds 100 characters (140)
+1127:101:2:ZL300.max_line_length:line exceeds 100 characters (146)
+1128:101:2:ZL300.max_line_length:line exceeds 100 characters (140)
+169:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+306:13:1:ZL009.var_should_be_const:variable 'temp_buf' is never reassigned; consider using 'const'
+354:9:1:ZL009.var_should_be_const:variable 'settings' is never reassigned; consider using 'const'
+377:9:1:ZL009.var_should_be_const:variable 'db_config' is never reassigned; consider using 'const'
+546:9:1:ZL009.var_should_be_const:variable 'loader' is never reassigned; consider using 'const'
+684:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+710:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+749:9:1:ZL009.var_should_be_const:variable 'key_buf' is never reassigned; consider using 'const'
+760:9:1:ZL009.var_should_be_const:variable 'lower_buf' is never reassigned; consider using 'const'
+783:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+1062:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+1069:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+1077:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+1078:9:1:ZL009.var_should_be_const:variable 'heap_out' is never reassigned; consider using 'const'
+1121:9:1:ZL009.var_should_be_const:variable 'ldr' is never reassigned; consider using 'const'
+1124:9:1:ZL009.var_should_be_const:variable 'tmp_dir' is never reassigned; consider using 'const'
+36:42:1:ZL010.magic_number:magic number 8080; consider using a named constant
+245:42:1:ZL010.magic_number:magic number 42; consider using a named constant
+264:42:1:ZL010.magic_number:magic number 5; consider using a named constant
+289:42:1:ZL010.magic_number:magic number 8080; consider using a named constant
+307:74:1:ZL010.magic_number:magic number 42; consider using a named constant
+413:44:1:ZL010.magic_number:magic number 3; consider using a named constant
+685:16:1:ZL010.magic_number:magic number 2000; consider using a named constant
+711:16:1:ZL010.magic_number:magic number 2000; consider using a named constant
+784:16:1:ZL010.magic_number:magic number 2000; consider using a named constant
+834:42:1:ZL010.magic_number:magic number 3000; consider using a named constant
+897:42:1:ZL010.magic_number:magic number 9090; consider using a named constant
+408:31:2:ZL500.os_specific_code:Linux-specific code '/etc/' may cause portability issues; consider adding OS detection guards
+414:41:2:ZL500.os_specific_code:Linux-specific code '/etc/' may cause portability issues; consider adding OS detection guards
+454:31:2:ZL500.os_specific_code:Linux-specific code '/etc/' may cause portability issues; consider adding OS detection guards
+536:83:2:ZL500.os_specific_code:Linux-specific code '/etc/' may cause portability issues; consider adding OS detection guards
+538:90:2:ZL500.os_specific_code:Linux-specific code '/etc/' may cause portability issues; consider adding OS detection guards
+409:30:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+415:40:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+408:30:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+409:30:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+414:40:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+415:40:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+454:30:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+490:40:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+490:70:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+505:70:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+506:70:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+536:77:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+537:77:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+538:77:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+551:27:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+552:27:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1104:103:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path

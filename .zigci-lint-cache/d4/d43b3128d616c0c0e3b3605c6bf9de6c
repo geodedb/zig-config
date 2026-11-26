@@ -1,0 +1,46 @@
+145:101:2:ZL300.max_line_length:line exceeds 100 characters (112)
+164:101:2:ZL300.max_line_length:line exceeds 100 characters (121)
+177:101:2:ZL300.max_line_length:line exceeds 100 characters (133)
+178:101:2:ZL300.max_line_length:line exceeds 100 characters (103)
+182:101:2:ZL300.max_line_length:line exceeds 100 characters (164)
+261:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+269:101:2:ZL300.max_line_length:line exceeds 100 characters (104)
+276:101:2:ZL300.max_line_length:line exceeds 100 characters (104)
+506:101:2:ZL300.max_line_length:line exceeds 100 characters (143)
+537:101:2:ZL300.max_line_length:line exceeds 100 characters (105)
+538:101:2:ZL300.max_line_length:line exceeds 100 characters (106)
+539:101:2:ZL300.max_line_length:line exceeds 100 characters (113)
+575:101:2:ZL300.max_line_length:line exceeds 100 characters (159)
+588:101:2:ZL300.max_line_length:line exceeds 100 characters (153)
+597:101:2:ZL300.max_line_length:line exceeds 100 characters (101)
+603:101:2:ZL300.max_line_length:line exceeds 100 characters (163)
+605:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+575:1:2:ZL302.max_params:function has too many parameters (7 > 6)
+588:1:2:ZL302.max_params:function has too many parameters (7 > 6)
+603:1:2:ZL302.max_params:function has too many parameters (7 > 6)
+344:51:2:ZL303.max_nesting:nesting depth exceeds 4 (6)
+262:13:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+502:9:1:ZL009.var_should_be_const:variable 'iterations' is never reassigned; consider using 'const'
+576:9:1:ZL009.var_should_be_const:variable 'ii' is never reassigned; consider using 'const'
+592:9:1:ZL009.var_should_be_const:variable 'backtrack_count' is never reassigned; consider using 'const'
+616:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+627:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+673:9:1:ZL009.var_should_be_const:variable 'parts' is never reassigned; consider using 'const'
+496:48:1:ZL010.magic_number:magic number 10000; consider using a named constant
+634:18:1:ZL010.magic_number:magic number 3; consider using a named constant
+679:42:1:ZL010.magic_number:magic number 255; consider using a named constant
+684:33:1:ZL010.magic_number:magic number 10; consider using a named constant
+686:26:1:ZL010.magic_number:magic number 3; consider using a named constant
+693:34:1:ZL010.magic_number:magic number 255; consider using a named constant
+696:21:1:ZL010.magic_number:magic number 4; consider using a named constant
+715:39:1:ZL010.magic_number:magic number 253; consider using a named constant
+725:47:1:ZL010.magic_number:magic number 63; consider using a named constant
+738:39:1:ZL010.magic_number:magic number 63; consider using a named constant
+813:43:1:ZL010.magic_number:magic number 253; consider using a named constant
+67:5:1:ZL011.missing_doc_comment:public declaration 'ok' is missing documentation
+71:5:1:ZL011.missing_doc_comment:public declaration 'fail' is missing documentation
+125:5:1:ZL011.missing_doc_comment:public declaration 'init' is missing documentation
+133:5:1:ZL011.missing_doc_comment:public declaration 'deinit' is missing documentation
+668:35:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+224:57:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+120:21:1:ZL605.large_struct_copy:struct 'Validator' has 52 fields; consider passing by pointer to avoid copies

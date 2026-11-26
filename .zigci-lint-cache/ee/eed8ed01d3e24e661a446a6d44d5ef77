@@ -1,0 +1,40 @@
+496:14:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+500:94:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+524:14:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+526:108:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+602:14:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+604:106:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+569:67:3:ZL003.no_empty_catch:empty catch block suppresses errors
+496:8:2:ZL004.no_catch_unreachable:catch unreachable suppresses error handling
+500:88:2:ZL004.no_catch_unreachable:catch unreachable suppresses error handling
+524:8:2:ZL004.no_catch_unreachable:catch unreachable suppresses error handling
+526:102:2:ZL004.no_catch_unreachable:catch unreachable suppresses error handling
+602:8:2:ZL004.no_catch_unreachable:catch unreachable suppresses error handling
+604:100:2:ZL004.no_catch_unreachable:catch unreachable suppresses error handling
+17:7:1:ZL203.const_snakecase:constant 'isPathSafe' should use snake_case (or PascalCase for types)
+18:7:1:ZL203.const_snakecase:constant 'openFileReadNoFollow' should use snake_case (or PascalCase for types)
+63:101:2:ZL300.max_line_length:line exceeds 100 characters (109)
+500:101:2:ZL300.max_line_length:line exceeds 100 characters (105)
+526:101:2:ZL300.max_line_length:line exceeds 100 characters (119)
+604:101:2:ZL300.max_line_length:line exceeds 100 characters (117)
+76:9:1:ZL009.var_should_be_const:variable 'owned' is never reassigned; consider using 'const'
+226:9:1:ZL009.var_should_be_const:variable 'lines' is never reassigned; consider using 'const'
+464:9:1:ZL009.var_should_be_const:variable 'map' is never reassigned; consider using 'const'
+499:9:1:ZL009.var_should_be_const:variable 'path_buf' is never reassigned; consider using 'const'
+546:9:1:ZL009.var_should_be_const:variable 'map1' is never reassigned; consider using 'const'
+553:9:1:ZL009.var_should_be_const:variable 'map2' is never reassigned; consider using 'const'
+558:9:1:ZL009.var_should_be_const:variable 'iter' is never reassigned; consider using 'const'
+588:9:1:ZL009.var_should_be_const:variable 'tmp_dir' is never reassigned; consider using 'const'
+236:25:1:ZL010.magic_number:magic number 7; consider using a named constant
+354:44:1:ZL010.magic_number:magic number 3; consider using a named constant
+371:44:1:ZL010.magic_number:magic number 3; consider using a named constant
+431:44:1:ZL010.magic_number:magic number 9; consider using a named constant
+291:16:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+299:40:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+228:44:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+291:16:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+299:40:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+491:25:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+523:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+49:29:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+54:29:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer

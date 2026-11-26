@@ -1,0 +1,34 @@
+209:21:2:ZL001.no_undefined:use of 'undefined' may hide uninitialized memory bugs
+422:101:2:ZL300.max_line_length:line exceeds 100 characters (103)
+73:53:2:ZL303.max_nesting:nesting depth exceeds 4 (5)
+52:13:1:ZL009.var_should_be_const:variable 'err_it' is never reassigned; consider using 'const'
+60:9:1:ZL009.var_should_be_const:variable 'base_iter' is never reassigned; consider using 'const'
+67:9:1:ZL009.var_should_be_const:variable 'overlay_iter' is never reassigned; consider using 'const'
+120:9:1:ZL009.var_should_be_const:variable 'seen' is never reassigned; consider using 'const'
+405:9:1:ZL009.var_should_be_const:variable 'base' is never reassigned; consider using 'const'
+412:9:1:ZL009.var_should_be_const:variable 'overlay' is never reassigned; consider using 'const'
+420:9:1:ZL009.var_should_be_const:variable 'idx' is never reassigned; consider using 'const'
+422:13:1:ZL009.var_should_be_const:variable 'failing' is never reassigned; consider using 'const'
+427:17:1:ZL009.var_should_be_const:variable 'result' is never reassigned; consider using 'const'
+428:17:1:ZL009.var_should_be_const:variable 'it' is never reassigned; consider using 'const'
+251:54:1:ZL010.magic_number:magic number 9000; consider using a named constant
+252:37:1:ZL010.magic_number:magic number 3000; consider using a named constant
+257:42:1:ZL010.magic_number:magic number 3000; consider using a named constant
+267:56:1:ZL010.magic_number:magic number 9000; consider using a named constant
+274:42:1:ZL010.magic_number:magic number 9000; consider using a named constant
+286:20:1:ZL010.magic_number:magic number 9000; consider using a named constant
+293:42:1:ZL010.magic_number:magic number 9000; consider using a named constant
+307:42:1:ZL010.magic_number:magic number 8080; consider using a named constant
+317:40:1:ZL010.magic_number:magic number 30; consider using a named constant
+322:42:1:ZL010.magic_number:magic number 30; consider using a named constant
+349:31:1:ZL010.magic_number:magic number 200; consider using a named constant
+353:35:1:ZL010.magic_number:magic number 999; consider using a named constant
+354:37:1:ZL010.magic_number:magic number 300; consider using a named constant
+367:42:1:ZL010.magic_number:magic number 999; consider using a named constant
+368:42:1:ZL010.magic_number:magic number 200; consider using a named constant
+369:42:1:ZL010.magic_number:magic number 300; consider using a named constant
+370:44:1:ZL010.magic_number:magic number 3; consider using a named constant
+409:29:1:ZL010.magic_number:magic number 3; consider using a named constant
+410:27:1:ZL010.magic_number:magic number 4; consider using a named constant
+414:29:1:ZL010.magic_number:magic number 5; consider using a named constant
+421:18:1:ZL010.magic_number:magic number 12; consider using a named constant

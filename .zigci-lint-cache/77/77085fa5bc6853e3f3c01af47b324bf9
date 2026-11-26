@@ -1,0 +1,95 @@
+939:39:2:ZL001.no_undefined:use of 'undefined' may hide uninitialized memory bugs
+913:23:3:ZL003.no_empty_catch:empty catch block suppresses errors
+931:58:3:ZL003.no_empty_catch:empty catch block suppresses errors
+963:15:1:ZL201.type_pascalcase:type 'quiesceReaders' should use PascalCase
+41:7:1:ZL203.const_snakecase:constant 'MAX_STDERR_BYTES' should use snake_case (or PascalCase for types)
+45:7:1:ZL203.const_snakecase:constant 'MAX_STDERR_LOG_BYTES' should use snake_case (or PascalCase for types)
+47:7:1:ZL203.const_snakecase:constant 'DEFAULT_COMMAND_TIMEOUT_MS' should use snake_case (or PascalCase for types)
+963:15:1:ZL203.const_snakecase:constant 'quiesceReaders' should use snake_case (or PascalCase for types)
+177:101:2:ZL300.max_line_length:line exceeds 100 characters (105)
+200:101:2:ZL300.max_line_length:line exceeds 100 characters (110)
+202:101:2:ZL300.max_line_length:line exceeds 100 characters (121)
+247:101:2:ZL300.max_line_length:line exceeds 100 characters (126)
+250:101:2:ZL300.max_line_length:line exceeds 100 characters (110)
+504:101:2:ZL300.max_line_length:line exceeds 100 characters (114)
+627:101:2:ZL300.max_line_length:line exceeds 100 characters (131)
+629:101:2:ZL300.max_line_length:line exceeds 100 characters (134)
+660:101:2:ZL300.max_line_length:line exceeds 100 characters (111)
+674:101:2:ZL300.max_line_length:line exceeds 100 characters (114)
+675:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+676:101:2:ZL300.max_line_length:line exceeds 100 characters (114)
+678:101:2:ZL300.max_line_length:line exceeds 100 characters (130)
+689:101:2:ZL300.max_line_length:line exceeds 100 characters (112)
+694:101:2:ZL300.max_line_length:line exceeds 100 characters (123)
+707:101:2:ZL300.max_line_length:line exceeds 100 characters (104)
+708:101:2:ZL300.max_line_length:line exceeds 100 characters (143)
+964:101:2:ZL300.max_line_length:line exceeds 100 characters (103)
+978:101:2:ZL300.max_line_length:line exceeds 100 characters (116)
+1015:101:2:ZL300.max_line_length:line exceeds 100 characters (114)
+1046:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+1080:101:2:ZL300.max_line_length:line exceeds 100 characters (101)
+1085:101:2:ZL300.max_line_length:line exceeds 100 characters (101)
+1088:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+800:5:2:ZL301.max_function_lines:function exceeds 80 lines (231)
+931:64:2:ZL303.max_nesting:nesting depth exceeds 4 (8)
+199:17:1:ZL009.var_should_be_const:variable 'bin_suffix_buf' is never reassigned; consider using 'const'
+201:17:1:ZL009.var_should_be_const:variable 'local_suffix_buf' is never reassigned; consider using 'const'
+232:9:1:ZL009.var_should_be_const:variable 'it' is never reassigned; consider using 'const'
+574:13:1:ZL009.var_should_be_const:variable 'args' is never reassigned; consider using 'const'
+619:13:1:ZL009.var_should_be_const:variable 'args' is never reassigned; consider using 'const'
+695:13:1:ZL009.var_should_be_const:variable 'env_map' is never reassigned; consider using 'const'
+767:17:1:ZL009.var_should_be_const:variable 'read_buf' is never reassigned; consider using 'const'
+770:17:1:ZL009.var_should_be_const:variable 'kept' is never reassigned; consider using 'const'
+771:17:1:ZL009.var_should_be_const:variable 'scratch' is never reassigned; consider using 'const'
+813:13:1:ZL009.var_should_be_const:variable 'threaded' is never reassigned; consider using 'const'
+818:13:1:ZL009.var_should_be_const:variable 'child' is never reassigned; consider using 'const'
+976:17:1:ZL009.var_should_be_const:variable 'read_buf' is never reassigned; consider using 'const'
+977:17:1:ZL009.var_should_be_const:variable 'reader' is never reassigned; consider using 'const'
+1079:21:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+1084:21:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+1105:38:1:ZL010.magic_number:magic number 3; consider using a named constant
+262:1:1:ZL011.missing_doc_comment:public declaration 'resolveVaultPath' is missing documentation
+312:5:1:ZL011.missing_doc_comment:public declaration 'format' is missing documentation
+422:30:2:ZL500.os_specific_code:Linux-specific code '/etc/' may cause portability issues; consider adding OS detection guards
+170:6:2:ZL500.os_specific_code:Windows-specific code 'C:\' may cause portability issues; consider adding OS detection guards
+170:7:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+200:66:2:ZL500.os_specific_code:Unix-specific path code '"/bin/' may cause portability issues; consider adding OS detection guards
+153:5:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+154:5:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+163:5:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+164:5:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+165:5:2:ZL500.os_specific_code:Unix-specific path code '"/usr/' may cause portability issues; consider adding OS detection guards
+157:5:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+168:5:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+190:37:2:ZL500.os_specific_code:Unix-specific path code '"/home/' may cause portability issues; consider adding OS detection guards
+155:5:2:ZL500.os_specific_code:Unix-specific path code '"/opt/' may cause portability issues; consider adding OS detection guards
+156:5:2:ZL500.os_specific_code:Unix-specific path code '"/opt/' may cause portability issues; consider adding OS detection guards
+166:5:2:ZL500.os_specific_code:Unix-specific path code '"/opt/' may cause portability issues; consider adding OS detection guards
+167:5:2:ZL500.os_specific_code:Unix-specific path code '"/opt/' may cause portability issues; consider adding OS detection guards
+153:5:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+154:5:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+155:5:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+156:5:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+157:5:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+158:5:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+163:5:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+164:5:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+165:5:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+166:5:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+167:5:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+168:5:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+169:5:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+170:5:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+190:37:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+190:47:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+198:41:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+198:59:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+248:52:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+383:40:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+422:29:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1015:107:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1024:54:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1103:50:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+855:29:1:ZL603.missing_defer_cleanup:resource 'std.Thread.spawn(' may not be properly cleaned up; consider using defer
+952:24:1:ZL603.missing_defer_cleanup:resource 'std.Thread.spawn(' may not be properly cleaned up; consider using defer
+440:25:1:ZL605.large_struct_copy:struct 'SecretManager' has 90 fields; consider passing by pointer to avoid copies

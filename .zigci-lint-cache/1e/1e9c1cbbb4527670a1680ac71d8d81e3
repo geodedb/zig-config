@@ -1,0 +1,25 @@
+222:60:3:ZL003.no_empty_catch:empty catch block suppresses errors
+223:60:3:ZL003.no_empty_catch:empty catch block suppresses errors
+224:60:3:ZL003.no_empty_catch:empty catch block suppresses errors
+225:64:3:ZL003.no_empty_catch:empty catch block suppresses errors
+226:60:3:ZL003.no_empty_catch:empty catch block suppresses errors
+227:60:3:ZL003.no_empty_catch:empty catch block suppresses errors
+79:101:2:ZL300.max_line_length:line exceeds 100 characters (126)
+205:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+80:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+141:9:1:ZL009.var_should_be_const:variable 'v' is never reassigned; consider using 'const'
+146:9:1:ZL009.var_should_be_const:variable 'old_cfg' is never reassigned; consider using 'const'
+148:9:1:ZL009.var_should_be_const:variable 'new_cfg' is never reassigned; consider using 'const'
+188:9:1:ZL009.var_should_be_const:variable 'it' is never reassigned; consider using 'const'
+205:54:1:ZL010.magic_number:magic number 9000; consider using a named constant
+206:37:1:ZL010.magic_number:magic number 3000; consider using a named constant
+206:72:1:ZL010.magic_number:magic number 3000; consider using a named constant
+217:1:1:ZL011.missing_doc_comment:public declaration 'main' is missing documentation
+21:25:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+39:13:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+55:14:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+154:37:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+161:37:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+178:34:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+205:76:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+229:21:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path

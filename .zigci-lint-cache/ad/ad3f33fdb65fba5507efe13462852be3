@@ -1,0 +1,23 @@
+15:7:1:ZL203.const_snakecase:constant 'FIXTURES_DIR' should use snake_case (or PascalCase for types)
+31:101:2:ZL300.max_line_length:line exceeds 100 characters (105)
+52:101:2:ZL300.max_line_length:line exceeds 100 characters (105)
+73:101:2:ZL300.max_line_length:line exceeds 100 characters (105)
+133:9:1:ZL009.var_should_be_const:variable 'yaml_cfg' is never reassigned; consider using 'const'
+136:9:1:ZL009.var_should_be_const:variable 'json_cfg' is never reassigned; consider using 'const'
+139:9:1:ZL009.var_should_be_const:variable 'toml_cfg' is never reassigned; consider using 'const'
+262:9:1:ZL009.var_should_be_const:variable 'loader' is never reassigned; consider using 'const'
+265:9:1:ZL009.var_should_be_const:variable 'parser' is never reassigned; consider using 'const'
+30:38:1:ZL010.magic_number:magic number 8001; consider using a named constant
+32:38:1:ZL010.magic_number:magic number 5; consider using a named constant
+51:38:1:ZL010.magic_number:magic number 8002; consider using a named constant
+53:38:1:ZL010.magic_number:magic number 10; consider using a named constant
+72:38:1:ZL010.magic_number:magic number 8003; consider using a named constant
+74:38:1:ZL010.magic_number:magic number 15; consider using a named constant
+100:39:1:ZL010.magic_number:magic number 4; consider using a named constant
+216:42:1:ZL010.magic_number:magic number 8001; consider using a named constant
+282:38:1:ZL010.magic_number:magic number 9999; consider using a named constant
+15:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+31:36:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+52:36:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+73:36:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+194:56:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path

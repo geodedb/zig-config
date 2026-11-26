@@ -1,0 +1,65 @@
+120:32:3:ZL003.no_empty_catch:empty catch block suppresses errors
+69:7:1:ZL203.const_snakecase:constant 'MAX_CHUNKS' should use snake_case (or PascalCase for types)
+76:7:1:ZL203.const_snakecase:constant 'MAX_PARALLEL_FILE_SIZE' should use snake_case (or PascalCase for types)
+135:101:2:ZL300.max_line_length:line exceeds 100 characters (105)
+142:101:2:ZL300.max_line_length:line exceeds 100 characters (106)
+188:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+539:101:2:ZL300.max_line_length:line exceeds 100 characters (104)
+546:29:2:ZL303.max_nesting:nesting depth exceeds 4 (6)
+174:5:1:ZL009.var_should_be_const:variable 'pool_mutex' is never reassigned; consider using 'const'
+316:9:1:ZL009.var_should_be_const:variable 'tsa' is never reassigned; consider using 'const'
+320:9:1:ZL009.var_should_be_const:variable 'ctxs' is never reassigned; consider using 'const'
+321:9:1:ZL009.var_should_be_const:variable 'batch' is never reassigned; consider using 'const'
+414:9:1:ZL009.var_should_be_const:variable 'read_buf' is never reassigned; consider using 'const'
+415:9:1:ZL009.var_should_be_const:variable 'reader' is never reassigned; consider using 'const'
+505:9:1:ZL009.var_should_be_const:variable 'ctxs' is never reassigned; consider using 'const'
+506:9:1:ZL009.var_should_be_const:variable 'batch' is never reassigned; consider using 'const'
+635:9:1:ZL009.var_should_be_const:variable 'tsa' is never reassigned; consider using 'const'
+639:9:1:ZL009.var_should_be_const:variable 'ctxs' is never reassigned; consider using 'const'
+640:9:1:ZL009.var_should_be_const:variable 'batch' is never reassigned; consider using 'const'
+651:9:1:ZL009.var_should_be_const:variable 'wg' is never reassigned; consider using 'const'
+697:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+784:9:1:ZL009.var_should_be_const:variable 'inputs' is never reassigned; consider using 'const'
+785:9:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+802:9:1:ZL009.var_should_be_const:variable 'rules' is never reassigned; consider using 'const'
+803:9:1:ZL009.var_should_be_const:variable 'values' is never reassigned; consider using 'const'
+804:9:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+823:9:1:ZL009.var_should_be_const:variable 'inputs' is never reassigned; consider using 'const'
+824:9:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+852:9:1:ZL009.var_should_be_const:variable 'inputs' is never reassigned; consider using 'const'
+855:9:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+865:9:1:ZL009.var_should_be_const:variable 'rules' is never reassigned; consider using 'const'
+866:9:1:ZL009.var_should_be_const:variable 'values' is never reassigned; consider using 'const'
+867:9:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+887:9:1:ZL009.var_should_be_const:variable 'rules' is never reassigned; consider using 'const'
+888:9:1:ZL009.var_should_be_const:variable 'values' is never reassigned; consider using 'const'
+889:9:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+912:9:1:ZL009.var_should_be_const:variable 'rules' is never reassigned; consider using 'const'
+913:9:1:ZL009.var_should_be_const:variable 'values' is never reassigned; consider using 'const'
+914:9:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+937:9:1:ZL009.var_should_be_const:variable 'inputs' is never reassigned; consider using 'const'
+938:9:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+953:9:1:ZL009.var_should_be_const:variable 'inputs' is never reassigned; consider using 'const'
+954:9:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+987:9:1:ZL009.var_should_be_const:variable 'inputs' is never reassigned; consider using 'const'
+991:9:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+1004:9:1:ZL009.var_should_be_const:variable 'tmp' is never reassigned; consider using 'const'
+1011:9:1:ZL009.var_should_be_const:variable 'inputs' is never reassigned; consider using 'const'
+1015:9:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+1027:9:1:ZL009.var_should_be_const:variable 'inputs' is never reassigned; consider using 'const'
+1028:9:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+1041:9:1:ZL009.var_should_be_const:variable 'inputs' is never reassigned; consider using 'const'
+1042:9:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+753:13:1:ZL010.magic_number:magic number 0x0C; consider using a named constant
+1060:44:1:ZL010.magic_number:magic number 4; consider using a named constant
+1064:44:1:ZL010.magic_number:magic number 4; consider using a named constant
+27:20:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+28:20:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+29:20:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+739:52:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+740:52:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+742:57:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+746:64:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+750:57:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+754:57:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+395:32:1:ZL603.missing_defer_cleanup:resource '.openFile(' may not be properly cleaned up; consider using defer

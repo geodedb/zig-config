@@ -1,0 +1,19 @@
+33:7:1:ZL203.const_snakecase:constant 'isPathSafe' should use snake_case (or PascalCase for types)
+34:7:1:ZL203.const_snakecase:constant 'openFileReadNoFollow' should use snake_case (or PascalCase for types)
+160:101:2:ZL300.max_line_length:line exceeds 100 characters (118)
+188:101:2:ZL300.max_line_length:line exceeds 100 characters (104)
+239:101:2:ZL300.max_line_length:line exceeds 100 characters (116)
+157:67:2:ZL303.max_nesting:nesting depth exceeds 4 (5)
+140:9:1:ZL009.var_should_be_const:variable 'line_iter' is never reassigned; consider using 'const'
+228:9:1:ZL009.var_should_be_const:variable 'global_iter' is never reassigned; consider using 'const'
+234:9:1:ZL009.var_should_be_const:variable 'section_iter' is never reassigned; consider using 'const'
+237:13:1:ZL009.var_should_be_const:variable 'value_iter' is never reassigned; consider using 'const'
+343:9:1:ZL009.var_should_be_const:variable 'map' is never reassigned; consider using 'const'
+345:13:1:ZL009.var_should_be_const:variable 'iter' is never reassigned; consider using 'const'
+378:9:1:ZL009.var_should_be_const:variable 'doc' is never reassigned; consider using 'const'
+47:5:1:ZL011.missing_doc_comment:public declaration 'init' is missing documentation
+54:5:1:ZL011.missing_doc_comment:public declaration 'deinit' is missing documentation
+58:5:1:ZL011.missing_doc_comment:public declaration 'get' is missing documentation
+73:5:1:ZL011.missing_doc_comment:public declaration 'init' is missing documentation
+82:5:1:ZL011.missing_doc_comment:public declaration 'deinit' is missing documentation
+143:44:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path

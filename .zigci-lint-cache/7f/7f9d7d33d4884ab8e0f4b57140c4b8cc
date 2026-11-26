@@ -1,0 +1,53 @@
+83:8:1:ZL200.fn_camelcase:function 'AsyncResult' should use camelCase
+107:8:1:ZL200.fn_camelcase:function 'AsyncLoader' should use camelCase
+343:8:1:ZL200.fn_camelcase:function 'AsyncLoaderWithCallback' should use camelCase
+406:8:1:ZL200.fn_camelcase:function 'OwnedConfig' should use camelCase
+61:7:1:ZL203.const_snakecase:constant 'isPathSafe' should use snake_case (or PascalCase for types)
+62:7:1:ZL203.const_snakecase:constant 'openFileReadNoFollow' should use snake_case (or PascalCase for types)
+397:11:1:ZL203.const_snakecase:constant 'MAX_PARALLEL_THREADS' should use snake_case (or PascalCase for types)
+297:101:2:ZL300.max_line_length:line exceeds 100 characters (105)
+314:101:2:ZL300.max_line_length:line exceeds 100 characters (106)
+430:101:2:ZL300.max_line_length:line exceeds 100 characters (104)
+478:101:2:ZL300.max_line_length:line exceeds 100 characters (111)
+665:101:2:ZL300.max_line_length:line exceeds 100 characters (101)
+667:101:2:ZL300.max_line_length:line exceeds 100 characters (110)
+727:101:2:ZL300.max_line_length:line exceeds 100 characters (101)
+729:101:2:ZL300.max_line_length:line exceeds 100 characters (110)
+765:101:2:ZL300.max_line_length:line exceeds 100 characters (101)
+767:101:2:ZL300.max_line_length:line exceeds 100 characters (110)
+811:101:2:ZL300.max_line_length:line exceeds 100 characters (114)
+812:101:2:ZL300.max_line_length:line exceeds 100 characters (110)
+107:5:2:ZL301.max_function_lines:function exceeds 80 lines (222)
+430:5:2:ZL301.max_function_lines:function exceeds 80 lines (97)
+466:46:2:ZL303.max_nesting:nesting depth exceeds 4 (6)
+438:9:1:ZL009.var_should_be_const:variable 'contexts' is never reassigned; consider using 'const'
+443:9:1:ZL009.var_should_be_const:variable 'threads' is never reassigned; consider using 'const'
+457:9:1:ZL009.var_should_be_const:variable 'processed' is never reassigned; consider using 'const'
+676:9:1:ZL009.var_should_be_const:variable 'cb_state' is never reassigned; consider using 'const'
+771:9:1:ZL009.var_should_be_const:variable 'owned' is never reassigned; consider using 'const'
+775:9:1:ZL009.var_should_be_const:variable 'churn' is never reassigned; consider using 'const'
+807:9:1:ZL009.var_should_be_const:variable 'tmp_dir' is never reassigned; consider using 'const'
+846:9:1:ZL009.var_should_be_const:variable 'loader' is never reassigned; consider using 'const'
+704:42:1:ZL010.magic_number:magic number 9090; consider using a named constant
+746:51:1:ZL010.magic_number:magic number 0x55; consider using a named constant
+777:51:1:ZL010.magic_number:magic number 0x55; consider using a named constant
+795:44:1:ZL010.magic_number:magic number 3; consider using a named constant
+46:5:1:ZL011.missing_doc_comment:public declaration 'lock' is missing documentation
+50:5:1:ZL011.missing_doc_comment:public declaration 'unlock' is missing documentation
+123:9:1:ZL011.missing_doc_comment:public declaration 'init' is missing documentation
+139:9:1:ZL011.missing_doc_comment:public declaration 'deinit' is missing documentation
+351:9:1:ZL011.missing_doc_comment:public declaration 'init' is missing documentation
+359:9:1:ZL011.missing_doc_comment:public declaration 'deinit' is missing documentation
+363:9:1:ZL011.missing_doc_comment:public declaration 'setCallback' is missing documentation
+368:9:1:ZL011.missing_doc_comment:public declaration 'addFile' is missing documentation
+372:9:1:ZL011.missing_doc_comment:public declaration 'startAsync' is missing documentation
+388:9:1:ZL011.missing_doc_comment:public declaration 'await' is missing documentation
+627:33:2:ZL500.os_specific_code:Linux-specific code '/etc/' may cause portability issues; consider adding OS detection guards
+552:24:2:ZL500.os_specific_code:Unix-specific path code '"/tmp/' may cause portability issues; consider adding OS detection guards
+553:24:2:ZL500.os_specific_code:Unix-specific path code '"/tmp/' may cause portability issues; consider adding OS detection guards
+647:35:2:ZL500.os_specific_code:Unix-specific path code '"/tmp/' may cause portability issues; consider adding OS detection guards
+552:24:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+553:24:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+627:24:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+647:35:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+332:33:1:ZL603.missing_defer_cleanup:resource '.create(' may not be properly cleaned up; consider using defer

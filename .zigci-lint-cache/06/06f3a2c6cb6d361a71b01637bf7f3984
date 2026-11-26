@@ -1,0 +1,6 @@
+23:11:1:ZL203.const_snakecase:constant 'MAX_CONFIG_FILE_SIZE' should use snake_case (or PascalCase for types)
+26:11:1:ZL203.const_snakecase:constant 'MAX_REMOTE_RESPONSE_SIZE' should use snake_case (or PascalCase for types)
+30:11:1:ZL203.const_snakecase:constant 'MAX_SECRET_FILE_SIZE' should use snake_case (or PascalCase for types)
+33:11:1:ZL203.const_snakecase:constant 'MAX_CLI_OUTPUT_SIZE' should use snake_case (or PascalCase for types)
+37:11:1:ZL203.const_snakecase:constant 'MAX_DOTENV_FILE_SIZE' should use snake_case (or PascalCase for types)
+41:11:1:ZL203.const_snakecase:constant 'MAX_KV_KEY_LENGTH' should use snake_case (or PascalCase for types)

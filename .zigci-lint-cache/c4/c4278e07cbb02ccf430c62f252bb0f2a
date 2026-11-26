@@ -1,0 +1,15 @@
+93:101:2:ZL300.max_line_length:line exceeds 100 characters (108)
+98:101:2:ZL300.max_line_length:line exceeds 100 characters (113)
+130:101:2:ZL300.max_line_length:line exceeds 100 characters (104)
+328:101:2:ZL300.max_line_length:line exceeds 100 characters (113)
+427:101:2:ZL300.max_line_length:line exceeds 100 characters (103)
+98:1:2:ZL301.max_function_lines:function exceeds 80 lines (531)
+355:74:2:ZL303.max_nesting:nesting depth exceeds 4 (7)
+142:21:1:ZL009.var_should_be_const:variable 'end' is never reassigned; consider using 'const'
+178:9:1:ZL009.var_should_be_const:variable 'depth' is never reassigned; consider using 'const'
+179:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+306:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+351:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+623:9:1:ZL009.var_should_be_const:variable 's' is never reassigned; consider using 'const'
+16:16:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+592:6:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
